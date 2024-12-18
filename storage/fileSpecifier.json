@@ -7,6 +7,6 @@
     "Archives": ["zip", "rar", "7z", "tar", "gz", "bz2"],
     "Code": ["c", "cpp", "java", "py", "rb", "go", "rs", "cs", "sh", "bat"],
     "System Files": ["dll", "exe", "sys", "so", "bin", "deb", "rpm"],
-    "Configuration Files": ["json", "yaml", "xml", "ini", "env", "conf"],
+    "Configuration Files": ["json", "yaml", "xml", "ini", "env", "conf", "properties"],
     "Database Files": ["db", "sqlite", "sql", "csv"]
 }
