@@ -2,7 +2,6 @@ import axios from 'axios';
 import fs from 'fs/promises';
 import path from 'path';
 import dotenv from 'dotenv';
-import chalk from 'chalk';
 
 async function validatePanelUrl(url: string): Promise<boolean> {
     try {
@@ -67,38 +66,38 @@ async function main() {
     const { panelUrl: rawPanelUrl, key } = await parseArguments(filteredArgs);
 
     if (!rawPanelUrl || !key) {
-        console.error(chalk.red('❌ Missing required parameters'));
-        console.log(chalk.yellow('Usage: npm run configure -- --panel <url> --key <key>'));
-        console.log(chalk.yellow('   or: npm run configure -- -p <url> -k <key>'));
+        console.error('❌ Missing required parameters');
+        console.log('Usage: npm run configure -- --panel <url> --key <key>');
+        console.log('   or: npm run configure -- -p <url> -k <key>');
         process.exit(1);
     }
 
     const panelUrl = rawPanelUrl.replace(/\/$/, '');
 
-    console.log(chalk.blue('🔍 Validating panel URL...'));
+    console.log('🔍 Validating panel URL...');
     const isValid = await validatePanelUrl(panelUrl);
 
     if (!isValid) {
-        console.error(chalk.red('❌ Invalid panel URL or panel is not responding'));
+        console.error('❌ Invalid panel URL or panel is not responding');
         process.exit(1);
     }
 
-    console.log(chalk.green('✅ Panel URL is valid'));
-    console.log(chalk.blue('📝 Updating configuration...'));
+    console.log('✅ Panel URL is valid');
+    console.log('📝 Updating configuration...');
 
     try {
         await updateEnvFile(panelUrl, key);
-        console.log(chalk.green('✅ Configuration updated successfully'));
-        console.log(chalk.blue('ℹ️ New configuration:'));
-        console.log(chalk.cyan(`Panel URL: ${panelUrl}`));
-        console.log(chalk.cyan(`Daemon Key: ${key}`));
+        console.log('✅ Configuration updated successfully');
+        console.log('ℹ️ New configuration:');
+        console.log(`Panel URL: ${panelUrl}`);
+        console.log(`Daemon Key: ${key}`);
     } catch (error) {
-        console.error(chalk.red('❌ Error updating configuration:'), error);
+        console.error('❌ Error updating configuration:', error);
         process.exit(1);
     }
 }
 
 main().catch((error) => {
-    console.error(chalk.red('❌ Unexpected error:'), error);
+    console.error('❌ Unexpected error:', error);
     process.exit(1);
 });
