@@ -1,12 +1,17 @@
-import { Router, Request, Response } from 'express';
-import { meta } from '../../storage/config.json';
-import config from '../utils/config';
-import { getTotalStats, getCurrentStats, getSystemStats, saveStats } from '../handlers/stats';
-import logger from '../utils/logger';
+import { Router, Request, Response } from "express";
+import { meta } from "../../storage/config.json";
+import config from "../utils/config";
+import {
+  getTotalStats,
+  getCurrentStats,
+  getSystemStats,
+  saveStats,
+} from "../handlers/stats";
+import logger from "../utils/logger";
 
 const router = Router();
 
-const STATS_INTERVAL = 10_000;
+const STATS_INTERVAL = config.STATS_INTERVAL;
 
 interface StatsResponse {
   totalStats: Awaited<ReturnType<typeof getSystemStats>>;
@@ -23,7 +28,7 @@ function formatUptime(uptimeSeconds: number): string {
   if (hours) parts.push(`${hours}h`);
   if (minutes || parts.length === 0) parts.push(`${minutes}m`);
 
-  return parts.join(' ');
+  return parts.join(" ");
 }
 
 setInterval(async () => {
@@ -31,30 +36,33 @@ setInterval(async () => {
     const stats = await getCurrentStats();
     saveStats(stats);
   } catch (error) {
-    logger.error('Error logging stats:', error);
+    logger.error("Error logging stats:", error);
   }
 }, STATS_INTERVAL);
 
-router.get('/', (_req: Request, res: Response) => {
+router.get("/", (_req: Request, res: Response) => {
   const response = {
     versionFamily: 1,
     versionRelease: `Airlinkd ${meta.version}`,
-    status: 'Online',
+    status: "Online",
     remote: config.remote,
   };
   res.json(response);
 });
 
-router.get('/stats', async (_req: Request, res: Response<StatsResponse | { error: string }>) => {
-  try {
-    const totalStats = getTotalStats();
-    const uptime = formatUptime(process.uptime());
+router.get(
+  "/stats",
+  async (_req: Request, res: Response<StatsResponse | { error: string }>) => {
+    try {
+      const totalStats = getTotalStats();
+      const uptime = formatUptime(process.uptime());
 
-    res.json({ totalStats, uptime });
-  } catch (error) {
-    logger.error('Error fetching stats:', error);
-    res.status(500).json({ error: 'Failed to fetch stats' });
+      res.json({ totalStats, uptime });
+    } catch (error) {
+      logger.error("Error fetching stats:", error);
+      res.status(500).json({ error: "Failed to fetch stats" });
+    }
   }
-});
+);
 
 export default router;

@@ -153,6 +153,7 @@ bun.lock
 /storage/systemStats.json
 /storage/alc/locations.json
 /storage/alc.json
+/storage/install_logs.json
 
 # Backup files
 *.backup

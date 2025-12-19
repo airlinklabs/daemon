@@ -4,12 +4,13 @@ import fs from "fs";
 dotenv.config();
 
 interface Config {
-    remote: string;
-    key: string;
-    port: number;
-    DEBUG: boolean;
-    environment: string;
-    version: string;
+  remote: string;
+  key: string;
+  port: number;
+  DEBUG: boolean;
+  environment: string;
+  version: string;
+  STATS_INTERVAL: number;
 }
 
 function getEnvVar(key: string, defaultValue?: string): string {
@@ -27,6 +28,7 @@ const config: Config = {
   DEBUG: false,
   environment: getEnvVar("environment", "development"),
   version: getEnvVar("version", "1.0.0"),
+  STATS_INTERVAL: parseInt(getEnvVar("STATS_INTERVAL", "10000"), 10),
 };
 
 export default config;
