@@ -7,14 +7,10 @@ import fileSpecifier from "../../utils/fileSpecifier";
 import archiver from "archiver";
 import { spawn } from "child_process";
 
-const load = require("node-gyp-build");
+const openAtAddon =
+  require("../../../libs/build/Release/secure_open.node").openat;
 
-const secureOpen = load(path.join(__dirname, "../../../libs"), "secure_open");
-
-const renameAt = load(path.join(__dirname, "../../../libs"), "rename_at");
-
-const openAtAddon = secureOpen.openat;
-const renameAtAddon = renameAt;
+const renameAtAddon = require("../../../libs/build/Release/rename_at.node");
 
 export const sanitizePath = (
   base: string,
