@@ -1,1 +1,0 @@
-cmd_Release/obj.target/rename_at.node := g++ -o Release/obj.target/rename_at.node -shared -pthread -rdynamic -m64  -Wl,-soname=rename_at.node -Wl,--start-group Release/obj.target/rename_at/rename_at.o Release/obj.target/node_modules/node-addon-api/nothing.a -Wl,--end-group 

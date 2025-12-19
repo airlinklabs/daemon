@@ -30,6 +30,7 @@
     "glob": "^11.0.2",
     "minecraft-status": "^1.1.0",
     "node-addon-api": "^8.5.0",
+    "node-gyp-build": "^4.8.4",
     "os-utils": "^0.0.14",
     "tar": "^7.4.3",
     "tsx": "^4.19.2"

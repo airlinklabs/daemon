@@ -1,1 +1,0 @@
-cmd_Release/obj.target/secure_open.node := g++ -o Release/obj.target/secure_open.node -shared -pthread -rdynamic -m64  -Wl,-soname=secure_open.node -Wl,--start-group Release/obj.target/secure_open/secure_open.o Release/obj.target/node_modules/node-addon-api/nothing.a -Wl,--end-group 

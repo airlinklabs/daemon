@@ -1,1 +1,0 @@
-cmd_Release/secure_open.node := ln -f "Release/obj.target/secure_open.node" "Release/secure_open.node" 2>/dev/null || (rm -rf "Release/secure_open.node" && cp -af "Release/obj.target/secure_open.node" "Release/secure_open.node")

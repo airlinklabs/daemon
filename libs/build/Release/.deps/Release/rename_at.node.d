@@ -1,1 +1,0 @@
-cmd_Release/rename_at.node := ln -f "Release/obj.target/rename_at.node" "Release/rename_at.node" 2>/dev/null || (rm -rf "Release/rename_at.node" && cp -af "Release/obj.target/rename_at.node" "Release/rename_at.node")
