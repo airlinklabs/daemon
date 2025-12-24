@@ -159,6 +159,3 @@ bun.lock
 *.backup
 *.tmp
 *.temp
-
-# Runtime generated files
-/storage/config.json
