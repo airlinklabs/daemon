@@ -200,15 +200,16 @@ router.post("/container/install", async (req: Request, res: Response) => {
 });
 
 router.get("/container/status/:id", (req: Request, res: Response) => {
-  const { id } = req.params;
+  const rawId = req.params.id;
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
   if (!id) {
     res.status(400).json({ error: "Container ID is required." });
     return;
   }
 
-  const state = getServerState(id);
-
+const state = getServerState(id);
+  
   if (!state) {
     res
       .status(404)
