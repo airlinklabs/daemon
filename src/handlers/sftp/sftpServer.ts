@@ -1,10 +1,34 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
 import axios from 'axios';
-import { Server as SshServer, Connection, Session, SFTPWrapper } from 'ssh2';
-import config from '../../config';
-import logger from '../logger';
-import { getHostKey } from './hostKey';
+import { Server as SshServer, Connection, Session } from 'ssh2';
+import type { SFTPWrapper } from 'ssh2';
+import config from '../../utils/config';
+import logger from '../../utils/logger';
+
+const HOST_KEY_PATH = path.resolve(process.cwd(), 'storage/sftp_host_key');
+
+function getHostKey(): Buffer {
+  if (fs.existsSync(HOST_KEY_PATH)) {
+    return fs.readFileSync(HOST_KEY_PATH);
+  }
+
+  const dir = path.dirname(HOST_KEY_PATH);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  const { privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+    publicKeyEncoding:  { type: 'pkcs1', format: 'pem' },
+  });
+
+  fs.writeFileSync(HOST_KEY_PATH, privateKey as string, { mode: 0o600 });
+  logger.info('Generated new SFTP host key');
+  return Buffer.from(privateKey as string);
+}
 
 const VOLUMES_DIR = path.join(process.cwd(), 'volumes');
 
