@@ -6,6 +6,7 @@
     "build": "tsc",
     "start": "node dist/app/app.js",
     "clean": "node scripts/clean.js",
+    "setup": "npm install && npm run build",
     "start:dev": "npm run build && npm run start",
     "dev": "nodemon --exec ts-node src/app/app.ts",
     "configure": "ts-node src/handlers/configure.ts"
@@ -33,7 +34,8 @@
     "node-gyp-build": "^4.8.4",
     "os-utils": "^0.0.14",
     "tar": "^7.4.3",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "ssh2": "^1.16.0"
   },
   "devDependencies": {
     "@types/archiver": "^6.0.3",
@@ -49,6 +51,7 @@
     "nodemon": "^3.1.9",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "@types/ssh2": "^1.15.1"
   }
 }
