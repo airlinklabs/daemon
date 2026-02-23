@@ -347,7 +347,7 @@ export function startSftpServer(port: number): SshServer {
     logger.info(`SFTP server listening on port ${port}`);
   });
 
-  srv.on('error', (err) => {
+  srv.on('error', (err:unknown) => {
     logger.error('SFTP server error', err);
   });
 
