@@ -1,14 +1,24 @@
-import { Server as SshServer, Connection, Session, SFTPStream } from 'ssh2';
+import { Server as SshServer, Connection, Session } from 'ssh2';
+import type { SFTPWrapper } from 'ssh2';
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import crypto from 'crypto';
-import { constants as fsConstants } from 'fs';
-import config from '../utils/config';
-import logger from '../utils/logger';
+import config from '../../utils/config';
+import logger from '../../utils/logger';
 
 const VOLUMES_DIR = path.resolve(process.cwd(), 'volumes');
 const HOST_KEY_PATH = path.resolve(process.cwd(), 'storage/sftp_host_key');
+
+const STATUS = {
+  OK: 0,
+  EOF: 1,
+  NO_SUCH_FILE: 2,
+  PERMISSION_DENIED: 3,
+  FAILURE: 4,
+  BAD_MESSAGE: 5,
+  OP_UNSUPPORTED: 8,
+} as const;
 
 function getHostKey(): Buffer {
   if (fs.existsSync(HOST_KEY_PATH)) {
@@ -20,25 +30,22 @@ function getHostKey(): Buffer {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  const { generateKeyPairSync } = crypto;
-  const { privateKey } = generateKeyPairSync('rsa', {
+  const { privateKey } = crypto.generateKeyPairSync('rsa', {
     modulusLength: 2048,
     privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
     publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
   });
 
-  fs.writeFileSync(HOST_KEY_PATH, privateKey, { mode: 0o600 });
+  fs.writeFileSync(HOST_KEY_PATH, privateKey as string, { mode: 0o600 });
   logger.info('Generated new SFTP host key');
-  return Buffer.from(privateKey);
+  return Buffer.from(privateKey as string);
 }
 
 async function validateCredentials(username: string, password: string): Promise<string | null> {
-  const parts = username.split('.');
-  if (parts.length < 2) {
-    return null;
-  }
+  const dotIndex = username.indexOf('.');
+  if (dotIndex === -1) return null;
 
-  const serverUUID = parts[0];
+  const serverUUID = username.slice(0, dotIndex);
 
   try {
     const response = await axios.post(
@@ -47,14 +54,10 @@ async function validateCredentials(username: string, password: string): Promise<
       {
         auth: { username: 'Airlink', password: config.key },
         timeout: 5000,
-      }
+      },
     );
 
-    if (response.data?.valid === true) {
-      return serverUUID;
-    }
-
-    return null;
+    return response.data?.valid === true ? serverUUID : null;
   } catch {
     return null;
   }
@@ -62,16 +65,17 @@ async function validateCredentials(username: string, password: string): Promise<
 
 function resolveServerPath(serverUUID: string, requestedPath: string): string | null {
   const base = path.join(VOLUMES_DIR, serverUUID);
-  const resolved = path.resolve(base, '.' + requestedPath);
+  const joined = path.join(base, requestedPath);
+  const resolved = path.resolve(joined);
 
-  if (!resolved.startsWith(base)) {
+  if (!resolved.startsWith(path.resolve(base))) {
     return null;
   }
 
   return resolved;
 }
 
-function sftpAttrs(stats: fs.Stats): Record<string, any> {
+function statAttrs(stats: fs.Stats): Record<string, number> {
   return {
     mode: stats.mode,
     uid: stats.uid,
@@ -82,23 +86,49 @@ function sftpAttrs(stats: fs.Stats): Record<string, any> {
   };
 }
 
-function handleSftpSession(sftp: SFTPStream, serverUUID: string): void {
-  const openFiles = new Map<number, { fd: number; flags: string }>();
-  let handleCounter = 0;
-  const openDirs = new Map<number, { entries: fs.Dirent[]; sent: boolean }>();
+function openFlagsToFsFlags(flags: number): string {
+  const O_RDONLY = 0x0000;
+  const O_WRONLY = 0x0001;
+  const O_RDWR  = 0x0002;
+  const O_CREAT = 0x0008;
+  const O_TRUNC = 0x0010;
+  const O_APPEND = 0x0004;
 
-  sftp.on('OPEN', (reqid, filename, flags, _attrs) => {
+  const writing = flags & O_WRONLY || flags & O_RDWR;
+  const appending = flags & O_APPEND;
+  const creating = flags & O_CREAT;
+  const truncating = flags & O_TRUNC;
+
+  if (appending) return 'a';
+  if (writing && truncating) return 'w';
+  if (writing && creating) return 'w';
+  if (writing) return 'r+';
+  return 'r';
+}
+
+function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
+  const openFiles = new Map<number, { fd: number }>();
+  const openDirs = new Map<number, { entries: fs.Dirent[]; sent: boolean }>();
+  let nextHandle = 0;
+
+  function makeHandle(): Buffer {
+    const h = Buffer.alloc(4);
+    h.writeUInt32BE(nextHandle, 0);
+    nextHandle++;
+    return h;
+  }
+
+  function readHandle(h: Buffer): number {
+    return h.readUInt32BE(0);
+  }
+
+  (sftp as any).on('OPEN', (reqid: number, filename: string, flags: number, _attrs: any) => {
     const absPath = resolveServerPath(serverUUID, filename);
     if (!absPath) {
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.PERMISSION_DENIED);
+      return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
     }
 
-    let fsFlags = 'r';
-    if (flags & 0x01) fsFlags = 'r';
-    if (flags & 0x02) fsFlags = flags & 0x08 ? 'wx' : 'w';
-    if (flags & 0x04) fsFlags = 'a';
-    if (flags & 0x08 && flags & 0x02) fsFlags = 'wx';
-    if (flags & 0x10 && flags & 0x02) fsFlags = 'w';
+    const fsFlags = openFlagsToFsFlags(flags);
 
     try {
       fs.mkdirSync(path.dirname(absPath), { recursive: true });
@@ -106,219 +136,174 @@ function handleSftpSession(sftp: SFTPStream, serverUUID: string): void {
 
     fs.open(absPath, fsFlags, (err, fd) => {
       if (err) {
-        const code = err.code === 'ENOENT'
-          ? SFTPStream.STATUS_CODE.NO_SUCH_FILE
-          : SFTPStream.STATUS_CODE.FAILURE;
-        return sftp.status(reqid, code);
+        const code = err.code === 'ENOENT' ? STATUS.NO_SUCH_FILE : STATUS.FAILURE;
+        return (sftp as any).status(reqid, code);
       }
 
-      const handle = handleCounter++;
-      openFiles.set(handle, { fd, flags: fsFlags });
-      const buf = Buffer.alloc(4);
-      buf.writeUInt32BE(handle, 0);
-      sftp.handle(reqid, buf);
+      const h = makeHandle();
+      openFiles.set(h.readUInt32BE(0), { fd });
+      (sftp as any).handle(reqid, h);
     });
   });
 
-  sftp.on('READ', (reqid, handle, offset, length) => {
-    const h = handle.readUInt32BE(0);
-    const file = openFiles.get(h);
-    if (!file) {
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.FAILURE);
-    }
+  (sftp as any).on('READ', (reqid: number, handle: Buffer, offset: number, length: number) => {
+    const file = openFiles.get(readHandle(handle));
+    if (!file) return (sftp as any).status(reqid, STATUS.FAILURE);
 
     const buf = Buffer.alloc(length);
     fs.read(file.fd, buf, 0, length, offset, (err, bytesRead) => {
-      if (err) {
-        return sftp.status(reqid, SFTPStream.STATUS_CODE.FAILURE);
-      }
-      if (bytesRead === 0) {
-        return sftp.status(reqid, SFTPStream.STATUS_CODE.EOF);
-      }
-      sftp.data(reqid, buf.slice(0, bytesRead));
+      if (err) return (sftp as any).status(reqid, STATUS.FAILURE);
+      if (bytesRead === 0) return (sftp as any).status(reqid, STATUS.EOF);
+      (sftp as any).data(reqid, buf.slice(0, bytesRead));
     });
   });
 
-  sftp.on('WRITE', (reqid, handle, offset, data) => {
-    const h = handle.readUInt32BE(0);
-    const file = openFiles.get(h);
-    if (!file) {
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.FAILURE);
-    }
+  (sftp as any).on('WRITE', (reqid: number, handle: Buffer, offset: number, data: Buffer) => {
+    const file = openFiles.get(readHandle(handle));
+    if (!file) return (sftp as any).status(reqid, STATUS.FAILURE);
 
     fs.write(file.fd, data, 0, data.length, offset, (err) => {
-      if (err) {
-        return sftp.status(reqid, SFTPStream.STATUS_CODE.FAILURE);
-      }
-      sftp.status(reqid, SFTPStream.STATUS_CODE.OK);
+      (sftp as any).status(reqid, err ? STATUS.FAILURE : STATUS.OK);
     });
   });
 
-  sftp.on('CLOSE', (reqid, handle) => {
-    const h = handle.readUInt32BE(0);
+  (sftp as any).on('CLOSE', (reqid: number, handle: Buffer) => {
+    const h = readHandle(handle);
 
     if (openFiles.has(h)) {
       const file = openFiles.get(h)!;
       fs.close(file.fd, (err) => {
         openFiles.delete(h);
-        sftp.status(reqid, err ? SFTPStream.STATUS_CODE.FAILURE : SFTPStream.STATUS_CODE.OK);
+        (sftp as any).status(reqid, err ? STATUS.FAILURE : STATUS.OK);
       });
       return;
     }
 
     if (openDirs.has(h)) {
       openDirs.delete(h);
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.OK);
+      return (sftp as any).status(reqid, STATUS.OK);
     }
 
-    sftp.status(reqid, SFTPStream.STATUS_CODE.FAILURE);
+    (sftp as any).status(reqid, STATUS.FAILURE);
   });
 
-  sftp.on('OPENDIR', (reqid, dirPath) => {
+  (sftp as any).on('OPENDIR', (reqid: number, dirPath: string) => {
     const absPath = resolveServerPath(serverUUID, dirPath);
     if (!absPath) {
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.PERMISSION_DENIED);
+      return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
     }
 
     fs.readdir(absPath, { withFileTypes: true }, (err, entries) => {
       if (err) {
-        const code = err.code === 'ENOENT'
-          ? SFTPStream.STATUS_CODE.NO_SUCH_FILE
-          : SFTPStream.STATUS_CODE.FAILURE;
-        return sftp.status(reqid, code);
+        const code = err.code === 'ENOENT' ? STATUS.NO_SUCH_FILE : STATUS.FAILURE;
+        return (sftp as any).status(reqid, code);
       }
 
-      const handle = handleCounter++;
-      openDirs.set(handle, { entries, sent: false });
-      const buf = Buffer.alloc(4);
-      buf.writeUInt32BE(handle, 0);
-      sftp.handle(reqid, buf);
+      const h = makeHandle();
+      openDirs.set(h.readUInt32BE(0), { entries, sent: false });
+      (sftp as any).handle(reqid, h);
     });
   });
 
-  sftp.on('READDIR', (reqid, handle) => {
-    const h = handle.readUInt32BE(0);
-    const dir = openDirs.get(h);
-    if (!dir) {
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.FAILURE);
-    }
-
-    if (dir.sent) {
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.EOF);
-    }
+  (sftp as any).on('READDIR', (reqid: number, handle: Buffer) => {
+    const dir = openDirs.get(readHandle(handle));
+    if (!dir) return (sftp as any).status(reqid, STATUS.FAILURE);
+    if (dir.sent) return (sftp as any).status(reqid, STATUS.EOF);
 
     const names = dir.entries.map((entry) => {
       const isDir = entry.isDirectory();
+      const mode = isDir ? 0o40755 : 0o100644;
       return {
         filename: entry.name,
         longname: `${isDir ? 'd' : '-'}rwxr-xr-x 1 user group 0 Jan  1 00:00 ${entry.name}`,
-        attrs: {
-          mode: isDir ? 0o40755 : 0o100644,
-          uid: 0,
-          gid: 0,
-          size: 0,
-          atime: 0,
-          mtime: 0,
-        },
+        attrs: { mode, uid: 0, gid: 0, size: 0, atime: 0, mtime: 0 },
       };
     });
 
     dir.sent = true;
-    sftp.name(reqid, names);
+    (sftp as any).name(reqid, names);
   });
 
-  sftp.on('STAT', (reqid, filePath) => {
+  (sftp as any).on('STAT', (reqid: number, filePath: string) => {
     const absPath = resolveServerPath(serverUUID, filePath);
-    if (!absPath) {
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.PERMISSION_DENIED);
-    }
+    if (!absPath) return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
 
     fs.stat(absPath, (err, stats) => {
-      if (err) {
-        return sftp.status(reqid, SFTPStream.STATUS_CODE.NO_SUCH_FILE);
-      }
-      sftp.attrs(reqid, sftpAttrs(stats));
+      if (err) return (sftp as any).status(reqid, STATUS.NO_SUCH_FILE);
+      (sftp as any).attrs(reqid, statAttrs(stats));
     });
   });
 
-  sftp.on('LSTAT', (reqid, filePath) => {
+  (sftp as any).on('LSTAT', (reqid: number, filePath: string) => {
     const absPath = resolveServerPath(serverUUID, filePath);
-    if (!absPath) {
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.PERMISSION_DENIED);
-    }
+    if (!absPath) return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
 
     fs.lstat(absPath, (err, stats) => {
-      if (err) {
-        return sftp.status(reqid, SFTPStream.STATUS_CODE.NO_SUCH_FILE);
-      }
-      sftp.attrs(reqid, sftpAttrs(stats));
+      if (err) return (sftp as any).status(reqid, STATUS.NO_SUCH_FILE);
+      (sftp as any).attrs(reqid, statAttrs(stats));
     });
   });
 
-  sftp.on('REMOVE', (reqid, filePath) => {
+  (sftp as any).on('REMOVE', (reqid: number, filePath: string) => {
     const absPath = resolveServerPath(serverUUID, filePath);
-    if (!absPath) {
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.PERMISSION_DENIED);
-    }
+    if (!absPath) return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
 
     fs.unlink(absPath, (err) => {
-      sftp.status(reqid, err ? SFTPStream.STATUS_CODE.FAILURE : SFTPStream.STATUS_CODE.OK);
+      (sftp as any).status(reqid, err ? STATUS.FAILURE : STATUS.OK);
     });
   });
 
-  sftp.on('RMDIR', (reqid, dirPath) => {
+  (sftp as any).on('RMDIR', (reqid: number, dirPath: string) => {
     const absPath = resolveServerPath(serverUUID, dirPath);
-    if (!absPath) {
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.PERMISSION_DENIED);
-    }
+    if (!absPath) return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
 
     fs.rmdir(absPath, (err) => {
-      sftp.status(reqid, err ? SFTPStream.STATUS_CODE.FAILURE : SFTPStream.STATUS_CODE.OK);
+      (sftp as any).status(reqid, err ? STATUS.FAILURE : STATUS.OK);
     });
   });
 
-  sftp.on('MKDIR', (reqid, dirPath, _attrs) => {
+  (sftp as any).on('MKDIR', (reqid: number, dirPath: string, _attrs: any) => {
     const absPath = resolveServerPath(serverUUID, dirPath);
-    if (!absPath) {
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.PERMISSION_DENIED);
-    }
+    if (!absPath) return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
 
     fs.mkdir(absPath, { recursive: true }, (err) => {
-      sftp.status(reqid, err ? SFTPStream.STATUS_CODE.FAILURE : SFTPStream.STATUS_CODE.OK);
+      (sftp as any).status(reqid, err ? STATUS.FAILURE : STATUS.OK);
     });
   });
 
-  sftp.on('RENAME', (reqid, oldPath, newPath) => {
+  (sftp as any).on('RENAME', (reqid: number, oldPath: string, newPath: string) => {
     const absOld = resolveServerPath(serverUUID, oldPath);
     const absNew = resolveServerPath(serverUUID, newPath);
-    if (!absOld || !absNew) {
-      return sftp.status(reqid, SFTPStream.STATUS_CODE.PERMISSION_DENIED);
-    }
+    if (!absOld || !absNew) return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
 
     fs.rename(absOld, absNew, (err) => {
-      sftp.status(reqid, err ? SFTPStream.STATUS_CODE.FAILURE : SFTPStream.STATUS_CODE.OK);
+      (sftp as any).status(reqid, err ? STATUS.FAILURE : STATUS.OK);
     });
   });
 
-  sftp.on('REALPATH', (reqid, reqPath) => {
+  (sftp as any).on('REALPATH', (reqid: number, reqPath: string) => {
     const normalized = path.posix.normalize(reqPath || '/');
-    sftp.name(reqid, [{ filename: normalized, longname: normalized, attrs: {} }]);
+    (sftp as any).name(reqid, [{ filename: normalized, longname: normalized, attrs: {} }]);
+  });
+
+  (sftp as any).on('SETSTAT', (reqid: number, _filePath: string, _attrs: any) => {
+    (sftp as any).status(reqid, STATUS.OK);
+  });
+
+  (sftp as any).on('FSETSTAT', (reqid: number, _handle: Buffer, _attrs: any) => {
+    (sftp as any).status(reqid, STATUS.OK);
   });
 }
 
 function handleSession(session: Session, serverUUID: string): void {
-  session.on('sftp', (accept) => {
+  session.on('sftp', (accept, _reject) => {
     const sftp = accept();
     handleSftpSession(sftp, serverUUID);
   });
 
-  session.on('exec', (accept, reject) => {
-    reject();
-  });
-
-  session.on('shell', (accept, reject) => {
-    reject();
-  });
+  session.on('exec', (_accept, reject) => reject());
+  session.on('shell', (_accept, reject) => reject());
+  session.on('pty', (_accept, reject) => reject());
 }
 
 export function startSftpServer(port: number): SshServer {
@@ -327,18 +312,16 @@ export function startSftpServer(port: number): SshServer {
   const srv = new SshServer({ hostKeys: [hostKey] }, (client: Connection) => {
     let authenticatedUUID: string | null = null;
 
-    client.on('authentication', async (ctx) => {
+    client.on('authentication', (ctx) => {
       if (ctx.method !== 'password') {
         return ctx.reject(['password']);
       }
 
-      const serverUUID = await validateCredentials(ctx.username, ctx.password as string);
-      if (!serverUUID) {
-        return ctx.reject();
-      }
-
-      authenticatedUUID = serverUUID;
-      ctx.accept();
+      validateCredentials(ctx.username, ctx.password as string).then((uuid) => {
+        if (!uuid) return ctx.reject();
+        authenticatedUUID = uuid;
+        ctx.accept();
+      }).catch(() => ctx.reject());
     });
 
     client.on('ready', () => {
@@ -356,7 +339,7 @@ export function startSftpServer(port: number): SshServer {
     });
 
     client.on('error', (err) => {
-      logger.error('SFTP client error:', err.message);
+      logger.error('SFTP client error', err);
     });
   });
 
@@ -365,8 +348,8 @@ export function startSftpServer(port: number): SshServer {
   });
 
   srv.on('error', (err) => {
-    logger.error('SFTP server error:', err.message);
+    logger.error('SFTP server error', err);
   });
 
   return srv;
-    }
+}
