@@ -115,11 +115,12 @@ process.on('unhandledRejection', (reason, promise) => {
     setTimeout(() => {
       server.listen(port, () => {
         logger.info(`Daemon is running on port ${port}`);
-      });
+      }); 
+    }, 1000);
+    // sftp port
     const sftpPort = config.port + 1;
     startSftpServer(sftpPort);
-      
-    }, 1000);
+    
   } catch (error) {
     logger.error("Failed to start the server:", error);
     process.exit(1);
