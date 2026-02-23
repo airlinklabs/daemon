@@ -1,14 +1,12 @@
-import { Server as SshServer, Connection, Session } from 'ssh2';
-import type { SFTPWrapper } from 'ssh2';
-import fs from 'fs';
-import path from 'path';
+import * as fs from 'fs';
+import * as path from 'path';
 import axios from 'axios';
-import crypto from 'crypto';
-import config from '../../utils/config';
-import logger from '../../utils/logger';
+import { Server as SshServer, Connection, Session, SFTPWrapper } from 'ssh2';
+import config from '../../config';
+import logger from '../logger';
+import { getHostKey } from './hostKey';
 
-const VOLUMES_DIR = path.resolve(process.cwd(), 'volumes');
-const HOST_KEY_PATH = path.resolve(process.cwd(), 'storage/sftp_host_key');
+const VOLUMES_DIR = path.join(process.cwd(), 'volumes');
 
 const STATUS = {
   OK: 0,
@@ -16,30 +14,15 @@ const STATUS = {
   NO_SUCH_FILE: 2,
   PERMISSION_DENIED: 3,
   FAILURE: 4,
-  BAD_MESSAGE: 5,
-  OP_UNSUPPORTED: 8,
-} as const;
+};
 
-function getHostKey(): Buffer {
-  if (fs.existsSync(HOST_KEY_PATH)) {
-    return fs.readFileSync(HOST_KEY_PATH);
-  }
-
-  const dir = path.dirname(HOST_KEY_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
-  const { privateKey } = crypto.generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
-    publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
-  });
-
-  fs.writeFileSync(HOST_KEY_PATH, privateKey as string, { mode: 0o600 });
-  logger.info('Generated new SFTP host key');
-  return Buffer.from(privateKey as string);
-}
+// SSH SFTP open flags (from draft-ietf-secsh-filexfer)
+const SSH_FXF_READ   = 0x00000001;
+const SSH_FXF_WRITE  = 0x00000002;
+const SSH_FXF_APPEND = 0x00000004;
+const SSH_FXF_CREAT  = 0x00000008;
+const SSH_FXF_TRUNC  = 0x00000010;
+const SSH_FXF_EXCL   = 0x00000020;
 
 async function validateCredentials(username: string, password: string): Promise<string | null> {
   const dotIndex = username.indexOf('.');
@@ -68,7 +51,7 @@ function resolveServerPath(serverUUID: string, requestedPath: string): string | 
   const joined = path.join(base, requestedPath);
   const resolved = path.resolve(joined);
 
-  if (!resolved.startsWith(path.resolve(base))) {
+  if (!resolved.startsWith(path.resolve(base) + path.sep) && resolved !== path.resolve(base)) {
     return null;
   }
 
@@ -87,34 +70,28 @@ function statAttrs(stats: fs.Stats): Record<string, number> {
 }
 
 function openFlagsToFsFlags(flags: number): string {
-  const O_RDONLY = 0x0000;
-  const O_WRONLY = 0x0001;
-  const O_RDWR  = 0x0002;
-  const O_CREAT = 0x0008;
-  const O_TRUNC = 0x0010;
-  const O_APPEND = 0x0004;
+  const read  = (flags & SSH_FXF_READ)   !== 0;
+  const write = (flags & SSH_FXF_WRITE)  !== 0;
+  const append = (flags & SSH_FXF_APPEND) !== 0;
+  const creat = (flags & SSH_FXF_CREAT)  !== 0;
+  const trunc = (flags & SSH_FXF_TRUNC)  !== 0;
 
-  const writing = flags & O_WRONLY || flags & O_RDWR;
-  const appending = flags & O_APPEND;
-  const creating = flags & O_CREAT;
-  const truncating = flags & O_TRUNC;
-
-  if (appending) return 'a';
-  if (writing && truncating) return 'w';
-  if (writing && creating) return 'w';
-  if (writing) return 'r+';
+  if (append) return creat ? 'a' : 'a';
+  if (write && trunc && creat) return 'w';
+  if (write && creat && !trunc) return read ? 'r+' : 'r+';
+  if (write && !creat) return 'r+';
+  if (write && trunc) return 'w';
   return 'r';
 }
 
 function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
   const openFiles = new Map<number, { fd: number }>();
-  const openDirs = new Map<number, { entries: fs.Dirent[]; sent: boolean }>();
-  let nextHandle = 0;
+  const openDirs  = new Map<number, { entries: fs.Dirent[]; sent: boolean; absBase: string }>();
+  let nextHandle  = 0;
 
   function makeHandle(): Buffer {
     const h = Buffer.alloc(4);
-    h.writeUInt32BE(nextHandle, 0);
-    nextHandle++;
+    h.writeUInt32BE(nextHandle++, 0);
     return h;
   }
 
@@ -124,15 +101,15 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
 
   (sftp as any).on('OPEN', (reqid: number, filename: string, flags: number, _attrs: any) => {
     const absPath = resolveServerPath(serverUUID, filename);
-    if (!absPath) {
-      return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
-    }
+    if (!absPath) return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
 
     const fsFlags = openFlagsToFsFlags(flags);
 
-    try {
-      fs.mkdirSync(path.dirname(absPath), { recursive: true });
-    } catch {}
+    if ((flags & (SSH_FXF_WRITE | SSH_FXF_CREAT)) !== 0) {
+      try {
+        fs.mkdirSync(path.dirname(absPath), { recursive: true });
+      } catch {}
+    }
 
     fs.open(absPath, fsFlags, (err, fd) => {
       if (err) {
@@ -167,6 +144,16 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
     });
   });
 
+  (sftp as any).on('FSTAT', (reqid: number, handle: Buffer) => {
+    const file = openFiles.get(readHandle(handle));
+    if (!file) return (sftp as any).status(reqid, STATUS.FAILURE);
+
+    fs.fstat(file.fd, (err, stats) => {
+      if (err) return (sftp as any).status(reqid, STATUS.FAILURE);
+      (sftp as any).attrs(reqid, statAttrs(stats));
+    });
+  });
+
   (sftp as any).on('CLOSE', (reqid: number, handle: Buffer) => {
     const h = readHandle(handle);
 
@@ -189,9 +176,7 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
 
   (sftp as any).on('OPENDIR', (reqid: number, dirPath: string) => {
     const absPath = resolveServerPath(serverUUID, dirPath);
-    if (!absPath) {
-      return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
-    }
+    if (!absPath) return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
 
     fs.readdir(absPath, { withFileTypes: true }, (err, entries) => {
       if (err) {
@@ -200,7 +185,7 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
       }
 
       const h = makeHandle();
-      openDirs.set(h.readUInt32BE(0), { entries, sent: false });
+      openDirs.set(h.readUInt32BE(0), { entries, sent: false, absBase: absPath });
       (sftp as any).handle(reqid, h);
     });
   });
@@ -210,18 +195,44 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
     if (!dir) return (sftp as any).status(reqid, STATUS.FAILURE);
     if (dir.sent) return (sftp as any).status(reqid, STATUS.EOF);
 
-    const names = dir.entries.map((entry) => {
-      const isDir = entry.isDirectory();
-      const mode = isDir ? 0o40755 : 0o100644;
-      return {
-        filename: entry.name,
-        longname: `${isDir ? 'd' : '-'}rwxr-xr-x 1 user group 0 Jan  1 00:00 ${entry.name}`,
-        attrs: { mode, uid: 0, gid: 0, size: 0, atime: 0, mtime: 0 },
-      };
-    });
+    let pending = dir.entries.length;
 
-    dir.sent = true;
-    (sftp as any).name(reqid, names);
+    if (pending === 0) {
+      dir.sent = true;
+      return (sftp as any).status(reqid, STATUS.EOF);
+    }
+
+    const names: any[] = new Array(pending);
+    let done = 0;
+
+    dir.entries.forEach((entry, i) => {
+      const entryPath = path.join(dir.absBase, entry.name);
+      fs.lstat(entryPath, (err, stats) => {
+        if (err) {
+          const isDir = entry.isDirectory();
+          const mode = isDir ? 0o40755 : 0o100644;
+          names[i] = {
+            filename: entry.name,
+            longname: `${isDir ? 'd' : '-'}rwxr-xr-x 1 user group 0 Jan  1 00:00 ${entry.name}`,
+            attrs: { mode, uid: 0, gid: 0, size: 0, atime: 0, mtime: 0 },
+          };
+        } else {
+          const isDir = stats.isDirectory();
+          const modeStr = isDir ? 'd' : '-';
+          names[i] = {
+            filename: entry.name,
+            longname: `${modeStr}rwxr-xr-x 1 user group ${stats.size} Jan  1 00:00 ${entry.name}`,
+            attrs: statAttrs(stats),
+          };
+        }
+
+        done++;
+        if (done === pending) {
+          dir.sent = true;
+          (sftp as any).name(reqid, names);
+        }
+      });
+    });
   });
 
   (sftp as any).on('STAT', (reqid: number, filePath: string) => {
@@ -257,7 +268,7 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
     const absPath = resolveServerPath(serverUUID, dirPath);
     if (!absPath) return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
 
-    fs.rmdir(absPath, (err) => {
+    fs.rm(absPath, { recursive: true, force: false }, (err) => {
       (sftp as any).status(reqid, err ? STATUS.FAILURE : STATUS.OK);
     });
   });
@@ -293,6 +304,14 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
   (sftp as any).on('FSETSTAT', (reqid: number, _handle: Buffer, _attrs: any) => {
     (sftp as any).status(reqid, STATUS.OK);
   });
+
+  (sftp as any).on('SYMLINK', (reqid: number, _linkPath: string, _targetPath: string) => {
+    (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
+  });
+
+  (sftp as any).on('READLINK', (reqid: number, _linkPath: string) => {
+    (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
+  });
 }
 
 function handleSession(session: Session, serverUUID: string): void {
@@ -301,9 +320,9 @@ function handleSession(session: Session, serverUUID: string): void {
     handleSftpSession(sftp, serverUUID);
   });
 
-  session.on('exec', (_accept, reject) => reject());
+  session.on('exec',  (_accept, reject) => reject());
   session.on('shell', (_accept, reject) => reject());
-  session.on('pty', (_accept, reject) => reject());
+  session.on('pty',   (_accept, reject) => reject());
 }
 
 export function startSftpServer(port: number): SshServer {
@@ -317,11 +336,13 @@ export function startSftpServer(port: number): SshServer {
         return ctx.reject(['password']);
       }
 
-      validateCredentials(ctx.username, ctx.password as string).then((uuid) => {
-        if (!uuid) return ctx.reject();
-        authenticatedUUID = uuid;
-        ctx.accept();
-      }).catch(() => ctx.reject());
+      validateCredentials(ctx.username, ctx.password as string)
+        .then((uuid) => {
+          if (!uuid) return ctx.reject();
+          authenticatedUUID = uuid;
+          ctx.accept();
+        })
+        .catch(() => ctx.reject());
     });
 
     client.on('ready', () => {
@@ -347,7 +368,7 @@ export function startSftpServer(port: number): SshServer {
     logger.info(`SFTP server listening on port ${port}`);
   });
 
-  srv.on('error', (err:unknown) => {
+  srv.on('error', (err: unknown) => {
     logger.error('SFTP server error', err);
   });
 
