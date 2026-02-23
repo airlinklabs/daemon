@@ -12,6 +12,7 @@ import { initLogger } from '../handlers/stats';
 import logger from '../utils/logger';
 import { docker } from '../handlers/instances/utils';
 import { saveStats } from '../handlers/stats';
+import { startSftpServer } from '../handlers/sftp/sftpServer';
 
 const app: Application = express();
 const server = http.createServer(app);
@@ -115,6 +116,9 @@ process.on('unhandledRejection', (reason, promise) => {
       server.listen(port, () => {
         logger.info(`Daemon is running on port ${port}`);
       });
+    const sftpPort = config.port + 1;
+    startSftpServer(sftpPort);
+      
     }, 1000);
   } catch (error) {
     logger.error("Failed to start the server:", error);
