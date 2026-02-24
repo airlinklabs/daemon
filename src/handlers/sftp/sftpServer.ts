@@ -40,13 +40,11 @@ const STATUS = {
   FAILURE: 4,
 };
 
-// SSH SFTP open flags (from draft-ietf-secsh-filexfer)
 const SSH_FXF_READ   = 0x00000001;
 const SSH_FXF_WRITE  = 0x00000002;
 const SSH_FXF_APPEND = 0x00000004;
 const SSH_FXF_CREAT  = 0x00000008;
 const SSH_FXF_TRUNC  = 0x00000010;
-const SSH_FXF_EXCL   = 0x00000020;
 
 async function validateCredentials(username: string, password: string): Promise<string | null> {
   const dotIndex = username.indexOf('.');
@@ -55,8 +53,11 @@ async function validateCredentials(username: string, password: string): Promise<
   const serverUUID = username.slice(0, dotIndex);
 
   try {
+    const url = `http://${config.remote}/api/sftp/validate`;
+    logger.info(`SFTP validate: POST ${url} for user ${username}`);
+
     const response = await axios.post(
-      `http://${config.remote}/api/sftp/validate`,
+      url,
       { username, password, serverUUID },
       {
         auth: { username: 'Airlink', password: config.key },
@@ -64,8 +65,13 @@ async function validateCredentials(username: string, password: string): Promise<
       },
     );
 
+    logger.info(`SFTP validate response: ${JSON.stringify(response.data)}`);
     return response.data?.valid === true ? serverUUID : null;
-  } catch {
+  } catch (err: any) {
+    logger.error(`SFTP validate request failed: ${err?.message ?? err}`);
+    if (err?.response) {
+      logger.error(`SFTP validate response status: ${err.response.status} body: ${JSON.stringify(err.response.data)}`);
+    }
     return null;
   }
 }
@@ -94,13 +100,13 @@ function statAttrs(stats: fs.Stats): Record<string, number> {
 }
 
 function openFlagsToFsFlags(flags: number): string {
-  const read  = (flags & SSH_FXF_READ)   !== 0;
-  const write = (flags & SSH_FXF_WRITE)  !== 0;
+  const read   = (flags & SSH_FXF_READ)   !== 0;
+  const write  = (flags & SSH_FXF_WRITE)  !== 0;
   const append = (flags & SSH_FXF_APPEND) !== 0;
-  const creat = (flags & SSH_FXF_CREAT)  !== 0;
-  const trunc = (flags & SSH_FXF_TRUNC)  !== 0;
+  const creat  = (flags & SSH_FXF_CREAT)  !== 0;
+  const trunc  = (flags & SSH_FXF_TRUNC)  !== 0;
 
-  if (append) return creat ? 'a' : 'a';
+  if (append) return 'a';
   if (write && trunc && creat) return 'w';
   if (write && creat && !trunc) return read ? 'r+' : 'r+';
   if (write && !creat) return 'r+';
@@ -234,7 +240,7 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
       fs.lstat(entryPath, (err, stats) => {
         if (err) {
           const isDir = entry.isDirectory();
-          const mode = isDir ? 0o40755 : 0o100644;
+          const mode  = isDir ? 0o40755 : 0o100644;
           names[i] = {
             filename: entry.name,
             longname: `${isDir ? 'd' : '-'}rwxr-xr-x 1 user group 0 Jan  1 00:00 ${entry.name}`,
@@ -242,10 +248,9 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
           };
         } else {
           const isDir = stats.isDirectory();
-          const modeStr = isDir ? 'd' : '-';
           names[i] = {
             filename: entry.name,
-            longname: `${modeStr}rwxr-xr-x 1 user group ${stats.size} Jan  1 00:00 ${entry.name}`,
+            longname: `${isDir ? 'd' : '-'}rwxr-xr-x 1 user group ${stats.size} Jan  1 00:00 ${entry.name}`,
             attrs: statAttrs(stats),
           };
         }
