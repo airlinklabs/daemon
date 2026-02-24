@@ -382,7 +382,7 @@ export function startSftpServer(port: number): SshServer {
     });
 
     client.on('error', (err) => {
-      logger.error(`SFTP client error: ${err}`);
+      logger.error('SFTP client error', err);
     });
   });
 
@@ -391,7 +391,7 @@ export function startSftpServer(port: number): SshServer {
   });
 
   srv.on('error', (err: unknown) => {
-    logger.error(`SFTP server error: ${err}`);
+    logger.error('SFTP server error', err);
   });
 
   return srv;
