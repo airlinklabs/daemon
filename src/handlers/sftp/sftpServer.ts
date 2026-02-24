@@ -64,7 +64,7 @@ async function validateCredentials(username: string, password: string): Promise<
 
     return response.data?.valid === true ? serverUUID : null;
   } catch (err: any) {
-    logger.error('SFTP validate request failed:', err?.message ?? String(err));
+    logger.error('SFTP validate request failed', err?.code ?? err?.message ?? JSON.stringify(err));
     return null;
   }
 }
