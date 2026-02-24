@@ -33,11 +33,11 @@ function getHostKey(): Buffer {
 const VOLUMES_DIR = path.join(process.cwd(), 'volumes');
 
 const STATUS = {
-  OK: 0,
-  EOF: 1,
-  NO_SUCH_FILE: 2,
+  OK:               0,
+  EOF:              1,
+  NO_SUCH_FILE:     2,
   PERMISSION_DENIED: 3,
-  FAILURE: 4,
+  FAILURE:          4,
 };
 
 const SSH_FXF_READ   = 0x00000001;
@@ -73,8 +73,9 @@ function resolveServerPath(serverUUID: string, requestedPath: string): string | 
   const base = path.join(VOLUMES_DIR, serverUUID);
   const joined = path.join(base, requestedPath);
   const resolved = path.resolve(joined);
+  const resolvedBase = path.resolve(base);
 
-  if (!resolved.startsWith(path.resolve(base) + path.sep) && resolved !== path.resolve(base)) {
+  if (resolved !== resolvedBase && !resolved.startsWith(resolvedBase + path.sep)) {
     return null;
   }
 
@@ -83,10 +84,10 @@ function resolveServerPath(serverUUID: string, requestedPath: string): string | 
 
 function statAttrs(stats: fs.Stats): Record<string, number> {
   return {
-    mode: stats.mode,
-    uid: stats.uid,
-    gid: stats.gid,
-    size: stats.size,
+    mode:  stats.mode,
+    uid:   stats.uid,
+    gid:   stats.gid,
+    size:  stats.size,
     atime: Math.floor(stats.atimeMs / 1000),
     mtime: Math.floor(stats.mtimeMs / 1000),
   };
@@ -100,10 +101,9 @@ function openFlagsToFsFlags(flags: number): string {
   const trunc  = (flags & SSH_FXF_TRUNC)  !== 0;
 
   if (append) return 'a';
-  if (write && trunc && creat) return 'w';
-  if (write && creat && !trunc) return read ? 'r+' : 'r+';
-  if (write && !creat) return 'r+';
-  if (write && trunc) return 'w';
+  if (write && trunc) return read ? 'w+' : 'w';
+  if (write && creat) return read ? 'w+' : 'w';
+  if (write)          return 'r+';
   return 'r';
 }
 
@@ -127,8 +127,9 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
     if (!absPath) return (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
 
     const fsFlags = openFlagsToFsFlags(flags);
+    const needsCreate = (flags & (SSH_FXF_WRITE | SSH_FXF_CREAT)) !== 0;
 
-    if ((flags & (SSH_FXF_WRITE | SSH_FXF_CREAT)) !== 0) {
+    if (needsCreate) {
       try {
         fs.mkdirSync(path.dirname(absPath), { recursive: true });
       } catch {}
@@ -152,7 +153,7 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
 
     const buf = Buffer.alloc(length);
     fs.read(file.fd, buf, 0, length, offset, (err, bytesRead) => {
-      if (err) return (sftp as any).status(reqid, STATUS.FAILURE);
+      if (err)          return (sftp as any).status(reqid, STATUS.FAILURE);
       if (bytesRead === 0) return (sftp as any).status(reqid, STATUS.EOF);
       (sftp as any).data(reqid, buf.slice(0, bytesRead));
     });
@@ -215,8 +216,8 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
 
   (sftp as any).on('READDIR', (reqid: number, handle: Buffer) => {
     const dir = openDirs.get(readHandle(handle));
-    if (!dir) return (sftp as any).status(reqid, STATUS.FAILURE);
-    if (dir.sent) return (sftp as any).status(reqid, STATUS.EOF);
+    if (!dir)      return (sftp as any).status(reqid, STATUS.FAILURE);
+    if (dir.sent)  return (sftp as any).status(reqid, STATUS.EOF);
 
     const pending = dir.entries.length;
 
@@ -237,14 +238,14 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
           names[i] = {
             filename: entry.name,
             longname: `${isDir ? 'd' : '-'}rwxr-xr-x 1 user group 0 Jan  1 00:00 ${entry.name}`,
-            attrs: { mode, uid: 0, gid: 0, size: 0, atime: 0, mtime: 0 },
+            attrs:    { mode, uid: 0, gid: 0, size: 0, atime: 0, mtime: 0 },
           };
         } else {
           const isDir = stats.isDirectory();
           names[i] = {
             filename: entry.name,
             longname: `${isDir ? 'd' : '-'}rwxr-xr-x 1 user group ${stats.size} Jan  1 00:00 ${entry.name}`,
-            attrs: statAttrs(stats),
+            attrs:    statAttrs(stats),
           };
         }
 
@@ -319,21 +320,10 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
     (sftp as any).name(reqid, [{ filename: normalized, longname: normalized, attrs: {} }]);
   });
 
-  (sftp as any).on('SETSTAT', (reqid: number, _filePath: string, _attrs: any) => {
-    (sftp as any).status(reqid, STATUS.OK);
-  });
-
-  (sftp as any).on('FSETSTAT', (reqid: number, _handle: Buffer, _attrs: any) => {
-    (sftp as any).status(reqid, STATUS.OK);
-  });
-
-  (sftp as any).on('SYMLINK', (reqid: number, _linkPath: string, _targetPath: string) => {
-    (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
-  });
-
-  (sftp as any).on('READLINK', (reqid: number, _linkPath: string) => {
-    (sftp as any).status(reqid, STATUS.PERMISSION_DENIED);
-  });
+  (sftp as any).on('SETSTAT',  (reqid: number, _p: string,  _a: any) => (sftp as any).status(reqid, STATUS.OK));
+  (sftp as any).on('FSETSTAT', (reqid: number, _h: Buffer,  _a: any) => (sftp as any).status(reqid, STATUS.OK));
+  (sftp as any).on('SYMLINK',  (reqid: number, _l: string,  _t: string) => (sftp as any).status(reqid, STATUS.PERMISSION_DENIED));
+  (sftp as any).on('READLINK', (reqid: number, _p: string)             => (sftp as any).status(reqid, STATUS.PERMISSION_DENIED));
 }
 
 function handleSession(session: Session, serverUUID: string): void {
