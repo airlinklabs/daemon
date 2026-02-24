@@ -53,11 +53,8 @@ async function validateCredentials(username: string, password: string): Promise<
   const serverUUID = username.slice(0, dotIndex);
 
   try {
-    const url = `http://${config.remote}/api/sftp/validate`;
-    logger.info(`SFTP validate: POST ${url} user=${username}`);
-
     const response = await axios.post(
-      url,
+      `http://${config.remote}/api/sftp/validate`,
       { username, password, serverUUID },
       {
         auth: { username: 'Airlink', password: config.key },
@@ -65,13 +62,9 @@ async function validateCredentials(username: string, password: string): Promise<
       },
     );
 
-    logger.info(`SFTP validate response: ${JSON.stringify(response.data)}`);
     return response.data?.valid === true ? serverUUID : null;
   } catch (err: any) {
-    const detail = err?.response
-      ? `status=${err.response.status} body=${JSON.stringify(err.response.data)}`
-      : (err?.message ?? String(err));
-    logger.error(`SFTP validate failed: ${detail}`);
+    logger.error('SFTP validate request failed:', err?.message ?? String(err));
     return null;
   }
 }
@@ -402,4 +395,4 @@ export function startSftpServer(port: number): SshServer {
   });
 
   return srv;
-                       }
+}
