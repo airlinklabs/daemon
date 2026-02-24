@@ -54,7 +54,7 @@ async function validateCredentials(username: string, password: string): Promise<
 
   try {
     const response = await axios.post(
-      `http://${config.remote}/api/sftp/validate`,
+      `${config.remote}/api/sftp/validate`,
       { username, password, serverUUID },
       {
         auth: { username: 'Airlink', password: config.key },
