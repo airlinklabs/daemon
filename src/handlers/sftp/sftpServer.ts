@@ -26,7 +26,7 @@ function getHostKey(): Buffer {
   });
 
   fs.writeFileSync(HOST_KEY_PATH, privateKey as string, { mode: 0o600 });
-  logger.info('Generated new SFTP host key', '');
+  logger.info('Generated new SFTP host key');
   return Buffer.from(privateKey as string);
 }
 
@@ -54,7 +54,7 @@ async function validateCredentials(username: string, password: string): Promise<
 
   try {
     const url = `http://${config.remote}/api/sftp/validate`;
-    logger.info('SFTP validate request', `${url} user=${username}`);
+    logger.info(`SFTP validate: POST ${url} user=${username}`);
 
     const response = await axios.post(
       url,
@@ -65,15 +65,13 @@ async function validateCredentials(username: string, password: string): Promise<
       },
     );
 
-    logger.info('SFTP validate response', JSON.stringify(response.data));
+    logger.info(`SFTP validate response: ${JSON.stringify(response.data)}`);
     return response.data?.valid === true ? serverUUID : null;
   } catch (err: any) {
-    logger.error(
-      'SFTP validate request failed',
-      err?.response
-        ? `${err.message} — status ${err.response.status} body ${JSON.stringify(err.response.data)}`
-        : err?.message ?? String(err),
-    );
+    const detail = err?.response
+      ? `status=${err.response.status} body=${JSON.stringify(err.response.data)}`
+      : (err?.message ?? String(err));
+    logger.error(`SFTP validate failed: ${detail}`);
     return null;
   }
 }
@@ -391,17 +389,17 @@ export function startSftpServer(port: number): SshServer {
     });
 
     client.on('error', (err) => {
-      logger.error('SFTP client error', err);
+      logger.error(`SFTP client error: ${err}`);
     });
   });
 
   srv.listen(port, '0.0.0.0', () => {
-    logger.info('SFTP server listening on port', String(port));
+    logger.info(`SFTP server listening on port ${port}`);
   });
 
   srv.on('error', (err: unknown) => {
-    logger.error('SFTP server error', err);
+    logger.error(`SFTP server error: ${err}`);
   });
 
   return srv;
-  }
+}
