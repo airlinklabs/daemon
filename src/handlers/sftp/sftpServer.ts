@@ -26,7 +26,7 @@ function getHostKey(): Buffer {
   });
 
   fs.writeFileSync(HOST_KEY_PATH, privateKey as string, { mode: 0o600 });
-  logger.info('Generated new SFTP host key');
+  logger.info('Generated new SFTP host key', '');
   return Buffer.from(privateKey as string);
 }
 
@@ -54,7 +54,7 @@ async function validateCredentials(username: string, password: string): Promise<
 
   try {
     const url = `http://${config.remote}/api/sftp/validate`;
-    logger.info(`SFTP validate: POST ${url} for user ${username}`);
+    logger.info('SFTP validate request', `${url} user=${username}`);
 
     const response = await axios.post(
       url,
@@ -65,13 +65,15 @@ async function validateCredentials(username: string, password: string): Promise<
       },
     );
 
-    logger.info(`SFTP validate response: ${JSON.stringify(response.data)}`);
+    logger.info('SFTP validate response', JSON.stringify(response.data));
     return response.data?.valid === true ? serverUUID : null;
   } catch (err: any) {
-    logger.error(`SFTP validate request failed: ${err?.message ?? err}`);
-    if (err?.response) {
-      logger.error(`SFTP validate response status: ${err.response.status} body: ${JSON.stringify(err.response.data)}`);
-    }
+    logger.error(
+      'SFTP validate request failed',
+      err?.response
+        ? `${err.message} — status ${err.response.status} body ${JSON.stringify(err.response.data)}`
+        : err?.message ?? String(err),
+    );
     return null;
   }
 }
@@ -225,7 +227,7 @@ function handleSftpSession(sftp: SFTPWrapper, serverUUID: string): void {
     if (!dir) return (sftp as any).status(reqid, STATUS.FAILURE);
     if (dir.sent) return (sftp as any).status(reqid, STATUS.EOF);
 
-    let pending = dir.entries.length;
+    const pending = dir.entries.length;
 
     if (pending === 0) {
       dir.sent = true;
@@ -394,7 +396,7 @@ export function startSftpServer(port: number): SshServer {
   });
 
   srv.listen(port, '0.0.0.0', () => {
-    logger.info(`SFTP server listening on port ${port}`);
+    logger.info('SFTP server listening on port', String(port));
   });
 
   srv.on('error', (err: unknown) => {
