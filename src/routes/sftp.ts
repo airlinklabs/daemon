@@ -5,6 +5,7 @@ import {
   getActiveSessionCount,
 } from "../handlers/sftp/sftpManager";
 import { validateContainerId } from "../utils/validation";
+import logger from "../utils/logger";
 
 const router = Router();
 
@@ -32,7 +33,7 @@ router.post("/sftp/credentials", async (req: Request, res: Response) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to generate SFTP credentials.";
-    console.error(`SFTP credential generation failed for ${id}:`, error);
+    logger.error(`SFTP credential generation failed for ${id}:`, error);
     res.status(500).json({ error: message });
   }
 });
@@ -55,7 +56,7 @@ router.delete("/sftp/credentials", async (req: Request, res: Response) => {
     res.json({ message: "SFTP credentials revoked." });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to revoke SFTP credentials.";
-    console.error(`SFTP credential revocation failed for ${id}:`, error);
+    logger.error(`SFTP credential revocation failed for ${id}:`, error);
     res.status(500).json({ error: message });
   }
 });

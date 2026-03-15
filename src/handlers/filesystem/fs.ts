@@ -6,6 +6,7 @@ import axios from "axios";
 import fileSpecifier from "../../utils/fileSpecifier";
 import archiver from "archiver";
 import { spawn } from "child_process";
+import logger from "../../utils/logger";
 
 const openAtAddon =
   require("../../../libs/build/Release/secure_open.node").openat;
@@ -66,7 +67,7 @@ const getDirectorySize = async (
   let totalSize = 0;
 
   if (depth > maxDepth) {
-    console.warn(`Max depth reached at: ${directory}`);
+    logger.warn(`Max depth reached at: ${directory}`);
     return totalSize;
   }
 
@@ -75,7 +76,7 @@ const getDirectorySize = async (
   try {
     contents = await fs.readdir(directory, { withFileTypes: true });
   } catch (err) {
-    console.warn(`Failed to read directory: ${directory}`, err);
+    logger.warn(`Failed to read directory: ${directory}: ${err}`);
     return totalSize;
   }
 
@@ -99,7 +100,7 @@ const getDirectorySize = async (
         totalSize += stat.size;
       }
     } catch (err) {
-      console.warn(`Failed to process ${fullPath}`, err);
+      logger.warn(`Failed to process ${fullPath}: ${err}`);
     }
   }
 
@@ -111,7 +112,7 @@ const getFileSize = async (filePath: string): Promise<number> => {
     const stats = await fs.stat(filePath);
     return stats.size;
   } catch (error) {
-    console.error(`Error getting file size: ${error}`);
+    logger.error(`Error getting file size`, error);
     return 0;
   }
 };
@@ -124,18 +125,25 @@ const getFileContent = async (filePath: string): Promise<string | null> => {
     }
     return null;
   } catch (error) {
-    console.error(`Error getting file content: ${error}`);
+    logger.error(`Error getting file content`, error);
     return null;
   }
 };
 
 const afs = {
   async rename(id: string, oldPath: string, newPath: string) {
-    console.log(
-      `[rename] Start renaming: ${oldPath} -> ${newPath} in volume: ${id}`
-    );
+    logger.info(`[rename] ${oldPath} -> ${newPath} in volume ${id}`);
     const baseDirectory = path.resolve(`volumes/${id}`);
-    console.log(`[rename] Base directory resolved: ${baseDirectory}`);
+
+    // Ensure the destination parent directory exists before sanitizePath
+    // tries to realpathSync it — realpathSync fails on non-existent paths
+    const newParentRaw = path.join(baseDirectory, path.dirname(newPath));
+    try {
+      await fs.mkdir(newParentRaw, { recursive: true });
+    } catch (err) {
+      logger.error(`[rename] Failed to pre-create destination directory: ${newParentRaw}`, err);
+      throw err;
+    }
 
     let oldSanitized, newSanitized;
     try {
@@ -160,49 +168,32 @@ const afs = {
         ),
       };
 
-      console.log(`[rename] Sanitized paths:`);
-      console.log(
-        `  old: ${oldSanitized.resolvedPath} (fd: ${oldSanitized.fd})`
-      );
-      console.log(
-        `  new: ${newSanitized.resolvedPath} (fd: ${newSanitized.fd})`
-      );
     } catch (err) {
-      console.error(`[rename] Error sanitizing paths:`, err);
+      logger.error(`[rename] Error sanitizing paths:`, err);
       throw err;
     }
 
     const newFileDir = path.dirname(newSanitized.resolvedPath);
     try {
       if (!fsN.existsSync(newFileDir)) {
-        console.log(`[rename] Creating new directory: ${newFileDir}`);
         await fs.mkdir(newFileDir, { recursive: true });
       }
     } catch (err) {
-      console.error(
-        `[rename] Failed to create new directory: ${newFileDir}`,
-        err
-      );
+      logger.error(`[rename] Failed to create new directory: ${newFileDir}`, err);
       throw err;
     }
 
     let isFile: boolean;
     try {
       isFile = fsN.lstatSync(oldSanitized.resolvedPath).isFile();
-      console.log(`[rename] Is file: ${isFile}`);
     } catch (err) {
-      console.error(
-        `[rename] Failed to lstat old path: ${oldSanitized.resolvedPath}`,
-        err
-      );
+      logger.error(`[rename] Failed to lstat old path: ${oldSanitized.resolvedPath}`, err);
       throw err;
     }
 
     if (fsN.existsSync(newSanitized.resolvedPath)) {
       const msg = isFile ? "File already exists" : "Folder already exists";
-      console.error(
-        `[rename] Target already exists: ${newSanitized.resolvedPath}`
-      );
+      logger.warn(`[rename] Target already exists: ${newSanitized.resolvedPath}`);
       throw new Error(msg);
     }
 
@@ -216,36 +207,28 @@ const afs = {
         newFileDir,
         fsN.constants.O_RDONLY | fsN.constants.O_DIRECTORY
       );
-      console.log(
-        `[rename] Opened parent FDs: old=${oldParentFD}, new=${newParentFD}`
-      );
+
     } catch (err) {
-      console.error(`[rename] Failed to open parent directories`, err);
+      logger.error(`[rename] Failed to open parent directories`, err);
       throw err;
     }
 
     try {
-      console.log(`[rename] Performing renameat...`);
       renameAtAddon.renameat(
         oldParentFD,
         path.basename(oldSanitized.resolvedPath),
         newParentFD,
         path.basename(newSanitized.resolvedPath)
       );
-      console.log(`[rename] Rename completed successfully.`);
     } catch (err) {
-      console.error(
-        `[rename] renameat failed for: ${oldSanitized.resolvedPath} -> ${newSanitized.resolvedPath}`,
-        err
-      );
+      logger.error(`[rename] renameat failed: ${oldSanitized.resolvedPath} -> ${newSanitized.resolvedPath}`, err);
       throw err;
     } finally {
       try {
         fsN.closeSync(oldParentFD);
         fsN.closeSync(newParentFD);
-        console.log(`[rename] Closed parent FDs.`);
       } catch (err) {
-        console.error(`[rename] Failed to close FDs`, err);
+        logger.error(`[rename] Failed to close FDs`, err);
       }
     }
   },
@@ -269,7 +252,6 @@ const afs = {
       currentTime - rateData.lastRequest < 1000 &&
       rateData.path === relativePath
     ) {
-      console.log("Cache hit", relativePath);
       return rateData.cache;
     }
 
@@ -284,7 +266,7 @@ const afs = {
 
     if (rateData.count > 5) {
       rateData.cache = { error: "Too many requests, please wait 3 seconds." };
-      console.log("Too many requests, please wait 3 seconds.");
+      logger.warn("Too many requests, please wait 3 seconds.");
       setTimeout(() => requestCache.delete(id), 3000);
       return rateData.cache;
     }
@@ -444,9 +426,7 @@ const afs = {
       const filePath = sanitizePath(baseDirectory, relativePath).resolvedPath;
       const dir = path.dirname(filePath);
 
-      console.log(
-        `Writing file to ${filePath}, content type: ${typeof content}`
-      );
+
       await fs.mkdir(dir, { recursive: true });
 
       if (typeof content === "string") {
@@ -454,13 +434,13 @@ const afs = {
       } else {
         await fs.writeFile(filePath, content);
       }
-      console.log(`File written successfully to ${filePath}`);
+      logger.info(`File written successfully to ${filePath}`);
     } catch (error: unknown) {
       if (error instanceof Error) {
-        console.error(`Error writing file content: ${error.message}`);
+        logger.error(`Error writing file content: ${error.message}`, new Error());
         throw error;
       } else {
-        console.error("An unknown error occurred during file writing.");
+        logger.error("An unknown error occurred during file writing.", new Error());
         throw new Error("An unknown error occurred during file writing.");
       }
     }
@@ -507,6 +487,7 @@ const afs = {
         method: "GET",
         url: url,
         responseType: "arraybuffer",
+        timeout: 30000,
       });
 
       if (response.status !== 200) {
@@ -523,22 +504,18 @@ const afs = {
           .toString()
           .replace(regex, (_: string, variableName: string) => {
             if (environmentVariables[variableName]) {
-              console.log(environmentVariables[variableName]);
               return environmentVariables[variableName];
             } else {
-              console.warn(
-                `Variable "${variableName}" not found in environment variables.`
-              );
+              logger.warn(`Variable "${variableName}" not found in environment variables.`);
               return "";
             }
           });
 
-        console.log(fileContent);
       }
       const dirPath = path.dirname(filePath);
       await fs.mkdir(dirPath, { recursive: true });
       await fs.writeFile(filePath, fileContent);
-      console.log(`File downloaded successfully to ${filePath}`);
+      logger.info(`File downloaded successfully to ${filePath}`);
     } catch (error: unknown) {
       if (axios.isAxiosError(error)) {
         throw new Error(`Error downloading file: ${error.message}`);
@@ -598,7 +575,7 @@ const afs = {
                 .catch(() => false);
 
               if (!exists) {
-                console.warn(`File not found: ${cleanPath}`);
+                logger.warn(`File not found: ${cleanPath}`);
                 continue;
               }
 
@@ -609,7 +586,7 @@ const afs = {
                 archive.file(fullPath, { name: cleanPath });
               }
             } catch (err) {
-              console.warn(`Error processing ${cleanPath}:`, err);
+              logger.warn(`Error processing ${cleanPath}: ${err}`);
             }
           }
 
@@ -637,11 +614,11 @@ const afs = {
       const archivePath = path.join(baseDirectory, relativePath, zipname);
       const extractPath = path.dirname(archivePath);
 
-      console.log("Unzip paths:", {
+      logger.info(`Unzip paths: ${JSON.stringify({
         baseDirectory,
         archivePath,
         extractPath,
-      });
+      })}`);
 
       const exists = await fs
         .access(archivePath)
@@ -757,7 +734,7 @@ async function extractArchive(
     });
 
     childProcess.stdout.on("data", (data) => {
-      console.log(`Display: ${data}`);
+      logger.info(`Display: ${data}`);
     });
 
     childProcess.on("close", (code) => {

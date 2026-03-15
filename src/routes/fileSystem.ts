@@ -7,6 +7,7 @@ import {
   validatePath,
   validateFileName,
 } from "../utils/validation";
+import logger from "../utils/logger";
 
 const router = Router();
 
@@ -351,12 +352,10 @@ router.post("/fs/upload", async (req: Request, res: Response) => {
   const fileName =
     typeof req.body.fileName === "string" ? req.body.fileName : "";
 
-  console.log(
-    `Upload request received for file ${fileName} to path ${relativePath} for container ${id}`
-  );
+  logger.info(`Upload request received for file ${fileName} to path ${relativePath} for container ${id}`);
 
   if (!id) {
-    console.error("Upload error: Container ID is required");
+    logger.warn("Upload error: Container ID is required");
     res
       .status(400)
       .json({ error: "Container ID is required and must be a string." });
@@ -369,7 +368,7 @@ router.post("/fs/upload", async (req: Request, res: Response) => {
   }
 
   if (!fileName) {
-    console.error("Upload error: File name is required");
+    logger.warn("Upload error: File name is required");
     res.status(400).json({ error: "File name is required." });
     return;
   }
@@ -385,7 +384,7 @@ router.post("/fs/upload", async (req: Request, res: Response) => {
   }
 
   if (!fileContent) {
-    console.error("Upload error: File content is required");
+    logger.warn("Upload error: File content is required");
     res.status(400).json({ error: "File content is required." });
     return;
   }
@@ -393,38 +392,32 @@ router.post("/fs/upload", async (req: Request, res: Response) => {
   try {
     const targetPath =
       relativePath === "/" ? fileName : `${relativePath}/${fileName}`;
-    console.log(`Normalized target path: ${targetPath}`);
-
+    
     let content;
     if (typeof fileContent === "string") {
       if (fileContent.includes("base64")) {
-        console.log("Processing base64 content");
-        const base64Match = fileContent.match(/^data:[^;]+;base64,(.+)$/);
+                const base64Match = fileContent.match(/^data:[^;]+;base64,(.+)$/);
         if (base64Match && base64Match[1]) {
           try {
             content = Buffer.from(base64Match[1], "base64");
-            console.log(
-              `Converted base64 to buffer of size: ${content.length} bytes`
-            );
+            logger.info(`Converted base64 to buffer of size: ${content.length} bytes`);
           } catch (e) {
-            console.error("Error decoding base64:", e);
+            logger.error("Error decoding base64:", e);
             res.status(400).json({ error: "Failed to decode base64 content." });
             return;
           }
         } else {
-          console.error("Invalid base64 format");
+          logger.warn("Invalid base64 format");
           res.status(400).json({ error: "Invalid base64 format." });
           return;
         }
       } else {
-        console.log("Using string content as-is");
-        content = fileContent;
+                content = fileContent;
       }
     } else if (Buffer.isBuffer(fileContent)) {
-      console.log("Content is already a buffer");
-      content = fileContent;
+            content = fileContent;
     } else {
-      console.error("Unsupported content type:", typeof fileContent);
+      logger.error("Unsupported content type:", typeof fileContent);
       res.status(400).json({ error: "Unsupported content type." });
       return;
     }
@@ -436,30 +429,27 @@ router.post("/fs/upload", async (req: Request, res: Response) => {
 
     try {
       await fs.mkdir(dir, { recursive: true });
-      console.log(`Directory created/verified: ${dir}`);
-    } catch (e) {
-      console.error("Error creating directory:", e);
+          } catch (e) {
+      logger.error("Error creating directory:", e);
       res.status(500).json({ error: "Failed to create directory." });
       return;
     }
 
     try {
       await fs.writeFile(filePath, content);
-      console.log(`File written successfully to ${filePath}`);
-    } catch (e) {
-      console.error("Error writing file:", e);
+          } catch (e) {
+      logger.error("Error writing file:", e);
       res.status(500).json({ error: "Failed to write file." });
       return;
     }
 
-    console.log(`File ${fileName} successfully uploaded to ${targetPath}`);
-    res.json({
+        res.json({
       message: "File successfully uploaded.",
       fileName: fileName,
       path: targetPath,
     });
   } catch (error) {
-    console.error("Error during file upload:", error);
+    logger.error("Error during file upload:", error);
     if (error instanceof Error) {
       res.status(500).json({ error: error.message });
     } else {
@@ -474,12 +464,10 @@ router.post("/fs/create-empty-file", async (req: Request, res: Response) => {
   const fileName =
     typeof req.body.fileName === "string" ? req.body.fileName : "";
 
-  console.log(
-    `Create empty file request received for ${fileName} in path ${relativePath} for container ${id}`
-  );
+  logger.info(`Create empty file request received for ${fileName} in path ${relativePath} for container ${id}`);
 
   if (!id) {
-    console.error("Create empty file error: Container ID is required");
+    logger.warn("Create empty file error: Container ID is required");
     res
       .status(400)
       .json({ error: "Container ID is required and must be a string." });
@@ -487,7 +475,7 @@ router.post("/fs/create-empty-file", async (req: Request, res: Response) => {
   }
 
   if (!fileName) {
-    console.error("Create empty file error: File name is required");
+    logger.warn("Create empty file error: File name is required");
     res.status(400).json({ error: "File name is required." });
     return;
   }
@@ -495,26 +483,23 @@ router.post("/fs/create-empty-file", async (req: Request, res: Response) => {
   try {
     const targetPath =
       relativePath === "/" ? fileName : `${relativePath}/${fileName}`;
-    console.log(`Normalized target path: ${targetPath}`);
-
+    
     const baseDirectory = path.resolve(`volumes/${id}`);
     const filePath = await sanitizePath(baseDirectory, targetPath);
     const dir = path.dirname(filePath);
 
     try {
       await fs.mkdir(dir, { recursive: true });
-      console.log(`Directory created/verified: ${dir}`);
-    } catch (e) {
-      console.error("Error creating directory:", e);
+          } catch (e) {
+      logger.error("Error creating directory:", e);
       res.status(500).json({ error: "Failed to create directory." });
       return;
     }
 
     try {
       await fs.writeFile(filePath, "");
-      console.log(`Empty file created at ${filePath}`);
-    } catch (e) {
-      console.error("Error creating empty file:", e);
+          } catch (e) {
+      logger.error("Error creating empty file:", e);
       res.status(500).json({ error: "Failed to create empty file." });
       return;
     }
@@ -525,7 +510,7 @@ router.post("/fs/create-empty-file", async (req: Request, res: Response) => {
       path: targetPath,
     });
   } catch (error) {
-    console.error("Error creating empty file:", error);
+    logger.error("Error creating empty file:", error);
     if (error instanceof Error) {
       res.status(500).json({ error: error.message });
     } else {
@@ -545,14 +530,12 @@ router.post("/fs/append-file", async (req: Request, res: Response) => {
   const totalChunks =
     typeof req.body.totalChunks === "number" ? req.body.totalChunks : 1;
 
-  console.log(
-    `Append file request received for ${fileName} chunk ${
+  logger.info(`Append file request received for ${fileName} chunk ${
       chunkIndex + 1
-    }/${totalChunks} in path ${relativePath} for container ${id}`
-  );
+    }/${totalChunks} in path ${relativePath} for container ${id}`);
 
   if (!id) {
-    console.error("Append file error: Container ID is required");
+    logger.warn("Append file error: Container ID is required");
     res
       .status(400)
       .json({ error: "Container ID is required and must be a string." });
@@ -560,13 +543,13 @@ router.post("/fs/append-file", async (req: Request, res: Response) => {
   }
 
   if (!fileName) {
-    console.error("Append file error: File name is required");
+    logger.warn("Append file error: File name is required");
     res.status(400).json({ error: "File name is required." });
     return;
   }
 
   if (!fileContent) {
-    console.error("Append file error: File content is required");
+    logger.warn("Append file error: File content is required");
     res.status(400).json({ error: "File content is required." });
     return;
   }
@@ -574,40 +557,34 @@ router.post("/fs/append-file", async (req: Request, res: Response) => {
   try {
     const targetPath =
       relativePath === "/" ? fileName : `${relativePath}/${fileName}`;
-    console.log(`Normalized target path: ${targetPath}`);
-
+    
     let content;
     if (typeof fileContent === "string") {
       if (fileContent.includes("base64")) {
-        console.log("Processing base64 content for chunk");
-        const base64Match = fileContent.match(/^data:[^;]+;base64,(.+)$/);
+                const base64Match = fileContent.match(/^data:[^;]+;base64,(.+)$/);
         if (base64Match && base64Match[1]) {
           try {
             content = Buffer.from(base64Match[1], "base64");
-            console.log(
-              `Converted base64 to buffer of size: ${
+            logger.info(`Converted base64 to buffer of size: ${
                 content.length
-              } bytes for chunk ${chunkIndex + 1}/${totalChunks}`
-            );
+              } bytes for chunk ${chunkIndex + 1}/${totalChunks}`);
           } catch (e) {
-            console.error("Error decoding base64:", e);
+            logger.error("Error decoding base64:", e);
             res.status(400).json({ error: "Failed to decode base64 content." });
             return;
           }
         } else {
-          console.error("Invalid base64 format");
+          logger.warn("Invalid base64 format");
           res.status(400).json({ error: "Invalid base64 format." });
           return;
         }
       } else {
-        console.log("Using string content as-is");
-        content = fileContent;
+                content = fileContent;
       }
     } else if (Buffer.isBuffer(fileContent)) {
-      console.log("Content is already a buffer");
-      content = fileContent;
+            content = fileContent;
     } else {
-      console.error("Unsupported content type:", typeof fileContent);
+      logger.error("Unsupported content type:", typeof fileContent);
       res.status(400).json({ error: "Unsupported content type." });
       return;
     }
@@ -621,11 +598,9 @@ router.post("/fs/append-file", async (req: Request, res: Response) => {
       } else {
         await fs.appendFile(filePath, content);
       }
-      console.log(
-        `Appended chunk ${chunkIndex + 1}/${totalChunks} to file ${filePath}`
-      );
+      logger.info(`Appended chunk ${chunkIndex + 1}/${totalChunks} to file ${filePath}`);
     } catch (e) {
-      console.error("Error appending to file:", e);
+      logger.error("Error appending to file:", e);
       res.status(500).json({ error: "Failed to append to file." });
       return;
     }
@@ -638,7 +613,7 @@ router.post("/fs/append-file", async (req: Request, res: Response) => {
       totalChunks: totalChunks,
     });
   } catch (error) {
-    console.error("Error appending to file:", error);
+    logger.error("Error appending to file:", error);
     if (error instanceof Error) {
       res.status(500).json({ error: error.message });
     } else {

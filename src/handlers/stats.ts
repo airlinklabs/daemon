@@ -6,7 +6,7 @@ import logger from '../utils/logger';
 
 const storagePath = path.join(__dirname, '../../storage/systemStats.json');
 const tempStoragePath = path.join(__dirname, '../../storage/systemStats.tmp.json');
-const maxAge = 5 * 60 * 10000;
+const maxAge = 30 * 60 * 1000;
 
 interface SystemStat {
   timestamp: string;
@@ -150,5 +150,3 @@ export function getSystemStats(periodInMs?: number): SystemStat[] | Promise<Syst
     return getCurrentStats();
   }
 }
-
-(getSystemStats as any).total = (): SystemStat[] => statsLog;

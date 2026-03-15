@@ -32,23 +32,3 @@ export const attachToContainerWithWS = async (id: string, ws: WebSocket): Promis
         }
     }
 };
-
-export const attachToContainer = async (id: string): Promise<void> => {
-    try {
-        logger.info(`Attaching to container ${id}...`);
-        const container = docker.getContainer(id);
-        const containerInfo = await container.inspect();
-
-        if (!containerInfo.State.Running) {
-            logger.warn(`Container ${id} is not running.`);
-            return;
-        }
-
-        const stream = await container.attach({ stream: true, stdin: true, stdout: true, stderr: true });
-        stream.pipe(process.stdout);
-
-        logger.success(`[${id}] Attached successfully.`);
-    } catch (error) {
-        logger.error(`Failed to attach to container ${id}:`, error);
-    }
-};

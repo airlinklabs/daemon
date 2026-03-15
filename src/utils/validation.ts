@@ -1,11 +1,4 @@
-/**
- * Validation utilities for the daemon
- */
 
-/**
- * Validates a container ID format
- * Container IDs should be alphanumeric with hyphens and underscores only
- */
 export function validateContainerId(id: string): boolean {
     if (!id || typeof id !== 'string') {
         return false;
@@ -16,9 +9,6 @@ export function validateContainerId(id: string): boolean {
     return /^[a-zA-Z0-9_-]+$/.test(id) && id.length >= 1 && id.length <= 64;
 }
 
-/**
- * Validates a file path to prevent directory traversal
- */
 export function validatePath(relativePath: string): boolean {
     if (!relativePath || typeof relativePath !== 'string') {
         return false;
@@ -32,9 +22,6 @@ export function validatePath(relativePath: string): boolean {
     return true;
 }
 
-/**
- * Validates file name to prevent malicious names
- */
 export function validateFileName(fileName: string): boolean {
     if (!fileName || typeof fileName !== 'string') {
         return false;
@@ -43,17 +30,13 @@ export function validateFileName(fileName: string): boolean {
     // Prevent dangerous file names
     const dangerousPatterns = [
         /\.\./,  // Directory traversal
-        /[<>:"|?*]/,  // Windows invalid characters
-        /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i,  // Windows reserved names
-        /^\./,  // Hidden files starting with dot (optional restriction)
+        /[<>:"|?*]/,
+        /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i,
     ];
     
     return !dangerousPatterns.some(pattern => pattern.test(fileName));
 }
 
-/**
- * Validates URL format
- */
 export function validateUrl(url: string): boolean {
     if (!url || typeof url !== 'string') {
         return false;

@@ -6,7 +6,6 @@ import {
   docker,
   getContainerStats,
 } from "../handlers/instances/utils";
-import { attachToContainer } from "../handlers/instances/attach";
 import { startContainer, createInstaller } from "../handlers/instances/create";
 import { stopContainer } from "../handlers/instances/stop";
 import { killContainer } from "../handlers/instances/kill";
@@ -17,8 +16,9 @@ import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import { create as tar_create, extract as tar_extract } from "tar";
+import logger from "../utils/logger";
 
-const loadJson = (filePath: string) => {
+const loadJson = (filePath: string): any[] => {
   try {
     if (!fs.existsSync(filePath)) {
       return [];
@@ -26,12 +26,12 @@ const loadJson = (filePath: string) => {
     const content = fs.readFileSync(filePath, "utf-8");
     return content.trim() ? JSON.parse(content) : [];
   } catch (error) {
-    console.error(`Error loading JSON from ${filePath}:`, error);
+    logger.error(`Error loading JSON from ${filePath}:`, error);
     return [];
   }
 };
 
-const saveJson = (filePath: string, data: any) => {
+const saveJson = (filePath: string, data: unknown): void => {
   try {
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
@@ -39,7 +39,7 @@ const saveJson = (filePath: string, data: any) => {
     }
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
   } catch (error) {
-    console.error(`Error saving JSON to ${filePath}:`, error);
+    logger.error(`Error saving JSON to ${filePath}:`, error);
     throw error;
   }
 };
@@ -71,7 +71,7 @@ router.post("/container/installer", async (req: Request, res: Response) => {
       .status(200)
       .json({ message: `Container ${id} installed successfully.` });
   } catch (error) {
-    console.error(`Error installing container: ${error}`);
+    logger.error(`Error installing container`, error);
     res.status(500).json({ error: `Failed to install container ${id}.` });
   }
 });
@@ -94,37 +94,29 @@ router.post("/container/install", async (req: Request, res: Response) => {
     await initContainer(id);
 
     if (scripts && Array.isArray(scripts)) {
-      for (const script of scripts) {
+      const alc = loadJson(path.join(__dirname, "../../storage/alc.json"));
+      const locationsPath = path.join(__dirname, "../../storage/alc/locations.json");
+      const filesDir = path.join(__dirname, "../../storage/alc/files");
+      const locations = loadJson(locationsPath);
+
+      const downloadScript = async (script: any) => {
         const { url, fileName } = script;
 
         if (!url || !fileName) {
-          console.warn(`Invalid script entry: ${JSON.stringify(script)}`);
-          continue;
+          logger.warn(`Invalid script entry: ${JSON.stringify(script)}`);
+          return;
         }
 
-        // Replace ALVKT placeholders with environment variables
         const regex = /\$ALVKT\((\w+)\)/g;
-        const resolvedUrl = url.replace(
-          regex,
-          (_: string, variableName: string) => {
-            return environmentVariables[variableName] || "";
-          }
-        );
+        const resolvedUrl = url.replace(regex, (_: string, variableName: string) => {
+          return environmentVariables[variableName] || "";
+        });
 
         if (!resolvedUrl) {
-          console.warn(
-            `Failed to resolve URL for script: ${JSON.stringify(script)}`
-          );
-          continue;
+          logger.warn(`Failed to resolve URL for script: ${JSON.stringify(script)}`);
+          return;
         }
 
-        const alc = loadJson(path.join(__dirname, "../../storage/alc.json"));
-        const locationsPath = path.join(
-          __dirname,
-          "../../storage/alc/locations.json"
-        );
-        const filesDir = path.join(__dirname, "../../storage/alc/files");
-        const locations = loadJson(locationsPath);
         const alcEntry = (alc as { Name: string; lasts: number }[]).find(
           (entry) => entry.Name === fileName
         );
@@ -135,54 +127,32 @@ router.post("/container/install", async (req: Request, res: Response) => {
               (loc: any) => loc.Name === fileName && loc.url === resolvedUrl
             );
 
-            const randomNumber = Math.floor(Math.random() * 100000) + 1;
-            const cachedFileId = `${fileName.replace(/\W+/g, "_")}_${
-              alcEntry.lasts
-            }_${randomNumber}`;
-            const cachedFilePath2 = existingLocation?.id
-              ? path.join(filesDir, existingLocation.id)
-              : "";
+            const cachedFileId = `${fileName.replace(/\W+/g, "_")}_${alcEntry.lasts}_${Math.floor(Math.random() * 100000) + 1}`;
+            const cachedFilePath2 = existingLocation?.id ? path.join(filesDir, existingLocation.id) : "";
 
             if (existingLocation) {
-              console.log(
-                `[CACHE] Using cached version of ${fileName} from ${resolvedUrl}`
-              );
+              logger.info(`[CACHE] Using cached version of ${fileName}`);
               await afs.copy(id, cachedFilePath2, "/", fileName);
             } else {
-              console.log(
-                `[DOWNLOAD] Caching new ${fileName} from ${resolvedUrl}`
-              );
+              logger.info(`[DOWNLOAD] Fetching ${fileName} from ${resolvedUrl}`);
               await afs.download(id, resolvedUrl, fileName);
               const tempPath = await afs.getDownloadPath(id, fileName);
               fs.copyFileSync(tempPath, path.join(filesDir, cachedFileId));
-              locations.push({
-                Name: fileName,
-                url: resolvedUrl,
-                id: cachedFileId,
-              });
+              locations.push({ Name: fileName, url: resolvedUrl, id: cachedFileId });
               saveJson(locationsPath, locations);
             }
           } else {
-            if (script.ALVKT === true) {
-              await afs.download(
-                id,
-                resolvedUrl,
-                fileName,
-                environmentVariables
-              );
-            } else {
-              await afs.download(id, resolvedUrl, fileName);
-            }
+            await afs.download(id, resolvedUrl, fileName, script.ALVKT === true ? environmentVariables : undefined);
           }
 
-          console.log(
-            `Downloaded ${fileName} from ${resolvedUrl} for container ${id}.`
-          );
+          logger.info(`Downloaded ${fileName} for container ${id}.`);
         } catch (error) {
-          console.error(`Error downloading file "${fileName}": ${error}`);
+          logger.error(`Error downloading file "${fileName}"`, error);
           throw new Error(`Failed to download ${fileName}`);
         }
-      }
+      };
+
+      await Promise.all(scripts.map(downloadScript));
     }
 
     // Mark container as installed in central log
@@ -192,7 +162,7 @@ router.post("/container/install", async (req: Request, res: Response) => {
       .status(200)
       .json({ message: `Container ${id} installed successfully.` });
   } catch (error) {
-    console.error(`Error installing container: ${error}`);
+    logger.error(`Error installing container`, error);
     // Mark container as failed in central log
     setServerState(id, "failed");
     res.status(500).json({ error: `Failed to install container ${id}.` });
@@ -223,8 +193,6 @@ const state = getServerState(id);
 router.post("/container/start", async (req: Request, res: Response) => {
   const { id, image, ports, env, Memory, Cpu, StartCommand } = req.body;
 
-  console.log(req.body);
-
   if (!id || !image) {
     res.status(400).json({ error: "Container ID and Image are required." });
     return;
@@ -241,7 +209,7 @@ router.post("/container/start", async (req: Request, res: Response) => {
       if (environmentVariables[variableName]) {
         return environmentVariables[variableName];
       } else {
-        console.warn(
+        logger.warn(
           `Variable "${variableName}" not found in environmentVariables.`
         );
         return "";
@@ -257,7 +225,7 @@ router.post("/container/start", async (req: Request, res: Response) => {
     await startContainer(id, image, environmentVariables, ports, Memory, Cpu);
     res.status(200).json({ message: `Container ${id} started successfully.` });
   } catch (error) {
-    console.error(`Error starting container: ${error}`);
+    logger.error(`Error starting container`, error);
     res.status(500).json({ error: `Failed to start container ${id}.` });
   }
 });
@@ -274,7 +242,7 @@ router.post("/container/stop", async (req: Request, res: Response) => {
     await stopContainer(id, stopCmd);
     res.status(200).json({ message: `Container ${id} stopped successfully.` });
   } catch (error) {
-    console.error(`Error stopping container: ${error}`);
+    logger.error(`Error stopping container`, error);
     res.status(500).json({ error: `Failed to stop container ${id}.` });
   }
 });
@@ -291,27 +259,11 @@ router.delete("/container/kill", async (req: Request, res: Response) => {
     await killContainer(id);
     res.status(200).json({ message: `Container ${id} killed successfully.` });
   } catch (error) {
-    console.error(`Error killing container: ${error}`);
+    logger.error(`Error killing container`, error);
     res.status(500).json({ error: `Failed to kill container ${id}.` });
   }
 });
 
-router.post("/container/attach", async (req: Request, res: Response) => {
-  const { id } = req.body;
-
-  if (!id) {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
-  }
-
-  try {
-    attachToContainer(id);
-    res.status(200).json({ message: `Attached to container ${id}.` });
-  } catch (error) {
-    console.error(`Error attaching to container: ${error}`);
-    res.status(500).json({ error: `Failed to attach to container ${id}.` });
-  }
-});
 
 router.post("/container/command", async (req: Request, res: Response) => {
   const { id, command } = req.body;
@@ -327,7 +279,7 @@ router.post("/container/command", async (req: Request, res: Response) => {
       .status(200)
       .json({ message: `Command sent to container ${id}: ${command}` });
   } catch (error) {
-    console.error(`Error sending command to container: ${error}`);
+    logger.error(`Error sending command to container`, error);
     res
       .status(500)
       .json({ error: `Failed to send command to container ${id}.` });
@@ -345,7 +297,7 @@ router.delete("/container", async (req: Request, res: Response) => {
     await deleteContainerAndVolume(id);
     res.status(200).json({ message: `Container ${id} deleted successfully.` });
   } catch (error) {
-    console.error(`Error deleting container: ${error}`);
+    logger.error(`Error deleting container`, error);
     res.status(500).json({ error: `Failed to delete container ${id}.` });
   }
 });
@@ -375,7 +327,7 @@ router.get("/container/status", async (req: Request, res: Response) => {
       finishedAt: containerInfo.State.FinishedAt,
     });
   } catch (error) {
-    console.error(`Error getting container status: ${error}`);
+    logger.error(`Error getting container status`, error);
     res
       .status(500)
       .json({ error: `Failed to get status for container ${id}.` });
@@ -400,7 +352,7 @@ router.get("/container/stats", async (req: Request, res: Response) => {
 
     res.status(200).json(stats);
   } catch (error) {
-    console.error(`Error getting container stats: ${error}`);
+    logger.error(`Error getting container stats`, error);
     res.status(500).json({ error: `Failed to get stats for container ${id}.` });
   }
 });
@@ -435,7 +387,7 @@ router.post("/container/backup", async (req: Request, res: Response) => {
     const backupFileName = `${backupUuid}.tar.gz`;
     const backupPath = path.join(backupsDir, backupFileName);
 
-    console.log(`Creating backup for container ${id} at ${backupPath}`);
+    logger.info(`Creating backup for container ${id} at ${backupPath}`);
 
     await tar_create(
       {
@@ -460,7 +412,7 @@ router.post("/container/backup", async (req: Request, res: Response) => {
     const stats = fs.statSync(backupPath);
     const fileSizeInBytes = stats.size;
 
-    console.log(
+    logger.info(
       `Backup created successfully: ${backupPath} (${fileSizeInBytes} bytes)`
     );
 
@@ -476,7 +428,7 @@ router.post("/container/backup", async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    console.error(`Error creating backup for container ${id}:`, error);
+    logger.error(`Error creating backup for container ${id}:`, error);
     res.status(500).json({
       error: `Failed to create backup: ${
         error instanceof Error ? error.message : "Unknown error"
@@ -512,11 +464,11 @@ router.post("/container/restore", async (req: Request, res: Response) => {
       const container = docker.getContainer(id);
       const containerInfo = await container.inspect().catch(() => null);
       if (containerInfo && containerInfo.State.Running) {
-        console.log(`Stopping container ${id} for restore...`);
+        logger.info(`Stopping container ${id} for restore...`);
         await stopContainer(id);
       }
     } catch (error) {
-      console.warn(`Could not stop container ${id}:`, error);
+      logger.warn(`Could not stop container ${id}: ${error}`);
     }
 
     if (fs.existsSync(volumePath)) {
@@ -524,21 +476,21 @@ router.post("/container/restore", async (req: Request, res: Response) => {
     }
     fs.mkdirSync(volumePath, { recursive: true });
 
-    console.log(`Restoring backup from ${fullBackupPath} to ${volumePath}`);
+    logger.info(`Restoring backup from ${fullBackupPath} to ${volumePath}`);
 
     await tar_extract({
       file: fullBackupPath,
       cwd: volumePath,
     });
 
-    console.log(`Backup restored successfully to container ${id}`);
+    logger.info(`Backup restored successfully to container ${id}`);
 
     res.status(200).json({
       success: true,
       message: "Backup restored successfully",
     });
   } catch (error) {
-    console.error(`Error restoring backup for container ${id}:`, error);
+    logger.error(`Error restoring backup for container ${id}:`, error);
     res.status(500).json({
       error: `Failed to restore backup: ${
         error instanceof Error ? error.message : "Unknown error"
@@ -564,14 +516,14 @@ router.delete("/container/backup", async (req: Request, res: Response) => {
     }
 
     fs.unlinkSync(fullBackupPath);
-    console.log(`Backup file deleted: ${fullBackupPath}`);
+    logger.info(`Backup file deleted: ${fullBackupPath}`);
 
     res.status(200).json({
       success: true,
       message: "Backup deleted successfully",
     });
   } catch (error) {
-    console.error(`Error deleting backup:`, error);
+    logger.error(`Error deleting backup:`, error);
     res.status(500).json({
       error: `Failed to delete backup: ${
         error instanceof Error ? error.message : "Unknown error"
@@ -609,13 +561,13 @@ router.get(
       fileStream.pipe(res);
 
       fileStream.on("error", (error) => {
-        console.error("Error streaming backup file:", error);
+        logger.error("Error streaming backup file:", error);
         if (!res.headersSent) {
           res.status(500).json({ error: "Failed to download backup file" });
         }
       });
     } catch (error) {
-      console.error(`Error downloading backup:`, error);
+      logger.error(`Error downloading backup:`, error);
       res.status(500).json({
         error: `Failed to download backup: ${
           error instanceof Error ? error.message : "Unknown error"
