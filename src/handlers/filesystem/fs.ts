@@ -136,8 +136,12 @@ const afs = {
     const baseDirectory = path.resolve(`volumes/${id}`);
 
     // Ensure the destination parent directory exists before sanitizePath
-    // tries to realpathSync it — realpathSync fails on non-existent paths
-    const newParentRaw = path.join(baseDirectory, path.dirname(newPath));
+    // tries to realpathSync it — realpathSync fails on non-existent paths.
+    // Validate the resolved path stays inside the volume before mkdir.
+    const newParentRaw = path.resolve(path.join(baseDirectory, path.dirname(newPath)));
+    if (!newParentRaw.startsWith(baseDirectory + path.sep) && newParentRaw !== baseDirectory) {
+      throw new Error("Invalid path: destination escapes volume boundary");
+    }
     try {
       await fs.mkdir(newParentRaw, { recursive: true });
     } catch (err) {
