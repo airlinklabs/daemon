@@ -86,6 +86,7 @@ process.on('unhandledRejection', (reason, promise) => {
   try {
     initLogger();
     await init();
+    await (await import('../handlers/instances/containerState')).initContainerStateMap();
     
     app.use(bodyParser.json({
       limit: '100mb'

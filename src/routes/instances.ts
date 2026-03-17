@@ -308,6 +308,15 @@ router.get("/container/status", async (req: Request, res: Response) => {
   }
 
   try {
+    // Fast path: check in-memory state map (updated by Docker Events stream)
+    const { isContainerRunning } = await import('../handlers/instances/containerState');
+    const knownRunning = isContainerRunning(id);
+    if (knownRunning !== null) {
+      res.status(200).json({ running: knownRunning, exists: true, source: 'cache' });
+      return;
+    }
+
+    // Fallback: inspect() for containers not yet in the map
     const container = docker.getContainer(id);
     const containerInfo = await container.inspect().catch(() => null);
 
@@ -317,17 +326,16 @@ router.get("/container/status", async (req: Request, res: Response) => {
     }
 
     res.status(200).json({
-      running: containerInfo.State.Running,
-      exists: true,
-      status: containerInfo.State.Status,
-      startedAt: containerInfo.State.StartedAt,
+      running:    containerInfo.State.Running,
+      exists:     true,
+      status:     containerInfo.State.Status,
+      startedAt:  containerInfo.State.StartedAt,
       finishedAt: containerInfo.State.FinishedAt,
+      source:     'inspect',
     });
   } catch (error) {
     logger.error(`Error getting container status`, error);
-    res
-      .status(500)
-      .json({ error: `Failed to get status for container ${id}.` });
+    res.status(500).json({ error: `Failed to get status for container ${id}.` });
   }
 });
 

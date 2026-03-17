@@ -138,7 +138,6 @@ export const startContainer = async (
       CpuCount: Cpu,
       CapDrop: ["ALL"],
       SecurityOpt: ["no-new-privileges:true"],
-      ReadonlyRootfs: true,
     },
     ExposedPorts: exposedPorts,
     AttachStdout: true,

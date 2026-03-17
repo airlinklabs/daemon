@@ -1,9 +1,10 @@
 import { IncomingMessage, Server as HttpServer } from 'http';
 import WebSocket, { Server } from 'ws';
 import { attachToContainerWithWS } from './attach';
-import { getContainerStats } from './utils';
+import { getContainerStats, getContainerState } from './utils';
 import { sendCommandToContainer } from './command';
 import { onContainerEvent } from './eventBus';
+import { isContainerRunning } from './containerState';
 import { validateContainerId } from '../../utils/validation';
 import config from "../../utils/config";
 import logger from "../../utils/logger";
@@ -71,17 +72,46 @@ export const initializeWebSocketServer = (server: HttpServer): void => {
                     if (route === 'container') {
                         await attachToContainerWithWS(containerId, ws);
                     } else if (route === 'containerstatus') {
-                        const stats2 = await getContainerStats(containerId);
-                        if (stats2 && ws.readyState === WebSocket.OPEN) {
-                            ws.send(JSON.stringify({ event: 'status', data: stats2 }));
+                        // Send initial state immediately using in-memory map or inspect()
+                        async function sendState() {
+                            if (ws.readyState !== WebSocket.OPEN) return;
+                            // Fast path: check in-memory state map first
+                            const knownRunning = isContainerRunning(containerId);
+                            if (knownRunning !== null) {
+                                ws.send(JSON.stringify({ event: 'state', data: { running: knownRunning } }));
+                            } else {
+                                // Unknown — fall back to inspect()
+                                const state = await getContainerState(containerId);
+                                if (ws.readyState === WebSocket.OPEN) {
+                                    ws.send(JSON.stringify({ event: 'state', data: state }));
+                                }
+                            }
                         }
 
-                        intervalHandler = setInterval(async () => {
-                            const stats = await getContainerStats(containerId);
-                            if (stats && ws.readyState === WebSocket.OPEN) {
-                                ws.send(JSON.stringify({ event: 'status', data: stats }));
+                        async function sendStats() {
+                            if (ws.readyState !== WebSocket.OPEN) return;
+                            // Stats are completely independent of state.
+                            // Failure here must never change the status indicator.
+                            try {
+                                const stats = await getContainerStats(containerId);
+                                if (stats && ws.readyState === WebSocket.OPEN) {
+                                    ws.send(JSON.stringify({ event: 'stats', data: stats }));
+                                }
+                            } catch {
+                                // Stats unavailable — send nothing, caller keeps previous values
                             }
-                        }, 2000);
+                        }
+
+                        await sendState();
+                        await sendStats();
+
+                        // Poll state every 3s (fast, just inspect()) and stats every 5s (slow)
+                        let stateTick = 0;
+                        intervalHandler = setInterval(async () => {
+                            stateTick++;
+                            await sendState();
+                            if (stateTick % 2 === 0) await sendStats();  // stats every ~6s
+                        }, 3000);
 
                         ws.on('close', () => {
                             if (intervalHandler) clearInterval(intervalHandler);

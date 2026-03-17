@@ -2,13 +2,8 @@ import { MinecraftServerListPing } from 'minecraft-status';
 import logger from '../../utils/logger';
 
 export async function fetchMinecraftPlayers(host: string, port: number, timeout = 5000): Promise<any> {
-    try {
-        const response = await MinecraftServerListPing.ping(4, host, port, timeout);
-        return response;
-    } catch (error: any) {
-        logger.error(`Error fetching players from ${host}:${port}:`, error);
-        throw error;
-    }
+    const response = await MinecraftServerListPing.ping(4, host, port, timeout);
+    return response;
 }
 
 export function extractPlayerInfo(pingResponse: any): Array<{ name: string; uuid: string }> {
