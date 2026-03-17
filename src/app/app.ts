@@ -1,10 +1,12 @@
 import http from "http";
-import express, { Application } from "express";
+import express, { Application, Request, Response, NextFunction } from "express";
 import compression from "compression";
 import bodyParser from "body-parser";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import config from "../utils/config";
 import { registerRoutes } from "./routes";
-import { basicAuthMiddleware, logLoginAttempts } from "./middleware";
+import { basicAuthMiddleware, logLoginAttempts, ipAllowlistMiddleware } from "./middleware";
 import { errorHandler } from "../utils/errorHandler";
 import { initializeWebSocketServer, closeAllWebSocketConnections } from "../handlers/instances/initializeWebSocket";
 import { init } from "./init";
@@ -101,8 +103,43 @@ process.on('unhandledRejection', (reason, promise) => {
       limit: '100mb'
     }));
     app.use(compression());
+
+    // Security headers — daemon is an internal API but defence-in-depth still matters
+    app.use(helmet({
+      contentSecurityPolicy: false, // not serving HTML
+      crossOriginEmbedderPolicy: false,
+    }));
+
+    // Reject requests that don't carry the basic-auth header at all before
+    // they touch any route logic — cuts down on noise from scanners
+    // IP allowlist runs first — rejects non-whitelisted IPs before any auth logic
+    app.use(ipAllowlistMiddleware);
     app.use(basicAuthMiddleware);
     app.use(logLoginAttempts);
+
+    // Conservative rate limit — the panel is the only legitimate caller,
+    // so 300 req/min per IP is generous and still blocks brute force
+    app.use(rateLimit({
+      windowMs: 60 * 1000,
+      max: 300,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: 'Too many requests' },
+    }));
+
+    // Block requests with a content-type we don't handle
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      const ct = req.headers['content-type'] || '';
+      if (req.method !== 'GET' && req.method !== 'DELETE' &&
+          ct && !ct.startsWith('application/json') &&
+          !ct.startsWith('application/octet-stream') &&
+          !ct.startsWith('text/') &&
+          !ct.startsWith('multipart/')) {
+        res.status(415).json({ error: 'Unsupported media type' });
+        return;
+      }
+      next();
+    });
 
     registerRoutes(app);
 

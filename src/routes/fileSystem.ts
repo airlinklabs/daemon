@@ -352,7 +352,6 @@ router.post("/fs/upload", async (req: Request, res: Response) => {
   const fileName =
     typeof req.body.fileName === "string" ? req.body.fileName : "";
 
-  logger.info(`Upload request received for file ${fileName} to path ${relativePath} for container ${id}`);
 
   if (!id) {
     logger.warn("Upload error: Container ID is required");
@@ -400,7 +399,6 @@ router.post("/fs/upload", async (req: Request, res: Response) => {
         if (base64Match && base64Match[1]) {
           try {
             content = Buffer.from(base64Match[1], "base64");
-            logger.info(`Converted base64 to buffer of size: ${content.length} bytes`);
           } catch (e) {
             logger.error("Error decoding base64:", e);
             res.status(400).json({ error: "Failed to decode base64 content." });
@@ -464,7 +462,6 @@ router.post("/fs/create-empty-file", async (req: Request, res: Response) => {
   const fileName =
     typeof req.body.fileName === "string" ? req.body.fileName : "";
 
-  logger.info(`Create empty file request received for ${fileName} in path ${relativePath} for container ${id}`);
 
   if (!id) {
     logger.warn("Create empty file error: Container ID is required");
@@ -530,9 +527,6 @@ router.post("/fs/append-file", async (req: Request, res: Response) => {
   const totalChunks =
     typeof req.body.totalChunks === "number" ? req.body.totalChunks : 1;
 
-  logger.info(`Append file request received for ${fileName} chunk ${
-      chunkIndex + 1
-    }/${totalChunks} in path ${relativePath} for container ${id}`);
 
   if (!id) {
     logger.warn("Append file error: Container ID is required");
@@ -565,9 +559,6 @@ router.post("/fs/append-file", async (req: Request, res: Response) => {
         if (base64Match && base64Match[1]) {
           try {
             content = Buffer.from(base64Match[1], "base64");
-            logger.info(`Converted base64 to buffer of size: ${
-                content.length
-              } bytes for chunk ${chunkIndex + 1}/${totalChunks}`);
           } catch (e) {
             logger.error("Error decoding base64:", e);
             res.status(400).json({ error: "Failed to decode base64 content." });

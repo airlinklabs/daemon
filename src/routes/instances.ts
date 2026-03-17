@@ -131,10 +131,8 @@ router.post("/container/install", async (req: Request, res: Response) => {
             const cachedFilePath2 = existingLocation?.id ? path.join(filesDir, existingLocation.id) : "";
 
             if (existingLocation) {
-              logger.info(`[CACHE] Using cached version of ${fileName}`);
               await afs.copy(id, cachedFilePath2, "/", fileName);
             } else {
-              logger.info(`[DOWNLOAD] Fetching ${fileName} from ${resolvedUrl}`);
               await afs.download(id, resolvedUrl, fileName);
               const tempPath = await afs.getDownloadPath(id, fileName);
               fs.copyFileSync(tempPath, path.join(filesDir, cachedFileId));
@@ -145,7 +143,6 @@ router.post("/container/install", async (req: Request, res: Response) => {
             await afs.download(id, resolvedUrl, fileName, script.ALVKT === true ? environmentVariables : undefined);
           }
 
-          logger.info(`Downloaded ${fileName} for container ${id}.`);
         } catch (error) {
           logger.error(`Error downloading file "${fileName}"`, error);
           throw new Error(`Failed to download ${fileName}`);
@@ -445,14 +442,21 @@ router.post("/container/restore", async (req: Request, res: Response) => {
     return;
   }
 
-  if (!backupPath) {
+  if (!backupPath || typeof backupPath !== 'string') {
     res.status(400).json({ error: "Backup path is required." });
     return;
   }
 
-  try {
-    const fullBackupPath = path.resolve(backupPath);
+  // Constrain backup path to the backups directory for this container
+  const allowedBackupsDir = path.resolve("backups", id);
+  const fullBackupPath = path.resolve(backupPath);
 
+  if (!fullBackupPath.startsWith(allowedBackupsDir + path.sep)) {
+    res.status(400).json({ error: "Invalid backup path." });
+    return;
+  }
+
+  try {
     if (!fs.existsSync(fullBackupPath)) {
       res.status(404).json({ error: "Backup file not found." });
       return;
@@ -502,14 +506,20 @@ router.post("/container/restore", async (req: Request, res: Response) => {
 router.delete("/container/backup", async (req: Request, res: Response) => {
   const { backupPath } = req.body;
 
-  if (!backupPath) {
+  if (!backupPath || typeof backupPath !== 'string') {
     res.status(400).json({ error: "Backup path is required." });
     return;
   }
 
-  try {
-    const fullBackupPath = path.resolve(backupPath);
+  const allowedBackupsRoot = path.resolve("backups");
+  const fullBackupPath = path.resolve(backupPath);
 
+  if (!fullBackupPath.startsWith(allowedBackupsRoot + path.sep)) {
+    res.status(400).json({ error: "Invalid backup path." });
+    return;
+  }
+
+  try {
     if (!fs.existsSync(fullBackupPath)) {
       res.status(404).json({ error: "Backup file not found." });
       return;
@@ -542,9 +552,15 @@ router.get(
       return;
     }
 
-    try {
-      const fullBackupPath = path.resolve(backupPath);
+    const allowedBackupsRoot = path.resolve("backups");
+    const fullBackupPath = path.resolve(backupPath);
 
+    if (!fullBackupPath.startsWith(allowedBackupsRoot + path.sep)) {
+      res.status(400).json({ error: "Invalid backup path." });
+      return;
+    }
+
+    try {
       if (!fs.existsSync(fullBackupPath)) {
         res.status(404).json({ error: "Backup file not found." });
         return;

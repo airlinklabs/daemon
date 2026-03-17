@@ -3,6 +3,8 @@ import WebSocket, { Server } from 'ws';
 import { attachToContainerWithWS } from './attach';
 import { getContainerStats } from './utils';
 import { sendCommandToContainer } from './command';
+import { onContainerEvent } from './eventBus';
+import { validateContainerId } from '../../utils/validation';
 import config from "../../utils/config";
 import logger from "../../utils/logger";
 
@@ -47,13 +49,19 @@ export const initializeWebSocketServer = (server: HttpServer): void => {
                 return;
             }
 
+            if (!validateContainerId(containerId)) {
+                ws.send(JSON.stringify({ error: 'Invalid container ID' }));
+                ws.close(1008, 'Invalid container ID');
+                return;
+            }
+
             if (!msg || !msg.event) {
                 ws.send(JSON.stringify({ error: 'Invalid message format' }));
                 ws.close(1008, 'Invalid message format');
                 return;
             }
 
-            if (msg.event === 'auth' && msg.args && msg.args[0] === process.env.key) {
+            if (msg.event === 'auth' && msg.args && msg.args[0] === config.key) {
                 if (!isAuthenticated) {
                     isAuthenticated = true;
                     if (config.DEBUG) {
@@ -79,6 +87,20 @@ export const initializeWebSocketServer = (server: HttpServer): void => {
                             if (intervalHandler) clearInterval(intervalHandler);
                             if (config.DEBUG) {
                                 logger.debug(`Connection closed for containerstatus/${containerId}`);
+                            }
+                        });
+                    } else if (route === 'containerevents') {
+                        // Stream real lifecycle events for this container
+                        const unsubscribe = onContainerEvent(containerId, (event) => {
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({ event: 'lifecycle', data: event }));
+                            }
+                        });
+
+                        ws.on('close', () => {
+                            unsubscribe();
+                            if (config.DEBUG) {
+                                logger.debug(`Lifecycle event stream closed for ${containerId}`);
                             }
                         });
                     } else {
@@ -107,7 +129,6 @@ export const initializeWebSocketServer = (server: HttpServer): void => {
             if (intervalHandler) clearInterval(intervalHandler);
             // Remove from active connections
             activeConnections.delete(ws);
-            logger.info('WebSocket connection closed. Authentication reset.');
         });
 
         ws.on('error', (error: Error) => {
