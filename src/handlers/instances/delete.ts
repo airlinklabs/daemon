@@ -4,11 +4,13 @@ import { docker } from "./utils";
 import logger from "../../utils/logger";
 
 export const deleteContainer = async (id: string): Promise<void> => {
-  const container = docker.getContainer(id);
-  const containerInfo = await container.inspect().catch(() => null);
-  if (containerInfo) {
-    await container.remove({ force: true });
+  try {
+    await docker.getContainer(id).remove({ force: true });
     logger.info(`Container ${id} deleted.`);
+  } catch (err: any) {
+    if (err?.statusCode !== 404) {
+      logger.warn(`deleteContainer for ${id}: ${err?.message}`);
+    }
   }
 };
 

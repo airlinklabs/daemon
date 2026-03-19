@@ -7,13 +7,12 @@ import rateLimit from "express-rate-limit";
 import config from "../utils/config";
 import { registerRoutes } from "./routes";
 import { basicAuthMiddleware, logLoginAttempts, ipAllowlistMiddleware } from "./middleware";
+import { hmacVerificationMiddleware } from "./hmacMiddleware";
 import { errorHandler } from "../utils/errorHandler";
 import { initializeWebSocketServer, closeAllWebSocketConnections } from "../handlers/instances/initializeWebSocket";
 import { init } from "./init";
-import { initLogger } from '../handlers/stats';
+import { initLogger, getCurrentStats, saveStats } from '../handlers/stats';
 import logger from '../utils/logger';
-import { docker } from '../handlers/instances/utils';
-import { saveStats } from '../handlers/stats';
 
 const app: Application = express();
 const server = http.createServer(app);
@@ -27,39 +26,29 @@ async function gracefulShutdown(signal: string): Promise<void> {
   }
 
   isShuttingDown = true;
-  logger.info(`Received ${signal}. Starting graceful shutdown...`);
+  logger.debug(`Received ${signal}. Starting graceful shutdown...`);
 
   try {
     // Close all WebSocket connections
-    logger.info('Closing WebSocket connections...');
+    logger.debug('Closing WebSocket connections...');
     closeAllWebSocketConnections();
 
     // Save current stats before shutdown
-    logger.info('Saving system stats...');
+    logger.debug('Saving system stats...');
     try {
-      const finalStats = await import('../handlers/stats').then(m => m.getCurrentStats());
+      const finalStats = await getCurrentStats();
       saveStats(finalStats);
     } catch (statsError) {
       logger.error('Error saving final stats:', statsError);
     }
 
     // Close HTTP server
-    logger.info('Closing HTTP server...');
+    logger.debug('Closing HTTP server...');
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });
 
-    // Disconnect from Docker
-    logger.info('Disconnecting from Docker...');
-    try {
-      await docker.ping();
-      logger.info('Docker connection is active, disconnecting...');
-      // No explicit disconnect method in dockerode, but we can ensure no new connections are made
-    } catch (dockerError) {
-      logger.warn('Docker connection already closed or unavailable');
-    }
-
-    logger.success('Graceful shutdown completed');
+    logger.debug('Graceful shutdown completed');
     process.exit(0);
   } catch (error) {
     logger.error('Error during graceful shutdown:', error);
@@ -117,6 +106,7 @@ process.on('unhandledRejection', (reason, promise) => {
     app.use(ipAllowlistMiddleware);
     app.use(basicAuthMiddleware);
     app.use(logLoginAttempts);
+    app.use(hmacVerificationMiddleware);
 
     // Conservative rate limit — the panel is the only legitimate caller,
     // so 300 req/min per IP is generous and still blocks brute force
@@ -142,7 +132,7 @@ process.on('unhandledRejection', (reason, promise) => {
       next();
     });
 
-    registerRoutes(app);
+    await registerRoutes(app);
 
     app.use(errorHandler);
 

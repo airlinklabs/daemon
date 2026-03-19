@@ -8,6 +8,8 @@ export type ContainerEvent =
   | { type: 'stopping';      message: string }
   | { type: 'stopped';       message: string }
   | { type: 'killed';        message: string }
+  | { type: 'installing';    message: string }
+  | { type: 'installed';     message: string }
   | { type: 'error';         message: string };
 
 const bus = new EventEmitter();

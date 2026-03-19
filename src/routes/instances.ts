@@ -47,7 +47,7 @@ const saveJson = (filePath: string, data: unknown): void => {
 const router = Router();
 
 router.post("/container/installer", async (req: Request, res: Response) => {
-  const { id, script, container, env } = req.body;
+  const { id, script, container, entrypoint, env } = req.body;
 
   if (!id) {
     res.status(400).json({ error: "Container ID is required." });
@@ -59,25 +59,27 @@ router.post("/container/installer", async (req: Request, res: Response) => {
     return;
   }
 
-  let environmentVariables: Record<string, string> =
+  const environmentVariables: Record<string, string> =
     typeof env === "object" && env !== null ? { ...env } : {};
 
   try {
     await initContainer(id);
+    setServerState(id, "installing");
 
-    await createInstaller(id, container, script, environmentVariables);
+    // createInstaller now waits for the installer container to finish before
+    // returning — the panel only gets 200 after files are on disk.
+    await createInstaller(id, container, script, environmentVariables, entrypoint || "bash");
 
-    res
-      .status(200)
-      .json({ message: `Container ${id} installed successfully.` });
+    res.status(200).json({ message: `Container ${id} installed successfully.` });
   } catch (error) {
     logger.error(`Error installing container`, error);
+    setServerState(id, "failed");
     res.status(500).json({ error: `Failed to install container ${id}.` });
   }
 });
 
 router.post("/container/install", async (req: Request, res: Response) => {
-  const { id, scripts, env } = req.body;
+  const { id, image, scripts, env } = req.body;
 
   if (!id) {
     res.status(400).json({ error: "Container ID is required." });
@@ -88,10 +90,32 @@ router.post("/container/install", async (req: Request, res: Response) => {
     typeof env === "object" && env !== null ? { ...env } : {};
 
   try {
-    // Set state to "installing" at the start
     setServerState(id, "installing");
 
     await initContainer(id);
+
+    // Pull the docker image up front so the container is ready to start
+    // immediately after files are in place. Previously this route skipped
+    // the pull entirely, causing the first "Start" click to trigger it instead.
+    if (image && typeof image === "string") {
+      let imageExists = false;
+      try {
+        await docker.getImage(image).inspect();
+        imageExists = true;
+      } catch {
+        imageExists = false;
+      }
+      if (!imageExists) {
+        logger.info(`Pulling image ${image} for container ${id}`);
+        const pullStream = await docker.pull(image);
+        await new Promise<void>((resolve, reject) => {
+          docker.modem.followProgress(pullStream, (err: Error | null) => {
+            if (err) return reject(new Error(`Failed to pull image: ${err.message}`));
+            resolve();
+          });
+        });
+      }
+    }
 
     if (scripts && Array.isArray(scripts)) {
       const alc = loadJson(path.join(__dirname, "../../storage/alc.json"));
@@ -198,25 +222,40 @@ router.post("/container/start", async (req: Request, res: Response) => {
   let environmentVariables: Record<string, string> =
     typeof env === "object" && env !== null ? { ...env } : {};
 
-  const regex = /\$ALVKT\((\w+)\)/g;
+  // Resolve both {{VAR}} (Pterodactyl style) and $ALVKT(VAR) (legacy style)
   let updatedStartCommand = StartCommand;
+
   updatedStartCommand = updatedStartCommand.replace(
-    regex,
-    (_: string, variableName: string) => {
-      if (environmentVariables[variableName]) {
-        return environmentVariables[variableName];
-      } else {
-        logger.warn(
-          `Variable "${variableName}" not found in environmentVariables.`
-        );
-        return "";
+    /\{\{(\w+)\}\}/g,
+    (_: string, varName: string) => {
+      if (environmentVariables[varName] !== undefined) {
+        return environmentVariables[varName];
       }
+      logger.warn(`Variable "${varName}" not found in environment ({{}} style).`);
+      return "";
+    }
+  );
+
+  updatedStartCommand = updatedStartCommand.replace(
+    /\$ALVKT\((\w+)\)/g,
+    (_: string, varName: string) => {
+      if (environmentVariables[varName] !== undefined) {
+        return environmentVariables[varName];
+      }
+      logger.warn(`Variable "${varName}" not found in environment ($ALVKT style).`);
+      return "";
     }
   );
 
   if (updatedStartCommand) {
-    environmentVariables["START"] = updatedStartCommand;
+    // Older yolks images read $START, newer ones read $STARTUP.
+    // Set both so any version works.
+    environmentVariables["START"]   = updatedStartCommand;
+    environmentVariables["STARTUP"] = updatedStartCommand;
   }
+
+  // Log what we're actually sending so failures are diagnosable
+  logger.warn(`Starting ${id}: image=${image} START=${environmentVariables["START"]?.slice(0, 120)}`);
 
   try {
     await startContainer(id, image, environmentVariables, ports, Memory, Cpu);
@@ -392,7 +431,7 @@ router.post("/container/backup", async (req: Request, res: Response) => {
     const backupFileName = `${backupUuid}.tar.gz`;
     const backupPath = path.join(backupsDir, backupFileName);
 
-    logger.info(`Creating backup for container ${id} at ${backupPath}`);
+    logger.debug(`Creating backup for container ${id} at ${backupPath}`);
 
     await tar_create(
       {
@@ -417,7 +456,7 @@ router.post("/container/backup", async (req: Request, res: Response) => {
     const stats = fs.statSync(backupPath);
     const fileSizeInBytes = stats.size;
 
-    logger.info(
+    logger.debug(
       `Backup created successfully: ${backupPath} (${fileSizeInBytes} bytes)`
     );
 
@@ -476,7 +515,7 @@ router.post("/container/restore", async (req: Request, res: Response) => {
       const container = docker.getContainer(id);
       const containerInfo = await container.inspect().catch(() => null);
       if (containerInfo && containerInfo.State.Running) {
-        logger.info(`Stopping container ${id} for restore...`);
+        logger.debug(`Stopping container ${id} for restore...`);
         await stopContainer(id);
       }
     } catch (error) {
@@ -488,14 +527,14 @@ router.post("/container/restore", async (req: Request, res: Response) => {
     }
     fs.mkdirSync(volumePath, { recursive: true });
 
-    logger.info(`Restoring backup from ${fullBackupPath} to ${volumePath}`);
+    logger.debug(`Restoring backup from ${fullBackupPath} to ${volumePath}`);
 
     await tar_extract({
       file: fullBackupPath,
       cwd: volumePath,
     });
 
-    logger.info(`Backup restored successfully to container ${id}`);
+    logger.debug(`Backup restored successfully to container ${id}`);
 
     res.status(200).json({
       success: true,
@@ -534,7 +573,7 @@ router.delete("/container/backup", async (req: Request, res: Response) => {
     }
 
     fs.unlinkSync(fullBackupPath);
-    logger.info(`Backup file deleted: ${fullBackupPath}`);
+    logger.debug(`Backup file deleted: ${fullBackupPath}`);
 
     res.status(200).json({
       success: true,

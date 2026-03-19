@@ -1,6 +1,5 @@
 import path from "path";
 import fs from "fs/promises";
-import * as fsd from "fs";
 import fsN from "fs";
 import axios from "axios";
 import fileSpecifier from "../../utils/fileSpecifier";
@@ -71,7 +70,7 @@ const getDirectorySize = async (
     return totalSize;
   }
 
-  let contents: fsd.Dirent[];
+  let contents: fsN.Dirent[];
 
   try {
     contents = await fs.readdir(directory, { withFileTypes: true });
@@ -132,7 +131,7 @@ const getFileContent = async (filePath: string): Promise<string | null> => {
 
 const afs = {
   async rename(id: string, oldPath: string, newPath: string) {
-    logger.info(`[rename] ${oldPath} -> ${newPath} in volume ${id}`);
+    logger.debug(`[rename] ${oldPath} -> ${newPath} in volume ${id}`);
     const baseDirectory = path.resolve(`volumes/${id}`);
 
     // Ensure the destination parent directory exists before sanitizePath
@@ -370,14 +369,14 @@ const afs = {
   ): Promise<string | null> {
     try {
       const baseDirectory = path.resolve(`volumes/${id}`);
+      const fullPath = path.join(baseDirectory, relativePath);
+      if (!fsN.existsSync(fullPath)) {
+        return null;
+      }
       const filePath = sanitizePath(baseDirectory, relativePath).resolvedPath;
       return await getFileContent(filePath);
-    } catch (error: unknown) {
-      if (error instanceof Error) {
-        throw new Error(`Error getting file content: ${error.message}`);
-      } else {
-        throw new Error("An unknown error occurred.");
-      }
+    } catch {
+      return null;
     }
   },
 
@@ -438,7 +437,7 @@ const afs = {
       } else {
         await fs.writeFile(filePath, content);
       }
-      logger.info(`File written successfully to ${filePath}`);
+      logger.debug(`File written successfully to ${filePath}`);
     } catch (error: unknown) {
       if (error instanceof Error) {
         logger.error(`Error writing file content: ${error.message}`, new Error());
@@ -519,7 +518,7 @@ const afs = {
       const dirPath = path.dirname(filePath);
       await fs.mkdir(dirPath, { recursive: true });
       await fs.writeFile(filePath, fileContent);
-      logger.info(`File downloaded successfully to ${filePath}`);
+      logger.debug(`File downloaded successfully to ${filePath}`);
     } catch (error: unknown) {
       if (axios.isAxiosError(error)) {
         throw new Error(`Error downloading file: ${error.message}`);
@@ -618,7 +617,7 @@ const afs = {
       const archivePath = path.join(baseDirectory, relativePath, zipname);
       const extractPath = path.dirname(archivePath);
 
-      logger.info(`Unzip paths: ${JSON.stringify({
+      logger.debug(`Unzip paths: ${JSON.stringify({
         baseDirectory,
         archivePath,
         extractPath,
@@ -738,7 +737,7 @@ async function extractArchive(
     });
 
     childProcess.stdout.on("data", (data) => {
-      logger.info(`Display: ${data}`);
+      logger.debug(`Display: ${data}`);
     });
 
     childProcess.on("close", (code) => {

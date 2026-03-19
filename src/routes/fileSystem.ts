@@ -589,7 +589,7 @@ router.post("/fs/append-file", async (req: Request, res: Response) => {
       } else {
         await fs.appendFile(filePath, content);
       }
-      logger.info(`Appended chunk ${chunkIndex + 1}/${totalChunks} to file ${filePath}`);
+      logger.debug(`Appended chunk ${chunkIndex + 1}/${totalChunks} to file ${filePath}`);
     } catch (e) {
       logger.error("Error appending to file:", e);
       res.status(500).json({ error: "Failed to append to file." });

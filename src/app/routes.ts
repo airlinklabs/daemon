@@ -3,20 +3,21 @@ import path from "path";
 import fs from "fs";
 import logger from "../utils/logger";
 
-export function registerRoutes(app: express.Application): void {
+export async function registerRoutes(app: express.Application): Promise<void> {
   const routesDir = path.join(__dirname, "../routes");
 
-  fs.readdirSync(routesDir)
-    .filter((file) => file.endsWith(".js"))
-    .forEach((file) => {
-      try {
-        const { default: router } = require(path.join(routesDir, file));
-        if (typeof router === "function") {
-          app.use("/", router);
-        }
-      } catch (error) {
-        logger.error(`Error loading router ${file}:`, error as Error);
-        process.exit(1);
+  const files = fs.readdirSync(routesDir).filter((file) => file.endsWith(".js"));
+
+  for (const file of files) {
+    try {
+      const mod = await import(path.join(routesDir, file));
+      const router = mod.default;
+      if (typeof router === "function") {
+        app.use("/", router);
       }
-    });
+    } catch (error) {
+      logger.error(`Error loading router ${file}:`, error as Error);
+      process.exit(1);
+    }
+  }
 }

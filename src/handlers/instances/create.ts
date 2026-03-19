@@ -1,7 +1,9 @@
 import { docker, parsePortBindings, parseEnvironmentVariables, initContainer } from "./utils";
-import { deleteContainer } from "./delete";
 import { emitContainerEvent } from "./eventBus";
+import { setServerState } from "./install";
 import logger from "../../utils/logger";
+import fs from "fs";
+import path from "path";
 
 export const startContainer = async (
   id: string,
@@ -13,17 +15,18 @@ export const startContainer = async (
 ): Promise<void> => {
   emitContainerEvent(id, { type: 'pulling', message: 'Preparing environment' });
 
-  // Check for existing container and remove it, prepare volume
-  const existingContainer = docker.getContainer(id);
-  const existingInfo = await existingContainer.inspect().catch(() => null);
-  if (existingInfo) {
-    emitContainerEvent(id, { type: 'pulling', message: `Removing existing container ${id}` });
-    await existingContainer.remove({ force: true });
-    emitContainerEvent(id, { type: 'pulling', message: `Container ${id} removed` });
+  // Always force-remove any container with this name before creating a new one.
+  // remove({force:true}) works even if the container is running or paused.
+  // We ignore 404 (already gone) and let any other error bubble up.
+  try {
+    await docker.getContainer(id).remove({ force: true });
+  } catch (err: any) {
+    if (err?.statusCode !== 404) {
+      logger.warn(`Could not remove existing container ${id}: ${err?.message}`);
+    }
   }
 
   const volumePath = initContainer(id);
-  emitContainerEvent(id, { type: 'pulling', message: `Volume path: ${volumePath}` });
 
   const portBindings = parsePortBindings(ports);
   const modifiedEnv  = parseEnvironmentVariables(env);
@@ -40,15 +43,11 @@ export const startContainer = async (
   }
 
   // Check image presence
-  emitContainerEvent(id, { type: 'pulling', message: `Checking for image: ${image}` });
   let imageExists = false;
   try {
-    const imageInfo = await docker.getImage(image).inspect();
+    await docker.getImage(image).inspect();
     imageExists = true;
-    emitContainerEvent(id, { type: 'pulling', message: `Image found locally (${imageInfo.Id.slice(0, 19)})` });
-    const sizeMB = (imageInfo.Size / 1024 / 1024).toFixed(1);
-    emitContainerEvent(id, { type: 'pulling', message: `Image size: ${sizeMB} MB` });
-  } catch {
+    } catch {
     imageExists = false;
     emitContainerEvent(id, { type: 'pulling', message: `Image not found locally — will pull from registry` });
   }
@@ -58,8 +57,6 @@ export const startContainer = async (
     const stream = await docker.pull(image);
 
     await new Promise<void>((resolve, reject) => {
-      const seenLayers = new Set<string>();
-
       docker.modem.followProgress(
         stream,
         (err) => {
@@ -73,43 +70,10 @@ export const startContainer = async (
         (event: any) => {
           if (!event) return;
 
-          const layerId = event.id ? event.id.slice(0, 12) : null;
+          // Minimal pull progress — only emit the top-level status lines
           const status: string = event.status || '';
-          const progressDetail = event.progressDetail;
-
-          // Pull lifecycle phases — emit every status change
-          if (status === 'Pulling from') {
-            emitContainerEvent(id, { type: 'pulling', message: `Pulling from ${event.id || image}` });
-          } else if (status === 'Pull complete' && layerId) {
-            emitContainerEvent(id, { type: 'pulling', message: `Layer ${layerId}: pull complete` });
-          } else if (status === 'Already exists' && layerId) {
-            emitContainerEvent(id, { type: 'pulling', message: `Layer ${layerId}: already exists` });
-          } else if (status === 'Downloading' && layerId && progressDetail?.total) {
-            const pct = Math.round((progressDetail.current / progressDetail.total) * 100);
-            // Throttle — only emit every 25% per layer to avoid flooding
-            const bucket = Math.floor(pct / 25) * 25;
-            const key = `${layerId}:${bucket}`;
-            if (!seenLayers.has(key)) {
-              seenLayers.add(key);
-              const mb = (progressDetail.current / 1024 / 1024).toFixed(1);
-              const totalMb = (progressDetail.total / 1024 / 1024).toFixed(1);
-              emitContainerEvent(id, { type: 'pulling', message: `Layer ${layerId}: downloading ${mb}/${totalMb} MB (${pct}%)` });
-            }
-          } else if (status === 'Extracting' && layerId && progressDetail?.total) {
-            const pct = Math.round((progressDetail.current / progressDetail.total) * 100);
-            const key = `${layerId}:extract:${Math.floor(pct / 50) * 50}`;
-            if (!seenLayers.has(key)) {
-              seenLayers.add(key);
-              emitContainerEvent(id, { type: 'pulling', message: `Layer ${layerId}: extracting (${pct}%)` });
-            }
-          } else if (status === 'Digest') {
-            emitContainerEvent(id, { type: 'pulling', message: `Digest: ${event.id || ''}` });
-          } else if (status === 'Status') {
-            emitContainerEvent(id, { type: 'pulling', message: event.id || status });
-          } else if (status && layerId && !['Waiting', 'Verifying Checksum'].includes(status)) {
-            emitContainerEvent(id, { type: 'pulling', message: `Layer ${layerId}: ${status}` });
-          } else if (status && !layerId && status !== 'Waiting') {
-            emitContainerEvent(id, { type: 'pulling', message: status });
+          if (status === 'Status' && event.id) {
+            emitContainerEvent(id, { type: 'pulling', message: event.id });
           }
         }
       );
@@ -118,9 +82,71 @@ export const startContainer = async (
 
   // Container creation
   emitContainerEvent(id, { type: 'creating', message: 'Creating container' });
-  emitContainerEvent(id, { type: 'creating', message: `Image: ${image}` });
-  emitContainerEvent(id, { type: 'creating', message: `Memory limit: ${Memory} MB` });
-  emitContainerEvent(id, { type: 'creating', message: `CPU count: ${Cpu}` });
+
+  // Pre-write eula=true so Minecraft servers don't exit on first boot.
+  const eulaPath = path.join(volumePath, 'eula.txt');
+  if (!fs.existsSync(eulaPath) || !fs.readFileSync(eulaPath, 'utf8').includes('eula=true')) {
+    fs.writeFileSync(eulaPath, '#By installing Minecraft you agree to the EULA\neula=true\n', 'utf8');
+  }
+
+  // Write a wrapper script into the volume (which is always a writable bind
+  // mount from the host) that patches /etc/passwd and /etc/hostname before
+  // handing off to the original image entrypoint. Every write inside the
+  // container's root filesystem uses || true so a read-only rootfs won't
+  // block startup — the hostname is also set via Docker's Hostname field
+  // as a belt-and-braces fallback that needs no filesystem writes at all.
+  //
+  // The one thing we deliberately omit is writing to /proc/sys/kernel/hostname
+  // — that requires CAP_SYS_ADMIN and fails silently in unprivileged containers.
+  // Docker's Hostname field covers that case.
+
+  const imageInspect = await docker.getImage(image).inspect().catch(() => null);
+  const rawEntrypoint = imageInspect?.Config?.Entrypoint ?? [];
+  const rawCmd        = imageInspect?.Config?.Cmd ?? [];
+  const originalEntrypoint: string[] = Array.isArray(rawEntrypoint) ? rawEntrypoint : [rawEntrypoint];
+  const originalCmd: string[]        = Array.isArray(rawCmd)        ? rawCmd        : [rawCmd];
+
+  const quoted = (args: string[]) => args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
+  let execLine: string;
+  if (originalEntrypoint.length > 0) {
+    execLine = `exec ${quoted(originalEntrypoint)}${originalCmd.length > 0 ? ' ' + quoted(originalCmd) : ''}`;
+  } else if (originalCmd.length > 0) {
+    execLine = `exec ${quoted(originalCmd)}`;
+  } else {
+    execLine = 'exec /bin/sh';
+  }
+
+  const airlinkdDir = path.join(volumePath, '.airlinkd');
+  if (!fs.existsSync(airlinkdDir)) {
+    fs.mkdirSync(airlinkdDir, { recursive: true });
+  }
+
+  const wrapperLines = [
+    '#!/bin/sh',
+    '',
+    '# Patch hostname — works via Docker Hostname field already, but this',
+    '# also fixes $(cat /etc/hostname) inside shells that read it directly.',
+    "echo 'airlinkd' > /etc/hostname 2>/dev/null || true",
+    'hostname airlinkd 2>/dev/null || true',
+    '',
+    '# Rename uid 1000 in /etc/passwd so $(whoami) returns airlinkd.',
+    '# yolks images use "container" as the username for uid 1000.',
+    'if [ -f /etc/passwd ]; then',
+    "  sed -i 's|^container:|airlinkd:|' /etc/passwd 2>/dev/null || true",
+    "  sed -i 's|^user:|airlinkd:|'      /etc/passwd 2>/dev/null || true",
+    "  sed -i 's|^app:|airlinkd:|'       /etc/passwd 2>/dev/null || true",
+    'fi',
+    '',
+    '# Hand off to the original image entrypoint unchanged.',
+    execLine,
+  ];
+
+  const wrapperPath = path.join(airlinkdDir, 'init.sh');
+  fs.writeFileSync(wrapperPath, wrapperLines.join('\n') + '\n', { mode: 0o755, encoding: 'utf8' });
+
+  modifiedEnv['PS1']    = 'airlinkd~ ';
+  modifiedEnv['PROMPT'] = 'airlinkd~ ';
+  modifiedEnv['prompt'] = 'airlinkd~ ';
 
   const exposedPorts = Object.keys(portBindings).reduce((acc, port) => {
     acc[port] = {};
@@ -130,14 +156,16 @@ export const startContainer = async (
   const container = await docker.createContainer({
     name: id,
     Image: image,
+    Hostname: 'airlinkd',
     Env: Object.entries(modifiedEnv).map(([key, value]) => `${key}=${value}`),
+    Entrypoint: ['/bin/sh', '/home/container/.airlinkd/init.sh'],
+    WorkingDir: '/home/container',
     HostConfig: {
-      Binds: [`${volumePath}:/app/data`],
+      Binds: [`${volumePath}:/home/container`],
       PortBindings: portBindings,
       Memory: Memory * 1024 * 1024,
-      CpuCount: Cpu,
-      CapDrop: ["ALL"],
-      SecurityOpt: ["no-new-privileges:true"],
+      NanoCpus: Math.max(0.5, Cpu / 100) * 1e9,
+      RestartPolicy: { Name: 'no' },
     },
     ExposedPorts: exposedPorts,
     AttachStdout: true,
@@ -147,25 +175,33 @@ export const startContainer = async (
     Tty: true,
   });
 
-  emitContainerEvent(id, { type: 'creating', message: `Container created (${container.id.slice(0, 12)})` });
   emitContainerEvent(id, { type: 'starting', message: 'Starting container' });
 
   await container.start();
 
-  emitContainerEvent(id, { type: 'starting', message: `Container ${container.id.slice(0, 12)} running` });
-  emitContainerEvent(id, { type: 'started', message: 'Server process starting' });
+  emitContainerEvent(id, { type: 'started', message: 'Server started' });
 };
 
 export const createInstaller = async (
   id: string,
   image: string,
   script: string,
-  env: Record<string, string> = {}
+  env: Record<string, string> = {},
+  entrypoint: string = "bash"
 ): Promise<void> => {
-  await deleteContainer("installer_" + id);
+  // Force-remove any leftover installer container. Same pattern as startContainer.
+  try {
+    await docker.getContainer("installer_" + id).remove({ force: true });
+  } catch (err: any) {
+    if (err?.statusCode !== 404) {
+      logger.warn(`Could not remove existing installer container for ${id}: ${err?.message}`);
+    }
+  }
 
   const volumePath = initContainer(id);
   const modifiedEnv = parseEnvironmentVariables(env);
+
+  emitContainerEvent(id, { type: 'installing', message: 'Preparing installer' });
 
   let imageExists = false;
   try {
@@ -176,26 +212,83 @@ export const createInstaller = async (
   }
 
   if (!imageExists) {
+    emitContainerEvent(id, { type: 'installing', message: `Pulling installer image: ${image}` });
     const stream = await docker.pull(image);
     await new Promise<void>((resolve, reject) => {
       docker.modem.followProgress(stream, (err) => {
-        if (err) return reject(new Error(`Failed to pull image: ${err.message}`));
+        if (err) return reject(new Error(`Failed to pull installer image: ${err.message}`));
         resolve();
       });
     });
   }
 
+  emitContainerEvent(id, { type: 'installing', message: 'Running install script' });
+
   const container = await docker.createContainer({
     name: "installer_" + id,
     Image: image,
-    Entrypoint: ["/bin/sh", "-c", script],
+    Entrypoint: [entrypoint, "-c", script.replace(/\r\n/g, '\n').replace(/\r/g, '\n')],
     Env: Object.entries(modifiedEnv).map(([key, value]) => `${key}=${value}`),
+    AttachStdout: true,
+    AttachStderr: true,
     HostConfig: {
-      Binds: [`${volumePath}:/app/data`],
-      AutoRemove: true,
+      Binds: [`${volumePath}:/mnt/server`],
+      AutoRemove: false,
       NetworkMode: "host",
     },
   });
 
+  // Attach before start — guarantees we capture output from the first byte.
+  // container.logs() after start misses output from fast-exiting containers.
+  const attachStream = await container.attach({
+    stream: true,
+    stdout: true,
+    stderr: true,
+  });
+
+  const installerLines: string[] = [];
+
+  // Docker non-TTY attach uses an 8-byte mux header per frame.
+  // Parse frame by frame — multiple frames can arrive in one data event.
+  const logDone = new Promise<void>((resolve) => {
+    let buf = Buffer.alloc(0);
+
+    attachStream.on('data', (chunk: Buffer) => {
+      buf = Buffer.concat([buf, chunk]);
+      while (buf.length >= 8) {
+        const frameSize = buf.readUInt32BE(4);
+        if (buf.length < 8 + frameSize) break;
+        const payload = buf.slice(8, 8 + frameSize).toString('utf8');
+        buf = buf.slice(8 + frameSize);
+        payload.split('\n').forEach(line => {
+          const clean = line.replace(/[\x00-\x08\x0b-\x1f]/g, '').trim();
+          if (clean) {
+            installerLines.push(clean);
+            emitContainerEvent(id, { type: 'installing', message: clean });
+          }
+        });
+      }
+    });
+
+    attachStream.on('end', resolve);
+    attachStream.on('error', resolve);
+  });
+
   await container.start();
+
+  const [result] = await Promise.all([container.wait(), logDone]);
+
+  if (result.StatusCode !== 0) {
+    logger.warn(`Installer for ${id} exited with code ${result.StatusCode}. Last output:`);
+    installerLines.slice(-20).forEach(l => logger.warn(`  ${l}`));
+    await container.remove({ force: true }).catch(() => {});
+    setServerState(id, 'failed');
+    throw new Error(`Install script failed with exit code ${result.StatusCode}`);
+  }
+
+  emitContainerEvent(id, { type: 'installed', message: 'Installation complete' });
+
+  await container.remove({ force: true }).catch(() => {});
+
+  setServerState(id, 'installed');
 };

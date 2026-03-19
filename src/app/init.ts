@@ -114,7 +114,7 @@ export async function init() {
         });
 
     try {
-        envExists();
+        await envExists();
         await isDockerInstalled();
         await isDockerRunning();
         await isDockerModemFix();

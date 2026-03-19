@@ -139,14 +139,17 @@ export function initLogger(): void {
   }
 }
 
+export function getStatsForPeriod(periodInMs: number): SystemStat[] {
+  const now = Date.now();
+  return statsLog.filter(entry => {
+    const entryTime = new Date(entry.timestamp).getTime();
+    return now - entryTime <= periodInMs;
+  });
+}
+
 export function getSystemStats(periodInMs?: number): SystemStat[] | Promise<SystemStat> {
   if (periodInMs) {
-    const now = Date.now();
-    return statsLog.filter(entry => {
-      const entryTime = new Date(entry.timestamp).getTime();
-      return now - entryTime <= periodInMs;
-    });
-  } else {
-    return getCurrentStats();
+    return getStatsForPeriod(periodInMs);
   }
+  return getCurrentStats();
 }

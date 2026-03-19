@@ -41,7 +41,7 @@ export const attachToContainerWithWS = async (id: string, ws: WebSocket): Promis
             try { (logStream as any).destroy(); } catch {}
         });
 
-        logger.success(`Attached to container ${id} successfully.`);
+        logger.debug(`Attached to container ${id} successfully.`);
     } catch (error) {
         // Container doesn't exist yet (still starting) or has already stopped.
         // Close the WS cleanly — do not send any error text to the client terminal.

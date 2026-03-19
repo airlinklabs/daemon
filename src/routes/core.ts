@@ -4,7 +4,6 @@ import config from "../utils/config";
 import {
   getTotalStats,
   getCurrentStats,
-  getSystemStats,
   saveStats,
 } from "../handlers/stats";
 import logger from "../utils/logger";
@@ -14,7 +13,7 @@ const router = Router();
 const STATS_INTERVAL = config.STATS_INTERVAL;
 
 interface StatsResponse {
-  totalStats: Awaited<ReturnType<typeof getSystemStats>>;
+  totalStats: ReturnType<typeof getTotalStats>;
   uptime: string;
 }
 
