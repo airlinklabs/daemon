@@ -75,7 +75,7 @@ npm run build
 ### Step 7 — Start
 
 ```bash
-npm start
+npm run start
 ```
 
 ### Running with pm2
@@ -143,18 +143,6 @@ src/
     ├── logger.ts           — Structured logger
     └── validation.ts       — Input validation helpers
 ```
-
----
-
-## What's new in 2.0.0-rc1
-
-**HMAC request signing** — A new `hmacMiddleware` module verifies an HMAC-SHA256 signature on every incoming request. This prevents requests from being replayed or forged even if the basic auth key is leaked. The panel's `daemonRequest` utility sends matching signed headers automatically. Strict enforcement is opt-in via `REQUIRE_HMAC=true`.
-
-**Async route loader** — `routes.ts` now uses `await import()` instead of synchronous `require()`. This is more correct for a Node.js ESM-compatible codebase and avoids blocking the event loop during startup.
-
-**Stats API cleanup** — `getStatsForPeriod` is now a named export rather than an inline closure inside `getSystemStats`. The core route uses the cleaner exported function directly. `getCurrentStats` and `saveStats` are also properly exported so `app.ts` can import them directly instead of using a dynamic `import()` at shutdown.
-
-**Leaner shutdown** — The graceful shutdown sequence no longer attempts to `ping()` Docker before exit (the connection has no explicit disconnect method anyway) and downgraded noisy `logger.info` shutdown messages to `logger.debug` so production logs aren't flooded on every restart.
 
 ---
 
