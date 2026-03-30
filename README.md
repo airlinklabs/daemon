@@ -56,7 +56,6 @@ Edit `.env` and set at minimum:
 |----------|-------------|
 | `PORT` | Port the daemon listens on (default: `3001`) |
 | `KEY` | Shared secret — must match the key you enter in the panel when creating the node |
-| `SFTP_PORT` | Port for the built-in SFTP server (default: `3003`) |
 | `REQUIRE_HMAC` | Set to `true` to enforce HMAC request signing (see Security below) |
 
 ### Step 5 — Build
