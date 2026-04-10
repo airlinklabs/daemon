@@ -1,643 +1,213 @@
-import { Router, Request, Response } from "express";
-import afs from "../handlers/filesystem/fs";
-
+import path from "node:path";
+import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import {
-  initContainer,
+  createBackup,
+  createInstaller,
+  deleteContainerAndVolume,
   docker,
   getContainerStats,
-} from "../handlers/instances/utils";
-import { startContainer, createInstaller } from "../handlers/instances/create";
-import { stopContainer } from "../handlers/instances/stop";
-import { killContainer } from "../handlers/instances/kill";
-import { deleteContainerAndVolume } from "../handlers/instances/delete";
-import { sendCommandToContainer } from "../handlers/instances/command";
-import { setServerState, getServerState } from "../handlers/instances/install";
-import fs from "fs";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
-import { create as tar_create, extract as tar_extract } from "tar";
-import logger from "../utils/logger";
+  getContainerState,
+  initContainer,
+  isContainerRunning,
+  killContainer,
+  restoreBackup,
+  sendCommandToContainer,
+  startContainer,
+  stopContainer,
+} from "../handlers/docker";
+import afs from "../handlers/fs";
+import logger from "../logger";
+import { getServerState, setServerState } from "../handlers/installState";
+
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+}
 
 const loadJson = (filePath: string): any[] => {
   try {
-    if (!fs.existsSync(filePath)) {
-      return [];
-    }
+    if (!fs.existsSync(filePath)) return [];
     const content = fs.readFileSync(filePath, "utf-8");
     return content.trim() ? JSON.parse(content) : [];
-  } catch (error) {
-    logger.error(`Error loading JSON from ${filePath}:`, error);
+  } catch {
     return [];
   }
 };
 
 const saveJson = (filePath: string, data: unknown): void => {
-  try {
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
-  } catch (error) {
-    logger.error(`Error saving JSON to ${filePath}:`, error);
-    throw error;
-  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
 };
 
-const router = Router();
-
-router.post("/container/installer", async (req: Request, res: Response) => {
-  const { id, script, container, entrypoint, env } = req.body;
-
-  if (!id) {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
-  }
-
-  if (!script || !container) {
-    res.status(400).json({ error: "Script and Container are required." });
-    return;
-  }
-
-  const environmentVariables: Record<string, string> =
-    typeof env === "object" && env !== null ? { ...env } : {};
-
+export async function handleContainerInstaller(req: Request): Promise<Response> {
+  const body = await req.json() as { id?: string; script?: string; container?: string; entrypoint?: string; env?: Record<string, string> };
+  if (!body.id) return json({ error: "Container ID is required." }, 400);
+  if (!body.script || !body.container) return json({ error: "Script and Container are required." }, 400);
+  const env = typeof body.env === "object" && body.env ? { ...body.env } : {};
   try {
-    await initContainer(id);
-    setServerState(id, "installing");
-
-    // createInstaller now waits for the installer container to finish before
-    // returning — the panel only gets 200 after files are on disk.
-    await createInstaller(id, container, script, environmentVariables, entrypoint || "bash");
-
-    res.status(200).json({ message: `Container ${id} installed successfully.` });
+    initContainer(body.id);
+    await setServerState(body.id, "installing");
+    await createInstaller(body.id, body.container, body.script, env, body.entrypoint || "bash");
+    return json({ message: `Container ${body.id} installed successfully.` });
   } catch (error) {
-    logger.error(`Error installing container`, error);
-    setServerState(id, "failed");
-    res.status(500).json({ error: `Failed to install container ${id}.` });
+    await setServerState(body.id, "failed");
+    return json({ error: `Failed to install container ${body.id}.` }, 500);
   }
-});
+}
 
-router.post("/container/install", async (req: Request, res: Response) => {
-  const { id, image, scripts, env } = req.body;
-
-  if (!id) {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
-  }
-
-  let environmentVariables: Record<string, string> =
-    typeof env === "object" && env !== null ? { ...env } : {};
+export async function handleContainerInstall(req: Request): Promise<Response> {
+  const body = await req.json() as { id?: string; image?: string; scripts?: Array<{ url: string; fileName: string; ALVKT?: boolean }>; env?: Record<string, string> };
+  if (!body.id) return json({ error: "Container ID is required." }, 400);
+  const environmentVariables = typeof body.env === "object" && body.env ? { ...body.env } : {};
 
   try {
-    setServerState(id, "installing");
+    await setServerState(body.id, "installing");
+    initContainer(body.id);
 
-    await initContainer(id);
-
-    // Pull the docker image up front so the container is ready to start
-    // immediately after files are in place. Previously this route skipped
-    // the pull entirely, causing the first "Start" click to trigger it instead.
-    if (image && typeof image === "string") {
-      let imageExists = false;
+    if (body.image) {
       try {
-        await docker.getImage(image).inspect();
-        imageExists = true;
+        await docker.getImage(body.image).inspect();
       } catch {
-        imageExists = false;
-      }
-      if (!imageExists) {
-        logger.info(`Pulling image ${image} for container ${id}`);
-        const pullStream = await docker.pull(image);
+        const pullStream = await docker.pull(body.image);
         await new Promise<void>((resolve, reject) => {
-          docker.modem.followProgress(pullStream, (err: Error | null) => {
-            if (err) return reject(new Error(`Failed to pull image: ${err.message}`));
-            resolve();
-          });
+          docker.modem.followProgress(pullStream, (err: Error | null) => (err ? reject(err) : resolve()));
         });
       }
     }
 
-    if (scripts && Array.isArray(scripts)) {
-      const alc = loadJson(path.join(__dirname, "../../storage/alc.json"));
-      const locationsPath = path.join(__dirname, "../../storage/alc/locations.json");
-      const filesDir = path.join(__dirname, "../../storage/alc/files");
+    if (body.scripts && Array.isArray(body.scripts)) {
+      const alc = loadJson(path.join(process.cwd(), "storage/alc.json"));
+      const locationsPath = path.join(process.cwd(), "storage/alc/locations.json");
+      const filesDir = path.join(process.cwd(), "storage/alc/files");
       const locations = loadJson(locationsPath);
 
-      const downloadScript = async (script: any) => {
-        const { url, fileName } = script;
-
-        if (!url || !fileName) {
-          logger.warn(`Invalid script entry: ${JSON.stringify(script)}`);
-          return;
-        }
-
-        const regex = /\$ALVKT\((\w+)\)/g;
-        const resolvedUrl = url.replace(regex, (_: string, variableName: string) => {
-          return environmentVariables[variableName] || "";
-        });
-
-        if (!resolvedUrl) {
-          logger.warn(`Failed to resolve URL for script: ${JSON.stringify(script)}`);
-          return;
-        }
-
-        const alcEntry = (alc as { Name: string; lasts: number }[]).find(
-          (entry) => entry.Name === fileName
-        );
-
-        try {
-          if (alcEntry) {
-            const existingLocation = locations.find(
-              (loc: any) => loc.Name === fileName && loc.url === resolvedUrl
-            );
-
-            const cachedFileId = `${fileName.replace(/\W+/g, "_")}_${alcEntry.lasts}_${Math.floor(Math.random() * 100000) + 1}`;
-            const cachedFilePath2 = existingLocation?.id ? path.join(filesDir, existingLocation.id) : "";
-
-            if (existingLocation) {
-              await afs.copy(id, cachedFilePath2, "/", fileName);
-            } else {
-              await afs.download(id, resolvedUrl, fileName);
-              const tempPath = await afs.getDownloadPath(id, fileName);
-              fs.copyFileSync(tempPath, path.join(filesDir, cachedFileId));
-              locations.push({ Name: fileName, url: resolvedUrl, id: cachedFileId });
-              saveJson(locationsPath, locations);
-            }
+      await Promise.all(body.scripts.map(async (script) => {
+        const resolvedUrl = script.url.replace(/\$ALVKT\((\w+)\)/g, (_, variableName: string) => environmentVariables[variableName] || "");
+        const alcEntry = (alc as Array<{ Name: string; lasts: number }>).find((entry) => entry.Name === script.fileName);
+        if (alcEntry) {
+          const existingLocation = locations.find((loc: any) => loc.Name === script.fileName && loc.url === resolvedUrl);
+          const cachedFilePath = existingLocation?.id ? path.join(filesDir, existingLocation.id) : "";
+          if (existingLocation) {
+            await afs.copy(body.id!, cachedFilePath, "/", script.fileName);
           } else {
-            await afs.download(id, resolvedUrl, fileName, script.ALVKT === true ? environmentVariables : undefined);
+            await afs.download(body.id!, resolvedUrl, script.fileName);
+            const tempPath = await afs.getDownloadPath(body.id!, script.fileName);
+            const cacheId = randomUUID();
+            fs.copyFileSync(tempPath, path.join(filesDir, cacheId));
+            locations.push({ Name: script.fileName, url: resolvedUrl, id: cacheId });
+            saveJson(locationsPath, locations);
           }
-
-        } catch (error) {
-          logger.error(`Error downloading file "${fileName}"`, error);
-          throw new Error(`Failed to download ${fileName}`);
+        } else {
+          await afs.download(body.id!, resolvedUrl, script.fileName, script.ALVKT === true ? environmentVariables : undefined);
         }
-      };
-
-      await Promise.all(scripts.map(downloadScript));
+      }));
     }
 
-    // Mark container as installed in central log
-    setServerState(id, "installed");
-
-    res
-      .status(200)
-      .json({ message: `Container ${id} installed successfully.` });
+    await setServerState(body.id, "installed");
+    return json({ message: `Container ${body.id} installed successfully.` });
   } catch (error) {
-    logger.error(`Error installing container`, error);
-    // Mark container as failed in central log
-    setServerState(id, "failed");
-    res.status(500).json({ error: `Failed to install container ${id}.` });
+    logger.error(`Error installing container ${body.id}`, error);
+    await setServerState(body.id, "failed");
+    return json({ error: `Failed to install container ${body.id}.` }, 500);
   }
-});
+}
 
-router.get("/container/status/:id", (req: Request, res: Response) => {
-  const rawId = req.params.id;
-  const id = Array.isArray(rawId) ? rawId[0] : rawId;
+export async function handleContainerInstallStatus(_req: Request, params: Record<string, string>): Promise<Response> {
+  const id = params.id;
+  if (!id) return json({ error: "Container ID is required." }, 400);
+  const state = await getServerState(id);
+  if (!state) return json({ message: `No install state found for container ${id}.` }, 404);
+  return json({ containerId: id, state });
+}
 
-  if (!id) {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
+export async function handleContainerStart(req: Request): Promise<Response> {
+  const body = await req.json() as { id?: string; image?: string; ports?: string; env?: Record<string, string>; Memory?: number; Cpu?: number; StartCommand?: string };
+  if (!body.id || !body.image) return json({ error: "Container ID and Image are required." }, 400);
+  const env = typeof body.env === "object" && body.env ? { ...body.env } : {};
+  let startCommand = body.StartCommand ?? "";
+  startCommand = startCommand.replace(/\{\{(\w+)\}\}/g, (_, name: string) => env[name] ?? "");
+  startCommand = startCommand.replace(/\$ALVKT\((\w+)\)/g, (_, name: string) => env[name] ?? "");
+  if (startCommand) {
+    env.START = startCommand;
+    env.STARTUP = startCommand;
   }
-
-const state = getServerState(id);
-  
-  if (!state) {
-    res
-      .status(404)
-      .json({ message: `No install state found for container ${id}.` });
-    return;
-  }
-
-  res.status(200).json({ containerId: id, state });
-});
-
-router.post("/container/start", async (req: Request, res: Response) => {
-  const { id, image, ports, env, Memory, Cpu, StartCommand } = req.body;
-
-  if (!id || !image) {
-    res.status(400).json({ error: "Container ID and Image are required." });
-    return;
-  }
-
-  let environmentVariables: Record<string, string> =
-    typeof env === "object" && env !== null ? { ...env } : {};
-
-  // Resolve both {{VAR}} (Pterodactyl style) and $ALVKT(VAR) (legacy style)
-  let updatedStartCommand = StartCommand;
-
-  updatedStartCommand = updatedStartCommand.replace(
-    /\{\{(\w+)\}\}/g,
-    (_: string, varName: string) => {
-      if (environmentVariables[varName] !== undefined) {
-        return environmentVariables[varName];
-      }
-      logger.warn(`Variable "${varName}" not found in environment ({{}} style).`);
-      return "";
-    }
-  );
-
-  updatedStartCommand = updatedStartCommand.replace(
-    /\$ALVKT\((\w+)\)/g,
-    (_: string, varName: string) => {
-      if (environmentVariables[varName] !== undefined) {
-        return environmentVariables[varName];
-      }
-      logger.warn(`Variable "${varName}" not found in environment ($ALVKT style).`);
-      return "";
-    }
-  );
-
-  if (updatedStartCommand) {
-    // Older yolks images read $START, newer ones read $STARTUP.
-    // Set both so any version works.
-    environmentVariables["START"]   = updatedStartCommand;
-    environmentVariables["STARTUP"] = updatedStartCommand;
-  }
-
-  // Log what we're actually sending so failures are diagnosable
-  logger.warn(`Starting ${id}: image=${image} START=${environmentVariables["START"]?.slice(0, 120)}`);
-
-  try {
-    await startContainer(id, image, environmentVariables, ports, Memory, Cpu);
-    res.status(200).json({ message: `Container ${id} started successfully.` });
-  } catch (error) {
-    logger.error(`Error starting container`, error);
-    res.status(500).json({ error: `Failed to start container ${id}.` });
-  }
-});
-
-router.post("/container/stop", async (req: Request, res: Response) => {
-  const { id, stopCmd } = req.body;
-
-  if (!id) {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
-  }
-
-  try {
-    await stopContainer(id, stopCmd);
-    res.status(200).json({ message: `Container ${id} stopped successfully.` });
-  } catch (error) {
-    logger.error(`Error stopping container`, error);
-    res.status(500).json({ error: `Failed to stop container ${id}.` });
-  }
-});
-
-router.delete("/container/kill", async (req: Request, res: Response) => {
-  const { id } = req.body;
-
-  if (!id) {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
-  }
-
-  try {
-    await killContainer(id);
-    res.status(200).json({ message: `Container ${id} killed successfully.` });
-  } catch (error) {
-    logger.error(`Error killing container`, error);
-    res.status(500).json({ error: `Failed to kill container ${id}.` });
-  }
-});
-
-
-router.post("/container/command", async (req: Request, res: Response) => {
-  const { id, command } = req.body;
-
-  if (!id || !command) {
-    res.status(400).json({ error: "Container ID and Command are required." });
-    return;
-  }
-
-  try {
-    sendCommandToContainer(id, command);
-    res
-      .status(200)
-      .json({ message: `Command sent to container ${id}: ${command}` });
-  } catch (error) {
-    logger.error(`Error sending command to container`, error);
-    res
-      .status(500)
-      .json({ error: `Failed to send command to container ${id}.` });
-  }
-});
-
-router.delete("/container", async (req: Request, res: Response) => {
-  const { id } = req.body;
-
-  if (!id) {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
-  }
-  try {
-    await deleteContainerAndVolume(id);
-    res.status(200).json({ message: `Container ${id} deleted successfully.` });
-  } catch (error) {
-    logger.error(`Error deleting container`, error);
-    res.status(500).json({ error: `Failed to delete container ${id}.` });
-  }
-});
-
-router.get("/container/status", async (req: Request, res: Response) => {
-  const id = req.query.id as string;
-
-  if (!id) {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
-  }
-
-  try {
-    // Fast path: check in-memory state map (updated by Docker Events stream)
-    const { isContainerRunning } = await import('../handlers/instances/containerState');
-    const knownRunning = isContainerRunning(id);
-    if (knownRunning !== null) {
-      res.status(200).json({ running: knownRunning, exists: true, source: 'cache' });
-      return;
-    }
-
-    // Fallback: inspect() for containers not yet in the map
-    const container = docker.getContainer(id);
-    const containerInfo = await container.inspect().catch(() => null);
-
-    if (!containerInfo) {
-      res.status(200).json({ running: false, exists: false });
-      return;
-    }
-
-    res.status(200).json({
-      running:    containerInfo.State.Running,
-      exists:     true,
-      status:     containerInfo.State.Status,
-      startedAt:  containerInfo.State.StartedAt,
-      finishedAt: containerInfo.State.FinishedAt,
-      source:     'inspect',
-    });
-  } catch (error) {
-    logger.error(`Error getting container status`, error);
-    res.status(500).json({ error: `Failed to get status for container ${id}.` });
-  }
-});
-
-router.get("/container/stats", async (req: Request, res: Response) => {
-  const id = req.query.id as string;
-
-  if (!id) {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
-  }
-
-  try {
-    const stats = await getContainerStats(id);
-
-    if (!stats) {
-      res.status(200).json({ running: false, exists: false });
-      return;
-    }
-
-    res.status(200).json(stats);
-  } catch (error) {
-    logger.error(`Error getting container stats`, error);
-    res.status(500).json({ error: `Failed to get stats for container ${id}.` });
-  }
-});
-
-router.post("/container/backup", async (req: Request, res: Response) => {
-  const { id, name } = req.body;
-
-  if (!id) {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
-  }
-
-  if (!name) {
-    res.status(400).json({ error: "Backup name is required." });
-    return;
-  }
-
-  try {
-    const volumePath = path.resolve(`volumes/${id}`);
-
-    if (!fs.existsSync(volumePath)) {
-      res.status(404).json({ error: "Container volume not found." });
-      return;
-    }
-
-    const backupsDir = path.resolve("backups", id);
-    if (!fs.existsSync(backupsDir)) {
-      fs.mkdirSync(backupsDir, { recursive: true });
-    }
-
-    const backupUuid = uuidv4();
-    const backupFileName = `${backupUuid}.tar.gz`;
-    const backupPath = path.join(backupsDir, backupFileName);
-
-    logger.debug(`Creating backup for container ${id} at ${backupPath}`);
-
-    await tar_create(
-      {
-        gzip: true,
-        file: backupPath,
-        cwd: volumePath,
-        filter: (filePath) => {
-          let normalizedPath = filePath.split(path.sep).join("/");
-          if (normalizedPath.startsWith("./")) {
-            normalizedPath = normalizedPath.slice(2);
-          }
-          return !(
-            normalizedPath === "node_modules" ||
-            normalizedPath.endsWith("/node_modules") ||
-            normalizedPath.includes("/node_modules/")
-          );
-        },
-      },
-      ["."]
-    );
-
-    const stats = fs.statSync(backupPath);
-    const fileSizeInBytes = stats.size;
-
-    logger.debug(
-      `Backup created successfully: ${backupPath} (${fileSizeInBytes} bytes)`
-    );
-
-    res.status(200).json({
-      success: true,
-      message: "Backup created successfully",
-      backup: {
-        uuid: backupUuid,
-        name: name,
-        filePath: `backups/${id}/${backupFileName}`,
-        size: fileSizeInBytes,
-        createdAt: new Date().toISOString(),
-      },
-    });
-  } catch (error) {
-    logger.error(`Error creating backup for container ${id}:`, error);
-    res.status(500).json({
-      error: `Failed to create backup: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`,
-    });
-  }
-});
-
-router.post("/container/restore", async (req: Request, res: Response) => {
-  const { id, backupPath } = req.body;
-
-  if (!id) {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
-  }
-
-  if (!backupPath || typeof backupPath !== 'string') {
-    res.status(400).json({ error: "Backup path is required." });
-    return;
-  }
-
-  // Constrain backup path to the backups directory for this container
-  const allowedBackupsDir = path.resolve("backups", id);
-  const fullBackupPath = path.resolve(backupPath);
-
-  if (!fullBackupPath.startsWith(allowedBackupsDir + path.sep)) {
-    res.status(400).json({ error: "Invalid backup path." });
-    return;
-  }
-
-  try {
-    if (!fs.existsSync(fullBackupPath)) {
-      res.status(404).json({ error: "Backup file not found." });
-      return;
-    }
-
-    const volumePath = path.resolve(`volumes/${id}`);
-
-    try {
-      const container = docker.getContainer(id);
-      const containerInfo = await container.inspect().catch(() => null);
-      if (containerInfo && containerInfo.State.Running) {
-        logger.debug(`Stopping container ${id} for restore...`);
-        await stopContainer(id);
-      }
-    } catch (error) {
-      logger.warn(`Could not stop container ${id}: ${error}`);
-    }
-
-    if (fs.existsSync(volumePath)) {
-      fs.rmSync(volumePath, { recursive: true, force: true });
-    }
-    fs.mkdirSync(volumePath, { recursive: true });
-
-    logger.debug(`Restoring backup from ${fullBackupPath} to ${volumePath}`);
-
-    await tar_extract({
-      file: fullBackupPath,
-      cwd: volumePath,
-    });
-
-    logger.debug(`Backup restored successfully to container ${id}`);
-
-    res.status(200).json({
-      success: true,
-      message: "Backup restored successfully",
-    });
-  } catch (error) {
-    logger.error(`Error restoring backup for container ${id}:`, error);
-    res.status(500).json({
-      error: `Failed to restore backup: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`,
-    });
-  }
-});
-
-router.delete("/container/backup", async (req: Request, res: Response) => {
-  const { backupPath } = req.body;
-
-  if (!backupPath || typeof backupPath !== 'string') {
-    res.status(400).json({ error: "Backup path is required." });
-    return;
-  }
-
-  const allowedBackupsRoot = path.resolve("backups");
-  const fullBackupPath = path.resolve(backupPath);
-
-  if (!fullBackupPath.startsWith(allowedBackupsRoot + path.sep)) {
-    res.status(400).json({ error: "Invalid backup path." });
-    return;
-  }
-
-  try {
-    if (!fs.existsSync(fullBackupPath)) {
-      res.status(404).json({ error: "Backup file not found." });
-      return;
-    }
-
-    fs.unlinkSync(fullBackupPath);
-    logger.debug(`Backup file deleted: ${fullBackupPath}`);
-
-    res.status(200).json({
-      success: true,
-      message: "Backup deleted successfully",
-    });
-  } catch (error) {
-    logger.error(`Error deleting backup:`, error);
-    res.status(500).json({
-      error: `Failed to delete backup: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`,
-    });
-  }
-});
-
-router.get(
-  "/container/backup/download",
-  async (req: Request, res: Response) => {
-    const { backupPath } = req.query;
-
-    if (!backupPath || typeof backupPath !== "string") {
-      res.status(400).json({ error: "Backup path is required." });
-      return;
-    }
-
-    const allowedBackupsRoot = path.resolve("backups");
-    const fullBackupPath = path.resolve(backupPath);
-
-    if (!fullBackupPath.startsWith(allowedBackupsRoot + path.sep)) {
-      res.status(400).json({ error: "Invalid backup path." });
-      return;
-    }
-
-    try {
-      if (!fs.existsSync(fullBackupPath)) {
-        res.status(404).json({ error: "Backup file not found." });
-        return;
-      }
-
-      const fileName = path.basename(fullBackupPath);
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${fileName}"`
-      );
-      res.setHeader("Content-Type", "application/gzip");
-
-      const fileStream = fs.createReadStream(fullBackupPath);
-      fileStream.pipe(res);
-
-      fileStream.on("error", (error) => {
-        logger.error("Error streaming backup file:", error);
-        if (!res.headersSent) {
-          res.status(500).json({ error: "Failed to download backup file" });
-        }
-      });
-    } catch (error) {
-      logger.error(`Error downloading backup:`, error);
-      res.status(500).json({
-        error: `Failed to download backup: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
-      });
-    }
-  }
-);
-
-export default router;
+  await startContainer(body.id, body.image, env, body.ports ?? "", body.Memory ?? 0, body.Cpu ?? 0);
+  return json({ message: `Container ${body.id} started successfully.` });
+}
+
+export async function handleContainerStop(req: Request): Promise<Response> {
+  const body = await req.json() as { id?: string; stopCmd?: string };
+  if (!body.id) return json({ error: "Container ID is required." }, 400);
+  await stopContainer(body.id, body.stopCmd);
+  return json({ message: `Container ${body.id} stopped successfully.` });
+}
+
+export async function handleContainerKill(req: Request): Promise<Response> {
+  const body = await req.json() as { id?: string };
+  if (!body.id) return json({ error: "Container ID is required." }, 400);
+  await killContainer(body.id);
+  return json({ message: `Container ${body.id} killed successfully.` });
+}
+
+export async function handleContainerCommand(req: Request): Promise<Response> {
+  const body = await req.json() as { id?: string; command?: string };
+  if (!body.id || !body.command) return json({ error: "Container ID and Command are required." }, 400);
+  await sendCommandToContainer(body.id, body.command);
+  return json({ message: `Command sent to container ${body.id}: ${body.command}` });
+}
+
+export async function handleContainerDelete(req: Request): Promise<Response> {
+  const body = await req.json() as { id?: string };
+  if (!body.id) return json({ error: "Container ID is required." }, 400);
+  await deleteContainerAndVolume(body.id);
+  return json({ message: `Container ${body.id} deleted successfully.` });
+}
+
+export async function handleContainerStatus(req: Request): Promise<Response> {
+  const id = new URL(req.url).searchParams.get("id");
+  if (!id) return json({ error: "Container ID is required." }, 400);
+  const knownRunning = isContainerRunning(id);
+  if (knownRunning !== null) return json({ running: knownRunning, exists: true, source: "cache" });
+  const state = await getContainerState(id);
+  return json({ running: state.running, exists: state.startedAt !== null, startedAt: state.startedAt });
+}
+
+export async function handleContainerStats(req: Request): Promise<Response> {
+  const id = new URL(req.url).searchParams.get("id");
+  if (!id) return json({ error: "Container ID is required." }, 400);
+  const stats = await getContainerStats(id);
+  if (!stats) return json({ running: false, exists: false });
+  return json(stats);
+}
+
+export async function handleContainerBackup(req: Request): Promise<Response> {
+  const body = await req.json() as { id?: string; name?: string };
+  if (!body.id) return json({ error: "Container ID is required." }, 400);
+  if (!body.name) return json({ error: "Backup name is required." }, 400);
+  return json(await createBackup(body.id, body.name));
+}
+
+export async function handleContainerRestore(req: Request): Promise<Response> {
+  const body = await req.json() as { id?: string; backupPath?: string };
+  if (!body.id || !body.backupPath) return json({ error: "Backup path is required." }, 400);
+  await restoreBackup(body.id, body.backupPath);
+  return json({ message: "Backup restored successfully." });
+}
+
+export async function handleContainerBackupDelete(req: Request): Promise<Response> {
+  const body = await req.json() as { id?: string; backupPath?: string };
+  if (!body.id || !body.backupPath) return json({ error: "Backup path is required." }, 400);
+  fs.rmSync(path.resolve(body.backupPath), { force: true });
+  return json({ message: "Backup deleted successfully." });
+}
+
+export async function handleContainerBackupDownload(req: Request): Promise<Response> {
+  const backupPath = new URL(req.url).searchParams.get("backupPath");
+  if (!backupPath) return json({ error: "Backup path is required." }, 400);
+  return new Response(Bun.file(path.resolve(backupPath)), {
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "Content-Disposition": `attachment; filename="${path.basename(backupPath)}"`,
+    },
+  });
+}

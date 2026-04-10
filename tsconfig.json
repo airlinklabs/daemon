@@ -1,16 +1,47 @@
 {
   "compilerOptions": {
-    "target": "ES6",
-    "module": "commonjs",
-    "rootDir": "./src",
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "rootDir": ".",
     "resolveJsonModule": true,
     "outDir": "./dist",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "lib": ["ESNext", "DOM"]
   },
+  "include": [
+    "build.ts",
+    "src/app.ts",
+    "src/config.ts",
+    "src/configure.ts",
+    "src/logger.ts",
+    "src/router.ts",
+    "src/validation.ts",
+    "src/security/**/*.ts",
+    "src/handlers/docker.ts",
+    "src/handlers/fs.ts",
+    "src/handlers/installState.ts",
+    "src/handlers/minecraft.ts",
+    "src/handlers/sftp.ts",
+    "src/handlers/stats.ts",
+    "src/handlers/radar/**/*.ts",
+    "src/routes/**/*.ts",
+    "src/ws/**/*.ts",
+    "src/types/**/*.d.ts",
+    "src/utils/fileSpecifier.ts"
+  ],
   "exclude": [
-    "volumes"
+    "volumes",
+    "dist",
+    "node_modules",
+    "src/app/**",
+    "src/utils/errorHandler.ts",
+    "src/handlers/filesystem/**",
+    "src/handlers/instances/**",
+    "src/handlers/minecraft/playerFetcher.ts",
+    "src/handlers/sftp/**"
   ]
 }

@@ -1,68 +1,24 @@
-import { Router, Request, Response } from "express";
-import {
-  generateCredential,
-  revokeCredentialForContainer,
-  getActiveSessionCount,
-} from "../handlers/sftp/sftpManager";
-import { validateContainerId } from "../utils/validation";
-import logger from "../utils/logger";
+import { generateCredential, getActiveSessionCount, revokeCredentialForContainer } from "../handlers/sftp";
+import { validateContainerId } from "../validation";
 
-const router = Router();
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+}
 
-router.post("/sftp/credentials", async (req: Request, res: Response) => {
-  const { id } = req.body;
+export async function handleSftpCreate(req: Request): Promise<Response> {
+  const body = await req.json() as { id?: string };
+  if (!body.id || !validateContainerId(body.id)) return json({ error: "Invalid container ID format." }, 400);
+  const credential = await generateCredential(body.id);
+  return json(credential);
+}
 
-  if (!id || typeof id !== "string") {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
-  }
+export async function handleSftpRevoke(req: Request): Promise<Response> {
+  const body = await req.json() as { id?: string };
+  if (!body.id || !validateContainerId(body.id)) return json({ error: "Invalid container ID format." }, 400);
+  await revokeCredentialForContainer(body.id);
+  return json({ message: "SFTP credentials revoked." });
+}
 
-  if (!validateContainerId(id)) {
-    res.status(400).json({ error: "Invalid container ID format." });
-    return;
-  }
-
-  try {
-    const credential = await generateCredential(id);
-    res.json({
-      username: credential.username,
-      password: credential.password,
-      host: credential.host,
-      port: credential.port,
-      expiresAt: credential.expiresAt,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to generate SFTP credentials.";
-    logger.error(`SFTP credential generation failed for ${id}:`, error);
-    res.status(500).json({ error: message });
-  }
-});
-
-router.delete("/sftp/credentials", async (req: Request, res: Response) => {
-  const { id } = req.body;
-
-  if (!id || typeof id !== "string") {
-    res.status(400).json({ error: "Container ID is required." });
-    return;
-  }
-
-  if (!validateContainerId(id)) {
-    res.status(400).json({ error: "Invalid container ID format." });
-    return;
-  }
-
-  try {
-    await revokeCredentialForContainer(id);
-    res.json({ message: "SFTP credentials revoked." });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to revoke SFTP credentials.";
-    logger.error(`SFTP credential revocation failed for ${id}:`, error);
-    res.status(500).json({ error: message });
-  }
-});
-
-router.get("/sftp/status", async (_req: Request, res: Response) => {
-  res.json({ activeSessions: getActiveSessionCount() });
-});
-
-export default router;
+export async function handleSftpStatus(): Promise<Response> {
+  return json({ activeSessions: getActiveSessionCount() });
+}
