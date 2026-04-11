@@ -54,7 +54,6 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
       return;
     }
     ws.data.authed = true;
-    ws.send(JSON.stringify({ event: 'auth', status: 'ok' }));
 
     // start the appropriate subscription now that we're authed
     if (ws.data.route === 'container') {
@@ -63,7 +62,7 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
       ws.data.timer = startStatusPolling(ws.data.containerId, ws);
     } else if (ws.data.route === 'containerevents') {
       ws.data.unsub = subscribe(ws.data.containerId, (event) => {
-        if (ws.readyState === 1) ws.send(JSON.stringify(event));
+        if (ws.readyState === 1) ws.send(JSON.stringify({ event: 'lifecycle', data: event }));
       });
     }
     return;

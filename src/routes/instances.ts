@@ -21,6 +21,7 @@ import { setServerState, getServerState } from '../handlers/installState';
 import { downloadToVolume, copyIntoVolume } from '../handlers/fs';
 import { validateContainerId } from '../validation';
 import logger from '../logger';
+import { emit } from '../ws/events';
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -79,6 +80,7 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
   const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
 
   await setServerState(id, 'installing');
+  emit(id, { type: 'installing', message: 'Preparing installation' });
 
   // fire-and-forget — response returned immediately, panel polls /container/status/:id
   (async () => {
@@ -95,6 +97,7 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
       }
 
       if (scripts && Array.isArray(scripts)) {
+        emit(id, { type: 'installing', message: 'Fetching installation files' });
         const alcPath       = join(process.cwd(), 'storage/alc.json');
         const locationsPath = join(process.cwd(), 'storage/alc/locations.json');
         const filesDir      = join(process.cwd(), 'storage/alc/files');
@@ -127,9 +130,11 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
 
           try {
             if (alcEntry && existingLoc && existsSync(cachedFilePath)) {
+              emit(id, { type: 'installing', message: `Using cached ${fileName}` });
               // use cached copy — avoids re-downloading the same file on reinstall
               await copyIntoVolume(id, cachedFilePath, fileName);
             } else {
+              emit(id, { type: 'installing', message: `Downloading ${fileName}` });
               // download with optional ALVKT substitution inside the file content
               await downloadToVolume(id, resolvedUrl, fileName, s.ALVKT === true ? envVars : undefined);
 
@@ -149,9 +154,11 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
       }
 
       await setServerState(id, 'installed');
+      emit(id, { type: 'installed', message: 'Installation complete' });
     } catch (err) {
       logger.error('error during async install', err);
       await setServerState(id, 'failed');
+      emit(id, { type: 'error', message: err instanceof Error ? err.message : 'installation failed' });
     }
   })();
 

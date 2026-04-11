@@ -114,6 +114,7 @@ export async function getFileContent(id: string, relativePath = '/'): Promise<st
 
 export async function writeFileContent(id: string, relativePath: string, content: string | Buffer): Promise<void> {
   const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+  await mkdir(baseDirectory, { recursive: true });
   const filePath = jailPath(baseDirectory, relativePath);
   await mkdir(dirname(filePath), { recursive: true });
   if (typeof content === 'string') await writeFile(filePath, content, 'utf-8');

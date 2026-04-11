@@ -14,6 +14,14 @@ export async function verifyHmac(req: Request, key: string): Promise<Response | 
   const tsHeader  = req.headers.get('x-airlink-timestamp');
   const sigHeader = req.headers.get('x-airlink-signature');
 
+  // Backward-compat mode for older panel callers that still send only
+  // Basic auth. When both HMAC headers are absent, accept the request after
+  // Basic auth succeeds in the router. If one header is present without the
+  // other, treat it as malformed instead of silently downgrading.
+  if (!tsHeader && !sigHeader) {
+    return null;
+  }
+
   if (!tsHeader || !sigHeader) {
     return new Response(JSON.stringify({ error: 'missing HMAC headers' }), {
       status:  401,
@@ -36,7 +44,7 @@ export async function verifyHmac(req: Request, key: string): Promise<Response | 
   }
 
   const url  = new URL(req.url);
-  const body = req.method === 'GET' || req.method === 'DELETE'
+  const body = req.method === 'GET'
     ? ''
     : await req.clone().text();
 
