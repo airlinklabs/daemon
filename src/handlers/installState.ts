@@ -1,8 +1,11 @@
-const installLogsPath = `${process.cwd()}/storage/install_logs.json`;
+import { join } from 'node:path';
+
+const logsPath = join(process.cwd(), 'storage/install_logs.json');
 
 async function readState(): Promise<Record<string, string>> {
   try {
-    const text = await Bun.file(installLogsPath).text();
+    const file = Bun.file(logsPath);
+    const text = await file.text();
     return JSON.parse(text);
   } catch {
     return {};
@@ -10,7 +13,7 @@ async function readState(): Promise<Record<string, string>> {
 }
 
 async function writeState(data: Record<string, string>): Promise<void> {
-  await Bun.write(installLogsPath, JSON.stringify(data, null, 2));
+  await Bun.write(logsPath, JSON.stringify(data, null, 2));
 }
 
 export async function setServerState(containerId: string, state: string): Promise<void> {
@@ -20,11 +23,18 @@ export async function setServerState(containerId: string, state: string): Promis
 }
 
 export async function getServerState(containerId: string): Promise<string | undefined> {
-  return (await readState())[containerId];
+  const logs = await readState();
+  return logs[containerId];
+}
+
+export async function getAllServerStates(): Promise<Record<string, string>> {
+  return readState();
 }
 
 export async function removeServerState(containerId: string): Promise<void> {
   const logs = await readState();
-  delete logs[containerId];
-  await writeState(logs);
+  if (logs[containerId]) {
+    delete logs[containerId];
+    await writeState(logs);
+  }
 }

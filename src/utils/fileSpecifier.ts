@@ -1,29 +1,33 @@
-import fs from 'fs/promises';
-import path from 'path';
+// loads the file spec map from storage — used by the install handler to find installer scripts
+// this file is part of the daemon config, not generated at runtime
 
-const fileSpecifierPath = path.resolve(__dirname, '../../storage/fileSpecifier.json');
+import { resolve } from 'node:path';
 
-const fileSpecifier = {
-    async getCategory(extension: string): Promise<string | null> {
-        try {
-            const data = await fs.readFile(fileSpecifierPath, 'utf8');
-            const categories: Record<string, string[]> = JSON.parse(data);
+const specPath = resolve(process.cwd(), 'storage/fileSpecifier.json');
 
-            for (const [category, extensions] of Object.entries(categories)) {
-                if (Array.isArray(extensions) && extensions.includes(extension)) {
-                    return category;
-                }
-            }
+// shape: { "code": ["js", "ts", ...], "image": ["png", ...], ... }
+type FileSpecifierData = Record<string, string[]>;
 
-            return null;
-        } catch (error) {
-            if (error instanceof Error) {
-                throw new Error(`Error reading file specifier data: ${error.message}`);
-            } else {
-                throw new Error('An unknown error occurred while reading file specifier data.');
-            }
-        }
+let cached: FileSpecifierData | null = null;
+
+async function load(): Promise<FileSpecifierData> {
+  if (cached) return cached;
+  try {
+    cached = await Bun.file(specPath).json() as FileSpecifierData;
+    return cached;
+  } catch {
+    throw new Error('failed to load storage/fileSpecifier.json — is the file missing?');
+  }
+}
+
+async function getCategory(extension: string): Promise<string | null> {
+  const data = await load();
+  for (const [category, extensions] of Object.entries(data)) {
+    if (Array.isArray(extensions) && extensions.includes(extension)) {
+      return category;
     }
-};
+  }
+  return null;
+}
 
-export default fileSpecifier;
+export default { getCategory };

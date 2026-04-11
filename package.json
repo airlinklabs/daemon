@@ -4,25 +4,20 @@
   "module": "src/app.ts",
   "type": "module",
   "scripts": {
-    "dev": "bun --hot src/app.ts",
-    "start": "bun src/app.ts",
-    "build": "bun run build.ts",
-    "configure": "bun src/configure.ts",
-    "clean": "node scripts/clean.js"
+    "dev":       "bun --hot src/app.ts",
+    "start":     "bun src/app.ts",
+    "build":     "bun run build.ts",
+    "configure": "bun src/configure.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "MIT",
-  "description": "",
   "dependencies": {
-    "chalk": "^4.1.2",
-    "dockerode": "^4.0.2",
+    "chalk":            "^4.1.2",
+    "dockerode":        "^4.0.2",
     "minecraft-status": "^1.1.0",
-    "tar": "^7.4.3"
+    "tar":              "^7.4.3"
   },
   "devDependencies": {
     "@types/dockerode": "^3.3.32",
-    "@types/tar": "^6.1.13",
-    "bun-types": "latest"
+    "@types/tar":       "^6.1.13",
+    "bun-types":        "latest"
   }
 }

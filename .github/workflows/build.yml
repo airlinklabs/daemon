@@ -1,0 +1,94 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-linux-x64
+            runner: ubuntu-latest
+            out: airlinkd-linux-x64
+
+          - target: bun-linux-x64-baseline
+            runner: ubuntu-latest
+            out: airlinkd-linux-x64-baseline
+
+          - target: bun-linux-arm64
+            runner: ubuntu-24.04-arm
+            out: airlinkd-linux-arm64
+
+          - target: bun-darwin-x64
+            runner: macos-13
+            out: airlinkd-macos-x64
+
+          - target: bun-darwin-arm64
+            runner: macos-latest
+            out: airlinkd-macos-arm64
+
+          - target: bun-windows-x64
+            runner: ubuntu-latest
+            out: airlinkd-windows-x64.exe
+
+          - target: bun-windows-x64-baseline
+            runner: ubuntu-latest
+            out: airlinkd-windows-x64-baseline.exe
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: install deps
+        run: bun install --frozen-lockfile
+
+      - name: build binary
+        run: |
+          mkdir -p dist
+          bun build --compile --target ${{ matrix.target }} --outfile dist/${{ matrix.out }} src/app.ts
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: dist/${{ matrix.out }}
+          if-no-files-found: error
+
+  release:
+    name: create release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: list artifacts
+        run: ls -lh dist/
+
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }}

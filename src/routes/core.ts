@@ -1,34 +1,44 @@
-import { meta } from "../../storage/config.json";
-import config from "../config";
-import { getTotalStats } from "../handlers/stats";
+import config from '../config';
+import { getTotalStats } from '../handlers/stats';
 
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
+// read the meta version from storage/config.json at startup
+let daemonVersion = '3.0.0';
+try {
+  const cfg = await Bun.file('storage/config.json').json() as { meta?: { version?: string } };
+  daemonVersion = cfg?.meta?.version ?? daemonVersion;
+} catch { /* file missing or malformed — use default */ }
 
-function formatUptime(uptimeSeconds: number): string {
-  const minutes = Math.floor((uptimeSeconds / 60) % 60);
-  const hours = Math.floor((uptimeSeconds / 3600) % 24);
-  const days = Math.floor(uptimeSeconds / 86400);
+function formatUptime(s: number): string {
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
   const parts: string[] = [];
-  if (days) parts.push(`${days}d`);
-  if (hours) parts.push(`${hours}h`);
-  if (minutes || parts.length === 0) parts.push(`${minutes}m`);
-  return parts.join(" ");
+  if (d) parts.push(`${d}d`);
+  if (h) parts.push(`${h}h`);
+  if (m || !parts.length) parts.push(`${m}m`);
+  return parts.join(' ');
 }
 
-export async function handleRoot(): Promise<Response> {
-  return json({
-    versionFamily: 1,
-    versionRelease: `Airlinkd ${meta.version}`,
-    status: "Online",
-    remote: config.remote,
-  });
+export function handleRoot(_req: Request): Response {
+  return new Response(JSON.stringify({
+    versionFamily:  1,
+    versionRelease: `Airlinkd ${daemonVersion}`,
+    status:         'Online',
+    remote:         config.remote,
+  }), { headers: { 'Content-Type': 'application/json' } });
 }
 
-export async function handleStats(): Promise<Response> {
-  return json({ totalStats: getTotalStats(), uptime: formatUptime(process.uptime()) });
+export function handleStats(_req: Request): Response {
+  try {
+    const totalStats = getTotalStats();
+    const uptime     = formatUptime(process.uptime());
+    return new Response(JSON.stringify({ totalStats, uptime }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: 'failed to fetch stats' }), {
+      status:  500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
 }

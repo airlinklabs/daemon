@@ -1,43 +1,47 @@
-import { extractPlayerInfo, fetchMinecraftPlayers } from "../handlers/minecraft";
-import logger from "../logger";
+import { fetchMinecraftPlayers, isTransientError } from '../handlers/minecraft';
+import logger from '../logger';
 
 const EMPTY_RESPONSE = {
-  players: [],
-  maxPlayers: 0,
+  players:       [],
+  maxPlayers:    0,
   onlinePlayers: 0,
-  description: "",
-  version: "",
-  online: false,
+  description:   '',
+  version:       '',
+  online:        false,
 };
 
 function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 export async function handleMinecraftPlayers(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const id = url.searchParams.get("id");
-  const host = url.searchParams.get("host");
-  const port = url.searchParams.get("port");
-  if (!id || !host || !port) return json({ error: "Container ID, host, and port are required.", ...EMPTY_RESPONSE }, 400);
+  const params = new URL(req.url).searchParams;
+  const id   = params.get('id');
+  const host = params.get('host');
+  const port = params.get('port');
 
-  const portNum = Number.parseInt(port, 10);
-  if (Number.isNaN(portNum)) return json({ error: "Port must be a valid number.", ...EMPTY_RESPONSE }, 400);
+  if (!id || !host || !port) {
+    return json({ error: 'container ID, host, and port are required', ...EMPTY_RESPONSE }, 400);
+  }
+
+  const portNum = parseInt(port, 10);
+  if (isNaN(portNum)) {
+    return json({ error: 'port must be a valid number', ...EMPTY_RESPONSE }, 400);
+  }
 
   try {
-    const pingResponse = await fetchMinecraftPlayers(host, portNum, 5000);
-    const players = extractPlayerInfo(pingResponse);
-    const description = typeof pingResponse.description === "string" ? pingResponse.description : (pingResponse.description?.text ?? "");
-    return json({
-      players,
-      maxPlayers: pingResponse.players?.max || 0,
-      onlinePlayers: pingResponse.players?.online || 0,
-      description,
-      version: pingResponse.version?.name || "",
-      online: true,
-    });
-  } catch (error) {
-    logger.error(`Error fetching players for container ${id}`, error);
-    return json({ error: `Failed to fetch players: ${error instanceof Error ? error.message : "Unknown error"}`, ...EMPTY_RESPONSE }, 500);
+    const result = await fetchMinecraftPlayers(host, portNum, 5000);
+    return json(result);
+  } catch (err: unknown) {
+    if (isTransientError(err)) {
+      // server not ready yet — not a real error
+      return json(EMPTY_RESPONSE);
+    }
+    const msg = err instanceof Error ? err.message : 'unknown error';
+    logger.error(`error fetching players for container ${id}`, err);
+    return json({ error: `failed to fetch players: ${msg}`, ...EMPTY_RESPONSE }, 500);
   }
 }
