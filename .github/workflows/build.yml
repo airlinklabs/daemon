@@ -58,7 +58,7 @@ jobs:
       - name: build binary
         run: |
           mkdir -p dist
-          bun build --compile --target ${{ matrix.target }} --outfile dist/${{ matrix.out }} src/app.ts
+          bun build --compile --target ${{ matrix.target }} --outfile dist/${{ matrix.out }} src/app.ts src/server.ts
 
       - name: upload artifact
         uses: actions/upload-artifact@v4

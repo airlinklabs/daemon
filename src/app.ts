@@ -18,7 +18,11 @@ function hasDisplay(): boolean {
 async function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise(resolve => {
-    rl.question(question, answer => { rl.close(); resolve(answer.trim()); });
+    rl.question(question, answer => {
+      rl.close();
+      // give the event loop a tick to settle after closing stdin before we proceed
+      setImmediate(() => resolve(answer.trim()));
+    });
   });
 }
 

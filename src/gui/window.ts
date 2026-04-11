@@ -5,9 +5,14 @@ import { Worker } from 'worker_threads';
 import { guiHtml } from './html';
 import config from '../config';
 
-// spawns the server as a background Worker thread
+// spawns the server as a background Worker thread.
+// eval:true passes source code directly, avoiding path resolution
+// inside compiled executables where import.meta.url points to a
+// virtual B:\~BUN path that new Worker() cannot resolve.
 function spawnServerWorker(): Worker {
-  return new Worker(new URL('../server.ts', import.meta.url).href, {
+  const resolved = import.meta.resolve('../server.ts');
+  return new Worker(`import '${resolved}';`, {
+    eval: true,
     env: { ...process.env, DAEMON_WORKER_MODE: '1' },
   });
 }
@@ -18,7 +23,7 @@ function parseLogLine(raw: string): { time: string; level: string; msg: string }
   return { time: m[1], level: m[2].toLowerCase().trim(), msg: m[3] };
 }
 
-// returns true if the GUI launched successfully, false if webview_bun isn't available
+// returns true if the GUI launched successfully, false if webview-bun isn't available
 export async function runGui(): Promise<boolean> {
   // dynamic import so a missing native lib doesn't crash headless starts
   let Webview: { new (debug: boolean): any };
@@ -28,8 +33,8 @@ export async function runGui(): Promise<boolean> {
     const mod = await import('webview-bun');
     Webview   = mod.Webview;
     SizeHint  = mod.SizeHint ?? { NONE: 0 };
-  } catch {
-    process.stderr.write('[gui] webview-bun unavailable — falling back to headless\n');
+  } catch (err) {
+    process.stderr.write(`[gui] webview-bun failed to load — falling back to headless\n[gui] reason: ${err}\n`);
     return false;
   }
 
@@ -40,20 +45,32 @@ export async function runGui(): Promise<boolean> {
   await new Promise<void>(resolve => {
     const timeout = setTimeout(resolve, 3000);
 
-    daemonWorker!.addEventListener('message', function handler(e: MessageEvent) {
-      if (e.data?.type === 'ready') {
+    function handler(data: any) {
+      if (data?.type === 'ready') {
         clearTimeout(timeout);
-        daemonWorker!.removeEventListener('message', handler);
+        daemonWorker!.off('message', handler);
         resolve();
       }
-    });
+    }
+
+    daemonWorker!.on('message', handler);
   });
 
   // write HTML to a temp file so the WebView doesn't hit data: URL size limits
   const htmlPath = join(tmpdir(), 'airlinkd-gui.html');
   writeFileSync(htmlPath, guiHtml, 'utf-8');
 
-  const wv = new Webview(false);
+  let wv: any;
+  try {
+    wv = new Webview(false);
+  } catch (err) {
+    process.stderr.write(`[gui] failed to create webview window — falling back to headless\n[gui] reason: ${err}\n`);
+    process.stderr.write('[gui] on Windows, make sure the WebView2 runtime is installed:\n');
+    process.stderr.write('[gui] https://developer.microsoft.com/en-us/microsoft-edge/webview2/\n');
+    daemonWorker?.terminate();
+    return false;
+  }
+
   wv.title  = 'Airlink Daemon';
   wv.size   = { width: 960, height: 620, hint: SizeHint.NONE };
   // pass port in the query string so the JS can pick it up

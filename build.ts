@@ -21,7 +21,7 @@ await Bun.spawn(['mkdir', '-p', 'dist'], { stdout: 'inherit', stderr: 'inherit' 
 for (const { target, out } of targets) {
   console.log(`building ${out}...`);
   const proc = Bun.spawn(
-    ['bun', 'build', '--compile', '--target', target, '--outfile', out, 'src/app.ts'],
+    ['bun', 'build', '--compile', '--target', target, '--outfile', out, 'src/app.ts', 'src/server.ts'],
     { stdout: 'inherit', stderr: 'inherit' },
   );
   const code = await proc.exited;

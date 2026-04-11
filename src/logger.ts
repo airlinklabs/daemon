@@ -50,23 +50,12 @@ function write(level: Level, msg: string, extra?: unknown) {
 }
 
 export function drawHeader(version: string, port: number) {
-  const ascii = [
-    '                                              ',
-    '  /$$$$$$ /$$         /$$/$$         /$$      ',
-    ' /$$__  $|__/        | $|__/        | $$      ',
-    '| $$  \\ $$/$$ /$$$$$$| $$/$$/$$$$$$$| $$   /$$',
-    '| $$$$$$$| $$/$$__  $| $| $| $$__  $| $$  /$$/',
-    '| $$__  $| $| $$  \\__| $| $| $$  \\ $| $$$$$$/ ',
-    '| $$  | $| $| $$     | $| $| $$  | $| $$_  $$ ',
-    '| $$  | $| $| $$     | $| $| $$  | $| $$ \\  $$',
-    '|__/  |__|__|__/     |__|__|__/  |__|__/  \\__/',
-    '                                              ',
-  ];
-
-  for (const line of ascii) {
-    process.stdout.write(`${BOLD}${BLU}${line}${RESET}\n`);
-  }
-  process.stdout.write(`${DIM}  v${version}  --  port ${port}  --  run as daemon for airlink panel${RESET}\n`);
+  const inner  = `airlinkd ${version} -- port ${port}`;
+  const border = '+' + '-'.repeat(inner.length + 2) + '+';
+  process.stdout.write(`${BOLD}${BLU}${border}${RESET}\n`);
+  process.stdout.write(`${BOLD}${BLU}| ${inner} |${RESET}\n`);
+  process.stdout.write(`${DIM}  run as daemon for airlink panel${RESET}\n`);
+  process.stdout.write(`${BOLD}${BLU}${border}${RESET}\n`);
   process.stdout.write('\n');
 }
 
