@@ -13,7 +13,8 @@
     "chalk":            "^4.1.2",
     "dockerode":        "^4.0.2",
     "minecraft-status": "^1.1.0",
-    "tar":              "^7.4.3"
+    "tar":              "^7.4.3",
+    "webview-bun":      "^2.4.0"
   },
   "devDependencies": {
     "@types/dockerode": "^3.3.32",
