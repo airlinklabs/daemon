@@ -1,21 +1,23 @@
-import { resolve, join } from 'node:path';
-import { stat, readFile, access } from 'node:fs/promises';
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
+
+import { access, readFile, stat } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import logger from '../../logger';
 
 interface Pattern {
-  type:              'filename' | 'extension' | 'content';
-  pattern:           string;
-  description:       string;
-  content?:          string;
-  size_less_than?:   number;
+  type: 'filename' | 'extension' | 'content';
+  pattern: string;
+  description: string;
+  content?: string;
+  size_less_than?: number;
   size_greater_than?: number;
 }
 
 interface RadarScript {
-  name:        string;
+  name: string;
   description: string;
-  version:     string;
-  patterns:    Pattern[];
+  version: string;
+  patterns: Pattern[];
 }
 
 interface ScanResult {
@@ -47,12 +49,10 @@ export async function scanVolume(id: string, script: RadarScript): Promise<ScanR
       }
 
       // Bun.Glob is built in — no import needed
-      const globPattern = pattern.type === 'filename'
-        ? `**/*${pattern.pattern}*`
-        : `**/*${pattern.pattern}`;
+      const globPattern = pattern.type === 'filename' ? `**/*${pattern.pattern}*` : `**/*${pattern.pattern}`;
 
       const matcher = new Bun.Glob(globPattern);
-      const files   = await Array.fromAsync(matcher.scan({ cwd: baseDirectory, dot: true }));
+      const files = await Array.fromAsync(matcher.scan({ cwd: baseDirectory, dot: true }));
 
       for (const file of files) {
         const filePath = join(baseDirectory, file);
@@ -60,7 +60,7 @@ export async function scanVolume(id: string, script: RadarScript): Promise<ScanR
         if (!fileStats) continue;
 
         if (fileStats.isDirectory() && pattern.type === 'extension') continue;
-        if (pattern.size_less_than    && fileStats.size >= pattern.size_less_than) continue;
+        if (pattern.size_less_than && fileStats.size >= pattern.size_less_than) continue;
         if (pattern.size_greater_than && fileStats.size <= pattern.size_greater_than) continue;
 
         if (pattern.content) {

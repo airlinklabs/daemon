@@ -1,17 +1,14 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // polls container stats every 2s and pushes them over the WS
 // the panel uses this to update the server card indicators in real time
 
 import type { ServerWebSocket } from 'bun';
+import { getContainerState, getContainerStats, isContainerRunning } from '../handlers/docker';
 import type { WsData } from './server';
-import { getContainerStats, getContainerState, isContainerRunning } from '../handlers/docker';
-import logger from '../logger';
 
 const POLL_MS = 2000;
 
-export function startStatusPolling(
-  containerId: string,
-  ws: ServerWebSocket<WsData>,
-): ReturnType<typeof setInterval> {
+export function startStatusPolling(containerId: string, ws: ServerWebSocket<WsData>): ReturnType<typeof setInterval> {
   // send initial state right away — don't make the client wait 2s
   sendState(containerId, ws);
   sendStats(containerId, ws);

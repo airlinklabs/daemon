@@ -1,84 +1,85 @@
-import { checkBasicAuth, verifyHmac, getAllowedIpCheck, withSecurityHeaders } from './security/hmac';
-import { checkRateLimit } from './security/rateLimit';
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
+
 import config from './config';
 import logger from './logger';
-
 // route handlers — all imported up front so they hoist fine
 import { handleRoot, handleStats } from './routes/core';
 import {
-  handleContainerInstaller,
-  handleContainerInstall,
-  handleContainerInstallStatus,
-  handleContainerStart,
-  handleContainerStop,
-  handleContainerKill,
-  handleContainerCommand,
-  handleContainerDelete,
-  handleContainerStatus,
-  handleContainerStats,
-  handleContainerBackup,
-  handleContainerRestore,
-  handleContainerBackupDelete,
-  handleContainerBackupDownload,
-} from './routes/instances';
-import {
-  handleFsList,
-  handleFsSize,
-  handleFsInfo,
+  handleFsAppend,
+  handleFsCreateEmpty,
+  handleFsDownload,
   handleFsFileRead,
   handleFsFileWrite,
-  handleFsDownload,
-  handleFsRm,
-  handleFsZip,
-  handleFsUnzip,
+  handleFsInfo,
+  handleFsList,
   handleFsRename,
+  handleFsRm,
+  handleFsSize,
+  handleFsUnzip,
   handleFsUpload,
-  handleFsCreateEmpty,
-  handleFsAppend,
+  handleFsZip,
 } from './routes/filesystem';
-import { handleSftpCreate, handleSftpRevoke, handleSftpStatus } from './routes/sftp';
+import {
+  handleContainerBackup,
+  handleContainerBackupDelete,
+  handleContainerBackupDownload,
+  handleContainerCommand,
+  handleContainerDelete,
+  handleContainerInstall,
+  handleContainerInstaller,
+  handleContainerInstallStatus,
+  handleContainerKill,
+  handleContainerRestore,
+  handleContainerStart,
+  handleContainerStats,
+  handleContainerStatus,
+  handleContainerStop,
+} from './routes/instances';
 import { handleMinecraftPlayers } from './routes/minecraft';
 import { handleRadarScan, handleRadarZip } from './routes/radar';
+import { handleSftpCreate, handleSftpRevoke, handleSftpStatus } from './routes/sftp';
+import { checkBasicAuth, getAllowedIpCheck, verifyHmac, withSecurityHeaders } from './security/hmac';
+import { checkRateLimit } from './security/rateLimit';
 
 type Handler = (req: Request, params: Record<string, string>) => Promise<Response> | Response;
 
 // exact route map: "METHOD /path" → handler
 // using function declarations so they hoist above the Map
 const exactRoutes = new Map<string, Handler>([
-  ['GET /',                          handleRoot],
-  ['GET /stats',                     handleStats],
-  ['POST /container/installer',      handleContainerInstaller],
-  ['POST /container/install',        handleContainerInstall],
-  ['POST /container/start',          handleContainerStart],
-  ['POST /container/stop',           handleContainerStop],
-  ['DELETE /container/kill',         handleContainerKill],
-  ['POST /container/command',        handleContainerCommand],
-  ['DELETE /container',              handleContainerDelete],
-  ['GET /container/status',          handleContainerStatus],
-  ['GET /container/stats',           handleContainerStats],
-  ['POST /container/backup',         handleContainerBackup],
-  ['POST /container/restore',        handleContainerRestore],
-  ['DELETE /container/backup',       handleContainerBackupDelete],
+  ['GET /', handleRoot],
+  ['GET /stats', handleStats],
+  ['POST /container/installer', handleContainerInstaller],
+  ['POST /container/install', handleContainerInstall],
+  ['POST /container/start', handleContainerStart],
+  ['POST /container/stop', handleContainerStop],
+  ['DELETE /container/kill', handleContainerKill],
+  ['POST /container/command', handleContainerCommand],
+  ['DELETE /container', handleContainerDelete],
+  ['GET /container/status', handleContainerStatus],
+  ['GET /container/stats', handleContainerStats],
+  ['POST /container/backup', handleContainerBackup],
+  ['POST /container/restore', handleContainerRestore],
+  ['DELETE /container/backup', handleContainerBackupDelete],
   ['GET /container/backup/download', handleContainerBackupDownload],
-  ['GET /fs/list',                   handleFsList],
-  ['GET /fs/size',                   handleFsSize],
-  ['GET /fs/info',                   handleFsInfo],
-  ['GET /fs/file/content',           handleFsFileRead],
-  ['POST /fs/file/content',          handleFsFileWrite],
-  ['GET /fs/download',               handleFsDownload],
-  ['DELETE /fs/rm',                  handleFsRm],
-  ['POST /fs/zip',                   handleFsZip],
-  ['POST /fs/unzip',                 handleFsUnzip],
-  ['POST /fs/rename',                handleFsRename],
-  ['POST /fs/upload',                handleFsUpload],
-  ['POST /fs/create-empty-file',     handleFsCreateEmpty],
-  ['POST /fs/append-file',           handleFsAppend],
-  ['POST /sftp/credentials',         handleSftpCreate],
-  ['DELETE /sftp/credentials',       handleSftpRevoke],
-  ['GET /sftp/status',               handleSftpStatus],
-  ['GET /minecraft/players',         handleMinecraftPlayers],
-  ['POST /radar/scan',               handleRadarScan],
-  ['POST /radar/zip',                handleRadarZip],
+  ['GET /fs/list', handleFsList],
+  ['GET /fs/size', handleFsSize],
+  ['GET /fs/info', handleFsInfo],
+  ['GET /fs/file/content', handleFsFileRead],
+  ['POST /fs/file/content', handleFsFileWrite],
+  ['GET /fs/download', handleFsDownload],
+  ['DELETE /fs/rm', handleFsRm],
+  ['POST /fs/zip', handleFsZip],
+  ['POST /fs/unzip', handleFsUnzip],
+  ['POST /fs/rename', handleFsRename],
+  ['POST /fs/upload', handleFsUpload],
+  ['POST /fs/create-empty-file', handleFsCreateEmpty],
+  ['POST /fs/append-file', handleFsAppend],
+  ['POST /sftp/credentials', handleSftpCreate],
+  ['DELETE /sftp/credentials', handleSftpRevoke],
+  ['GET /sftp/status', handleSftpStatus],
+  ['GET /minecraft/players', handleMinecraftPlayers],
+  ['POST /radar/scan', handleRadarScan],
+  ['POST /radar/zip', handleRadarZip],
 ]);
 
 // dynamic routes for path segments like /container/status/:id
@@ -98,9 +99,12 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
   // reject oversized requests before we read anything
   const contentLength = parseInt(req.headers.get('content-length') ?? '0', 10);
   if (contentLength > 100 * 1024 * 1024) {
-    return withSecurityHeaders(new Response(JSON.stringify({ error: 'request too large' }), {
-      status: 413, headers: { 'Content-Type': 'application/json' },
-    }));
+    return withSecurityHeaders(
+      new Response(JSON.stringify({ error: 'request too large' }), {
+        status: 413,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
   }
 
   // extract real socket IP — req.ip does not exist in Bun
@@ -108,10 +112,8 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
   const rawIp = server.requestIP(req);
   const socketIp = rawIp?.address.replace(/^::ffff:/, '') ?? 'unknown';
 
-  const behindProxy = Bun.env['BEHIND_PROXY'] === 'true';
-  const effectiveIp = behindProxy
-    ? req.headers.get('x-forwarded-for')?.split(',')[0].trim() ?? socketIp
-    : socketIp;
+  const behindProxy = Bun.env.BEHIND_PROXY === 'true';
+  const effectiveIp = behindProxy ? (req.headers.get('x-forwarded-for')?.split(',')[0].trim() ?? socketIp) : socketIp;
 
   // security chain — runs on every request, no exceptions
   const ipErr = getAllowedIpCheck(effectiveIp);
@@ -130,13 +132,18 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
   // DELETE with body is intentional for several routes — don't block it
   if (req.method !== 'GET') {
     const ct = req.headers.get('content-type') ?? '';
-    const ok = !ct
-      || ct.startsWith('application/json')
-      || ct.startsWith('application/octet-stream')
-      || ct.startsWith('text/')
-      || ct.startsWith('multipart/');
+    const ok =
+      !ct ||
+      ct.startsWith('application/json') ||
+      ct.startsWith('application/octet-stream') ||
+      ct.startsWith('text/') ||
+      ct.startsWith('multipart/');
     if (!ok) {
-      return withSecurityHeaders(new Response(JSON.stringify({ error: 'unsupported content type' }), { status: 415 }));
+      return withSecurityHeaders(
+        new Response(JSON.stringify({ error: 'unsupported content type' }), {
+          status: 415,
+        }),
+      );
     }
   }
 
@@ -147,7 +154,11 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
       return withSecurityHeaders(await handler(req, {}));
     } catch (err) {
       logger.error(`route error: ${key}`, err);
-      return withSecurityHeaders(new Response(JSON.stringify({ error: 'internal error' }), { status: 500 }));
+      return withSecurityHeaders(
+        new Response(JSON.stringify({ error: 'internal error' }), {
+          status: 500,
+        }),
+      );
     }
   }
 
@@ -158,13 +169,19 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
     if (!match) continue;
 
     const params: Record<string, string> = {};
-    paramNames.forEach((name, i) => { params[name] = match[i + 1]; });
+    paramNames.forEach((name, i) => {
+      params[name] = match[i + 1];
+    });
 
     try {
       return withSecurityHeaders(await dynHandler(req, params));
     } catch (err) {
       logger.error(`route error: ${url.pathname}`, err);
-      return withSecurityHeaders(new Response(JSON.stringify({ error: 'internal error' }), { status: 500 }));
+      return withSecurityHeaders(
+        new Response(JSON.stringify({ error: 'internal error' }), {
+          status: 500,
+        }),
+      );
     }
   }
 

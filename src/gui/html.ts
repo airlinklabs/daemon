@@ -1,3 +1,4 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 export const guiHtml = `<!DOCTYPE html>
 <html>
 <head>
@@ -358,12 +359,11 @@ async function toggleDaemon() {
 // ── stats polling ──
 async function pollStats() {
   try {
-    var r1 = await fetch('http://localhost:' + PORT + '/');
-    if (!r1.ok) { setStatus('stopped'); return; }
-    var root = await r1.json();
-
-    var r2   = await fetch('http://localhost:' + PORT + '/stats');
-    var data = await r2.json();
+    var raw  = await window.fetchStats();
+    var fetched = JSON.parse(raw);
+    if (!fetched.ok) { setStatus('stopped'); return; }
+    var root = fetched.root;
+    var data = fetched.stats;
 
     if (!running) setStatus('running');
 

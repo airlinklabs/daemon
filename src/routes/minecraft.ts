@@ -1,13 +1,14 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import { fetchMinecraftPlayers, isTransientError } from '../handlers/minecraft';
 import logger from '../logger';
 
 const EMPTY_RESPONSE = {
-  players:       [],
-  maxPlayers:    0,
+  players: [],
+  maxPlayers: 0,
   onlinePlayers: 0,
-  description:   '',
-  version:       '',
-  online:        false,
+  description: '',
+  version: '',
+  online: false,
 };
 
 function json(data: unknown, status = 200): Response {
@@ -19,7 +20,7 @@ function json(data: unknown, status = 200): Response {
 
 export async function handleMinecraftPlayers(req: Request): Promise<Response> {
   const params = new URL(req.url).searchParams;
-  const id   = params.get('id');
+  const id = params.get('id');
   const host = params.get('host');
   const port = params.get('port');
 
@@ -28,7 +29,7 @@ export async function handleMinecraftPlayers(req: Request): Promise<Response> {
   }
 
   const portNum = parseInt(port, 10);
-  if (isNaN(portNum)) {
+  if (Number.isNaN(portNum)) {
     return json({ error: 'port must be a valid number', ...EMPTY_RESPONSE }, 400);
   }
 

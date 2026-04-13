@@ -1,3 +1,4 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import { timingSafeEqual } from 'node:crypto';
 import config from '../config';
 import logger from '../logger';
@@ -11,50 +12,41 @@ function sign(key: string, method: string, path: string, body: string, ts: numbe
 
 // returns null if valid, returns a Response error if not
 export async function verifyHmac(req: Request, key: string): Promise<Response | null> {
-  const tsHeader  = req.headers.get('x-airlink-timestamp');
+  const tsHeader = req.headers.get('x-airlink-timestamp');
   const sigHeader = req.headers.get('x-airlink-signature');
-
-  // Backward-compat mode for older panel callers that still send only
-  // Basic auth. When both HMAC headers are absent, accept the request after
-  // Basic auth succeeds in the router. If one header is present without the
-  // other, treat it as malformed instead of silently downgrading.
-  if (!tsHeader && !sigHeader) {
-    return null;
-  }
 
   if (!tsHeader || !sigHeader) {
     return new Response(JSON.stringify({ error: 'missing HMAC headers' }), {
-      status:  401,
+      status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
   }
 
   const ts = parseInt(tsHeader, 10);
-  if (isNaN(ts)) return new Response(JSON.stringify({ error: 'bad timestamp' }), {
-    status:  401,
-    headers: { 'Content-Type': 'application/json' },
-  });
+  if (Number.isNaN(ts))
+    return new Response(JSON.stringify({ error: 'bad timestamp' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
 
   const drift = Math.abs(Math.floor(Date.now() / 1000) - ts);
   if (drift > WINDOW_SECS) {
     return new Response(JSON.stringify({ error: 'timestamp out of window' }), {
-      status:  401,
+      status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
   }
 
-  const url  = new URL(req.url);
-  const body = req.method === 'GET'
-    ? ''
-    : await req.clone().text();
+  const url = new URL(req.url);
+  const body = req.method === 'GET' || req.method === 'DELETE' ? '' : await req.clone().text();
 
   const expected = sign(key, req.method, url.pathname, body, ts);
-  const expBuf   = Buffer.from(expected, 'hex');
-  const gotBuf   = Buffer.from(sigHeader, 'hex');
+  const expBuf = Buffer.from(expected, 'hex');
+  const gotBuf = Buffer.from(sigHeader, 'hex');
 
   if (expBuf.length !== gotBuf.length || !timingSafeEqual(expBuf, gotBuf)) {
     return new Response(JSON.stringify({ error: 'invalid signature' }), {
-      status:  401,
+      status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
   }
@@ -65,25 +57,31 @@ export async function verifyHmac(req: Request, key: string): Promise<Response | 
 // parse the Authorization: Basic ... header ourselves — express-basic-auth is gone
 export function checkBasicAuth(req: Request, expectedKey: string): Response | null {
   const header = req.headers.get('authorization');
-  if (!header || !header.startsWith('Basic ')) {
+  if (!header?.startsWith('Basic ')) {
     return new Response(JSON.stringify({ error: 'unauthorized' }), {
-      status:  401,
-      headers: { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Basic realm="airlinkd"' },
+      status: 401,
+      headers: {
+        'Content-Type': 'application/json',
+        'WWW-Authenticate': 'Basic realm="airlinkd"',
+      },
     });
   }
 
   const decoded = atob(header.slice(6));
-  const colon   = decoded.indexOf(':');
-  const user    = decoded.slice(0, colon);
-  const pass    = decoded.slice(colon + 1);
+  const colon = decoded.indexOf(':');
+  const user = decoded.slice(0, colon);
+  const pass = decoded.slice(colon + 1);
 
   // constant-time compare — don't use ===
   const passBuf = Buffer.from(pass);
-  const expBuf  = Buffer.from(expectedKey);
+  const expBuf = Buffer.from(expectedKey);
   if (user !== 'Airlink' || passBuf.length !== expBuf.length || !timingSafeEqual(passBuf, expBuf)) {
     return new Response(JSON.stringify({ error: 'unauthorized' }), {
-      status:  401,
-      headers: { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Basic realm="airlinkd"' },
+      status: 401,
+      headers: {
+        'Content-Type': 'application/json',
+        'WWW-Authenticate': 'Basic realm="airlinkd"',
+      },
     });
   }
 
@@ -98,7 +96,7 @@ export function getAllowedIpCheck(effectiveIp: string): Response | null {
   if (!allowed.includes(effectiveIp)) {
     logger.warn(`blocked connection from ${effectiveIp} — not in ALLOWED_IPS`);
     return new Response(JSON.stringify({ error: 'access denied' }), {
-      status:  403,
+      status: 403,
       headers: { 'Content-Type': 'application/json' },
     });
   }
@@ -109,13 +107,13 @@ export function getAllowedIpCheck(effectiveIp: string): Response | null {
 // call this on every response before returning from the router
 export function withSecurityHeaders(res: Response): Response {
   const h = new Headers(res.headers);
-  h.set('X-Content-Type-Options',          'nosniff');
-  h.set('X-Frame-Options',                 'DENY');
-  h.set('X-XSS-Protection',               '0'); // deprecated but harmless
-  h.set('Referrer-Policy',                 'no-referrer');
-  h.set('Permissions-Policy',              'interest-cohort=()');
-  h.set('Cross-Origin-Resource-Policy',    'same-origin');
-  h.set('Cache-Control',                   'no-store');
+  h.set('X-Content-Type-Options', 'nosniff');
+  h.set('X-Frame-Options', 'DENY');
+  h.set('X-XSS-Protection', '0'); // deprecated but harmless
+  h.set('Referrer-Policy', 'no-referrer');
+  h.set('Permissions-Policy', 'interest-cohort=()');
+  h.set('Cross-Origin-Resource-Policy', 'same-origin');
+  h.set('Cache-Control', 'no-store');
   // not setting CSP — this is a JSON API, not HTML
   return new Response(res.body, { status: res.status, headers: h });
 }

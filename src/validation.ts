@@ -1,3 +1,4 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 export function validateContainerId(id: string): boolean {
   if (!id || typeof id !== 'string') return false;
   return /^[a-zA-Z0-9_-]+$/.test(id) && id.length >= 1 && id.length <= 64;
@@ -12,7 +13,7 @@ export function validatePath(relativePath: string): boolean {
 export function validateFileName(fileName: string): boolean {
   if (!fileName || typeof fileName !== 'string') return false;
   const bad = [/\.\./, /[<>:"|?*]/, /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i];
-  return !bad.some(p => p.test(fileName));
+  return !bad.some((p) => p.test(fileName));
 }
 
 export function validateUrl(url: string): boolean {

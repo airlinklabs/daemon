@@ -1,17 +1,19 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 {
   "compilerOptions": {
-    "target":                   "ESNext",
-    "module":                   "ESNext",
-    "moduleResolution":         "bundler",
-    "lib":                      ["ESNext"],
-    "types":                    ["bun-types"],
-    "strict":                   true,
-    "skipLibCheck":             true,
-    "noEmit":                   true,
+    "target":                     "ESNext",
+    "module":                     "ESNext",
+    "moduleResolution":           "bundler",
+    "lib":                        ["ESNext", "WebWorker"],
+    "types":                      ["bun-types"],
+    "strict":                     true,
+    "skipLibCheck":               true,
+    "noEmit":                     true,
     "allowImportingTsExtensions": true,
-    "esModuleInterop":          true,
-    "resolveJsonModule":        true,
-    "outDir":                   "dist"
+    "esModuleInterop":            true,
+    "resolveJsonModule":          true,
+    "allowArbitraryExtensions":   true,
+    "outDir":                     "dist"
   },
   "include":  ["src/**/*", "build.ts"],
   "exclude":  ["node_modules", "dist", "volumes", "backups", "logs"]

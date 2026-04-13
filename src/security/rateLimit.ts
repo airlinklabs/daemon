@@ -1,3 +1,4 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // nothing fancy, just counts hits per IP per minute and says no when they go over
 
 const hits = new Map<string, { count: number; resetAt: number }>();
@@ -22,10 +23,10 @@ export function checkRateLimit(ip: string, limit = 300): Response | null {
   data.count++;
   if (data.count > limit) {
     return new Response(JSON.stringify({ error: 'rate limit exceeded' }), {
-      status:  429,
+      status: 429,
       headers: {
         'Content-Type': 'application/json',
-        'Retry-After':  String(Math.ceil((data.resetAt - now) / 1000)),
+        'Retry-After': String(Math.ceil((data.resetAt - now) / 1000)),
       },
     });
   }

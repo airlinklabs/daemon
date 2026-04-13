@@ -1,14 +1,15 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import config from './config';
-import logger, { drawHeader } from './logger';
 import { checkDocker, checkDockerRunning, initContainerStateMap } from './handlers/docker';
-import { initStatsCollection, getCurrentStats, saveStats } from './handlers/stats';
+import { getCurrentStats, initStatsCollection, saveStats } from './handlers/stats';
+import logger, { drawHeader } from './logger';
 import { handleHttpRequest } from './router';
-import { wsOpen, wsMessage, wsClose, buildWsData, openConnections } from './ws/server';
-import type { WsData } from './ws/server';
 import { validateContainerId } from './validation';
+import type { WsData } from './ws/server';
+import { buildWsData, openConnections, wsClose, wsMessage, wsOpen } from './ws/server';
 
 function tryUpgrade(req: Request, server: ReturnType<typeof Bun.serve>): boolean {
-  const url   = new URL(req.url);
+  const url = new URL(req.url);
   const parts = url.pathname.split('/').filter(Boolean);
   const route = parts[0];
   const containerId = parts[1];
@@ -18,10 +19,7 @@ function tryUpgrade(req: Request, server: ReturnType<typeof Bun.serve>): boolean
   if (!validateContainerId(containerId)) return false;
 
   return server.upgrade(req, {
-    data: buildWsData(
-      route as 'container' | 'containerstatus' | 'containerevents',
-      containerId,
-    ),
+    data: buildWsData(route as 'container' | 'containerstatus' | 'containerevents', containerId),
   });
 }
 
@@ -45,7 +43,7 @@ try {
 initStatsCollection();
 
 export const server = Bun.serve<WsData>({
-  port:     config.port,
+  port: config.port,
   hostname: '0.0.0.0',
 
   fetch(req, server) {
@@ -54,16 +52,26 @@ export const server = Bun.serve<WsData>({
   },
 
   websocket: {
-    open(ws)             { wsOpen(ws); },
-    message(ws, msg)     { wsMessage(ws, msg); },
-    close(ws, code, why) { wsClose(ws, code, why); },
-    drain()              { /* bun requires this */ },
+    open(ws) {
+      wsOpen(ws);
+    },
+    message(ws, msg) {
+      wsMessage(ws, msg);
+    },
+    close(ws, code, why) {
+      wsClose(ws, code, why);
+    },
+    drain() {
+      /* bun requires this */
+    },
   },
 
-  tls: config.tlsCertPath ? {
-    cert: Bun.file(config.tlsCertPath),
-    key:  Bun.file(config.tlsKeyPath!),
-  } : undefined,
+  tls: config.tlsCertPath
+    ? {
+        cert: Bun.file(config.tlsCertPath),
+        key: Bun.file(config.tlsKeyPath!),
+      }
+    : undefined,
 });
 
 logger.ok(`listening on port ${config.port}`);
@@ -92,14 +100,16 @@ async function shutdown(signal: string): Promise<void> {
   try {
     const stats = await getCurrentStats();
     saveStats(stats);
-  } catch { /* don't let a stats error block shutdown */ }
+  } catch {
+    /* don't let a stats error block shutdown */
+  }
 
-  await new Promise<void>(resolve => setTimeout(resolve, 10_000));
+  await new Promise<void>((resolve) => setTimeout(resolve, 10_000));
 
   logger.info('shutdown complete');
   process.exit(0);
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT',  () => shutdown('SIGINT'));
-process.on('SIGHUP',  () => shutdown('SIGHUP'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGHUP', () => shutdown('SIGHUP'));

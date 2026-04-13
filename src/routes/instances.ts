@@ -1,27 +1,25 @@
-import { resolve, join, basename } from 'node:path';
-import { existsSync, mkdirSync, statSync, rmSync, unlinkSync } from 'node:fs';
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
+
+import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { create as tarCreate, extract as tarExtract } from 'tar';
 import {
-  docker,
-  startContainer,
   createInstaller,
-  stopContainer,
-  killContainer,
   deleteContainerAndVolume,
+  docker,
   getContainerStats,
-  isContainerRunning,
-  getContainerState,
   initContainer,
-  parsePortBindings,
-  parseEnvironmentVariables,
+  isContainerRunning,
+  killContainer,
   pullImageWithProgress,
   sendCommandToContainer,
+  startContainer,
+  stopContainer,
 } from '../handlers/docker';
-import { setServerState, getServerState } from '../handlers/installState';
-import { downloadToVolume, copyIntoVolume } from '../handlers/fs';
-import { validateContainerId } from '../validation';
+import { copyIntoVolume, downloadToVolume } from '../handlers/fs';
+import { getServerState, setServerState } from '../handlers/installState';
 import logger from '../logger';
-import { emit } from '../ws/events';
+import { validateContainerId } from '../validation';
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -44,10 +42,19 @@ async function saveJson(filePath: string, data: unknown): Promise<void> {
   await Bun.write(filePath, JSON.stringify(data, null, 2));
 }
 
-
 export async function handleContainerInstaller(req: Request): Promise<Response> {
-  let body: { id?: string; script?: string; container?: string; entrypoint?: string; env?: Record<string, string> };
-  try { body = await req.json() as typeof body; } catch { return json({ error: 'invalid json body' }, 400); }
+  let body: {
+    id?: string;
+    script?: string;
+    container?: string;
+    entrypoint?: string;
+    env?: Record<string, string>;
+  };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
 
   const { id, script, container, entrypoint, env } = body;
   if (!id) return json({ error: 'container ID is required' }, 400);
@@ -70,8 +77,17 @@ export async function handleContainerInstaller(req: Request): Promise<Response> 
 }
 
 export async function handleContainerInstall(req: Request): Promise<Response> {
-  let body: { id?: string; image?: string; scripts?: unknown[]; env?: Record<string, string> };
-  try { body = await req.json() as typeof body; } catch { return json({ error: 'invalid json body' }, 400); }
+  let body: {
+    id?: string;
+    image?: string;
+    scripts?: unknown[];
+    env?: Record<string, string>;
+  };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
 
   const { id, image, scripts, env } = body;
   if (!id) return json({ error: 'container ID is required' }, 400);
@@ -80,7 +96,6 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
   const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
 
   await setServerState(id, 'installing');
-  emit(id, { type: 'installing', message: 'Preparing installation' });
 
   // fire-and-forget — response returned immediately, panel polls /container/status/:id
   (async () => {
@@ -89,7 +104,12 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
 
       if (image && typeof image === 'string') {
         let imageExists = false;
-        try { await docker.getImage(image).inspect(); imageExists = true; } catch { imageExists = false; }
+        try {
+          await docker.getImage(image).inspect();
+          imageExists = true;
+        } catch {
+          imageExists = false;
+        }
         if (!imageExists) {
           logger.info(`pulling image ${image} for container ${id}`);
           await pullImageWithProgress(image, id);
@@ -97,18 +117,28 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
       }
 
       if (scripts && Array.isArray(scripts)) {
-        emit(id, { type: 'installing', message: 'Fetching installation files' });
-        const alcPath       = join(process.cwd(), 'storage/alc.json');
+        const alcPath = join(process.cwd(), 'storage/alc.json');
         const locationsPath = join(process.cwd(), 'storage/alc/locations.json');
-        const filesDir      = join(process.cwd(), 'storage/alc/files');
+        const filesDir = join(process.cwd(), 'storage/alc/files');
 
-        const alc       = await loadJson(alcPath) as { Name: string; lasts: number }[];
-        const locations = await loadJson(locationsPath) as { Name: string; url: string; id: string }[];
+        const alc = (await loadJson(alcPath)) as {
+          Name: string;
+          lasts: number;
+        }[];
+        const locations = (await loadJson(locationsPath)) as {
+          Name: string;
+          url: string;
+          id: string;
+        }[];
 
         if (!existsSync(filesDir)) mkdirSync(filesDir, { recursive: true });
 
         for (const script of scripts) {
-          const s = script as { url?: string; fileName?: string; ALVKT?: boolean };
+          const s = script as {
+            url?: string;
+            fileName?: string;
+            ALVKT?: boolean;
+          };
           const { url, fileName } = s;
 
           if (!url || !fileName) {
@@ -123,26 +153,29 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
             continue;
           }
 
-          const alcEntry      = alc.find(e => e.Name === fileName);
-          const cachedFileId  = `${fileName.replace(/\W+/g, '_')}_${alcEntry?.lasts ?? 0}_${Math.floor(Math.random() * 100000) + 1}`;
-          const existingLoc   = locations.find(l => l.Name === fileName && l.url === resolvedUrl);
+          const alcEntry = alc.find((e) => e.Name === fileName);
+          const cachedFileId = `${fileName.replace(/\W+/g, '_')}_${alcEntry?.lasts ?? 0}_${Math.floor(Math.random() * 100000) + 1}`;
+          const existingLoc = locations.find((l) => l.Name === fileName && l.url === resolvedUrl);
           const cachedFilePath = existingLoc?.id ? join(filesDir, existingLoc.id) : '';
 
           try {
             if (alcEntry && existingLoc && existsSync(cachedFilePath)) {
-              emit(id, { type: 'installing', message: `Using cached ${fileName}` });
               // use cached copy — avoids re-downloading the same file on reinstall
               await copyIntoVolume(id, cachedFilePath, fileName);
             } else {
-              emit(id, { type: 'installing', message: `Downloading ${fileName}` });
               // download with optional ALVKT substitution inside the file content
               await downloadToVolume(id, resolvedUrl, fileName, s.ALVKT === true ? envVars : undefined);
 
               if (alcEntry) {
                 // cache it for next time
                 const tempPath = resolve(process.cwd(), `volumes/${id}/${fileName}`);
-                await Bun.spawn(['cp', tempPath, join(filesDir, cachedFileId)], { stdout: 'pipe', stderr: 'pipe' }).exited;
-                locations.push({ Name: fileName, url: resolvedUrl, id: cachedFileId });
+                await Bun.spawn(['cp', tempPath, join(filesDir, cachedFileId)], { stdout: 'pipe', stderr: 'pipe' })
+                  .exited;
+                locations.push({
+                  Name: fileName,
+                  url: resolvedUrl,
+                  id: cachedFileId,
+                });
                 await saveJson(locationsPath, locations);
               }
             }
@@ -154,11 +187,9 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
       }
 
       await setServerState(id, 'installed');
-      emit(id, { type: 'installed', message: 'Installation complete' });
     } catch (err) {
       logger.error('error during async install', err);
       await setServerState(id, 'failed');
-      emit(id, { type: 'error', message: err instanceof Error ? err.message : 'installation failed' });
     }
   })();
 
@@ -177,10 +208,19 @@ export async function handleContainerInstallStatus(_req: Request, params: Record
 
 export async function handleContainerStart(req: Request): Promise<Response> {
   let body: {
-    id?: string; image?: string; ports?: string; env?: Record<string, string>;
-    Memory?: number; Cpu?: number; StartCommand?: string;
+    id?: string;
+    image?: string;
+    ports?: string;
+    env?: Record<string, string>;
+    Memory?: number;
+    Cpu?: number;
+    StartCommand?: string;
   };
-  try { body = await req.json() as typeof body; } catch { return json({ error: 'invalid json body' }, 400); }
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
 
   const { id, image, ports, env, Memory, Cpu, StartCommand } = body;
   if (!id || !image) return json({ error: 'container ID and image are required' }, 400);
@@ -203,11 +243,11 @@ export async function handleContainerStart(req: Request): Promise<Response> {
 
   if (updatedCmd) {
     // older yolks images read $START, newer ones read $STARTUP — set both
-    envVars['START']   = updatedCmd;
-    envVars['STARTUP'] = updatedCmd;
+    envVars.START = updatedCmd;
+    envVars.STARTUP = updatedCmd;
   }
 
-  logger.warn(`starting ${id}: image=${image} START=${(envVars['START'] ?? '').slice(0, 120)}`);
+  logger.warn(`starting ${id}: image=${image} START=${(envVars.START ?? '').slice(0, 120)}`);
 
   try {
     await startContainer(id, image, envVars, ports ?? '', Memory ?? 512, Cpu ?? 100);
@@ -220,7 +260,11 @@ export async function handleContainerStart(req: Request): Promise<Response> {
 
 export async function handleContainerStop(req: Request): Promise<Response> {
   let body: { id?: string; stopCmd?: string };
-  try { body = await req.json() as typeof body; } catch { return json({ error: 'invalid json body' }, 400); }
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
   if (!body.id) return json({ error: 'container ID is required' }, 400);
   if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
 
@@ -236,7 +280,11 @@ export async function handleContainerStop(req: Request): Promise<Response> {
 export async function handleContainerKill(req: Request): Promise<Response> {
   // DELETE with JSON body — intentional, the panel sends it this way
   let body: { id?: string };
-  try { body = await req.json() as typeof body; } catch { return json({ error: 'invalid json body' }, 400); }
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
   if (!body.id || !validateContainerId(body.id)) return json({ error: 'valid container ID required' }, 400);
 
   try {
@@ -250,7 +298,11 @@ export async function handleContainerKill(req: Request): Promise<Response> {
 
 export async function handleContainerCommand(req: Request): Promise<Response> {
   let body: { id?: string; command?: string };
-  try { body = await req.json() as typeof body; } catch { return json({ error: 'invalid json body' }, 400); }
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
   if (!body.id || !body.command) return json({ error: 'container ID and command are required' }, 400);
   if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
 
@@ -265,7 +317,11 @@ export async function handleContainerCommand(req: Request): Promise<Response> {
 
 export async function handleContainerDelete(req: Request): Promise<Response> {
   let body: { id?: string };
-  try { body = await req.json() as typeof body; } catch { return json({ error: 'invalid json body' }, 400); }
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
   if (!body.id || !validateContainerId(body.id)) return json({ error: 'valid container ID required' }, 400);
 
   try {
@@ -288,16 +344,19 @@ export async function handleContainerStatus(req: Request): Promise<Response> {
       return json({ running: knownRunning, exists: true, source: 'cache' });
     }
 
-    const info = await docker.getContainer(id).inspect().catch(() => null);
+    const info = await docker
+      .getContainer(id)
+      .inspect()
+      .catch(() => null);
     if (!info) return json({ running: false, exists: false });
 
     return json({
-      running:    info.State.Running,
-      exists:     true,
-      status:     info.State.Status,
-      startedAt:  info.State.StartedAt,
+      running: info.State.Running,
+      exists: true,
+      status: info.State.Status,
+      startedAt: info.State.StartedAt,
       finishedAt: info.State.FinishedAt,
-      source:     'inspect',
+      source: 'inspect',
     });
   } catch (err) {
     logger.error('error getting container status', err);
@@ -322,7 +381,11 @@ export async function handleContainerStats(req: Request): Promise<Response> {
 
 export async function handleContainerBackup(req: Request): Promise<Response> {
   let body: { id?: string; name?: string };
-  try { body = await req.json() as typeof body; } catch { return json({ error: 'invalid json body' }, 400); }
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
   if (!body.id) return json({ error: 'container ID is required' }, 400);
   if (!body.name) return json({ error: 'backup name is required' }, 400);
   if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
@@ -331,18 +394,18 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
   if (!existsSync(volumePath)) return json({ error: 'container volume not found' }, 404);
 
   try {
-    const backupsDir   = resolve(process.cwd(), 'backups', body.id);
+    const backupsDir = resolve(process.cwd(), 'backups', body.id);
     mkdirSync(backupsDir, { recursive: true });
 
-    const backupId   = crypto.randomUUID();
-    const fileName   = `${backupId}.tar.gz`;
+    const backupId = crypto.randomUUID();
+    const fileName = `${backupId}.tar.gz`;
     const backupPath = join(backupsDir, fileName);
 
     await tarCreate(
       {
         gzip: true,
         file: backupPath,
-        cwd:  volumePath,
+        cwd: volumePath,
         filter: (p) => {
           const norm = p.replace(/\\/g, '/').replace(/^\.\//, '');
           return !(norm === 'node_modules' || norm.endsWith('/node_modules') || norm.includes('/node_modules/'));
@@ -357,28 +420,40 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
     return json({ message: 'backup created successfully', backupId, fileName });
   } catch (err) {
     logger.error(`error creating backup for container ${body.id}`, err);
-    return json({ error: `failed to create backup: ${err instanceof Error ? err.message : 'unknown error'}` }, 500);
+    return json(
+      {
+        error: `failed to create backup: ${err instanceof Error ? err.message : 'unknown error'}`,
+      },
+      500,
+    );
   }
 }
 
 export async function handleContainerRestore(req: Request): Promise<Response> {
   let body: { id?: string; backupId?: string };
-  try { body = await req.json() as typeof body; } catch { return json({ error: 'invalid json body' }, 400); }
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
   if (!body.id) return json({ error: 'container ID is required' }, 400);
   if (!body.backupId || typeof body.backupId !== 'string') return json({ error: 'backup ID is required' }, 400);
   if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
 
   // construct and validate path from id + backupId — no user-controlled path traversal possible
   const backupsDir = resolve(process.cwd(), 'backups', body.id);
-  const fullPath   = join(backupsDir, `${body.backupId}.tar.gz`);
-  if (!fullPath.startsWith(backupsDir + '/')) return json({ error: 'invalid backup ID' }, 400);
+  const fullPath = join(backupsDir, `${body.backupId}.tar.gz`);
+  if (!fullPath.startsWith(`${backupsDir}/`)) return json({ error: 'invalid backup ID' }, 400);
   if (!existsSync(fullPath)) return json({ error: 'backup not found' }, 404);
 
   try {
     const volumePath = resolve(process.cwd(), `volumes/${body.id}`);
 
     try {
-      const info = await docker.getContainer(body.id).inspect().catch(() => null);
+      const info = await docker
+        .getContainer(body.id)
+        .inspect()
+        .catch(() => null);
       if (info?.State.Running) await stopContainer(body.id);
     } catch (err) {
       logger.warn(`could not stop container ${body.id}: ${err}`);
@@ -392,19 +467,28 @@ export async function handleContainerRestore(req: Request): Promise<Response> {
     return json({ success: true, message: 'backup restored successfully' });
   } catch (err) {
     logger.error(`error restoring backup for container ${body.id}`, err);
-    return json({ error: `failed to restore backup: ${err instanceof Error ? err.message : 'unknown error'}` }, 500);
+    return json(
+      {
+        error: `failed to restore backup: ${err instanceof Error ? err.message : 'unknown error'}`,
+      },
+      500,
+    );
   }
 }
 
 export async function handleContainerBackupDelete(req: Request): Promise<Response> {
   let body: { id?: string; backupId?: string };
-  try { body = await req.json() as typeof body; } catch { return json({ error: 'invalid json body' }, 400); }
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
   if (!body.id || !validateContainerId(body.id)) return json({ error: 'valid container ID required' }, 400);
   if (!body.backupId || typeof body.backupId !== 'string') return json({ error: 'backup ID is required' }, 400);
 
   const backupsDir = resolve(process.cwd(), 'backups', body.id);
-  const fullPath   = join(backupsDir, `${body.backupId}.tar.gz`);
-  if (!fullPath.startsWith(backupsDir + '/')) return json({ error: 'invalid backup ID' }, 400);
+  const fullPath = join(backupsDir, `${body.backupId}.tar.gz`);
+  if (!fullPath.startsWith(`${backupsDir}/`)) return json({ error: 'invalid backup ID' }, 400);
   if (!existsSync(fullPath)) return json({ error: 'backup not found' }, 404);
 
   try {
@@ -412,27 +496,32 @@ export async function handleContainerBackupDelete(req: Request): Promise<Respons
     return json({ message: 'backup deleted successfully' });
   } catch (err) {
     logger.error('error deleting backup', err);
-    return json({ error: `failed to delete backup: ${err instanceof Error ? err.message : 'unknown error'}` }, 500);
+    return json(
+      {
+        error: `failed to delete backup: ${err instanceof Error ? err.message : 'unknown error'}`,
+      },
+      500,
+    );
   }
 }
 
 export function handleContainerBackupDownload(req: Request): Response {
-  const params   = new URL(req.url).searchParams;
-  const id       = params.get('id');
+  const params = new URL(req.url).searchParams;
+  const id = params.get('id');
   const backupId = params.get('backupId');
 
   if (!id || !validateContainerId(id)) return json({ error: 'valid container ID required' }, 400);
   if (!backupId || typeof backupId !== 'string') return json({ error: 'backup ID is required' }, 400);
 
   const backupsDir = resolve(process.cwd(), 'backups', id);
-  const fullPath   = join(backupsDir, `${backupId}.tar.gz`);
-  if (!fullPath.startsWith(backupsDir + '/')) return json({ error: 'invalid backup ID' }, 400);
+  const fullPath = join(backupsDir, `${backupId}.tar.gz`);
+  if (!fullPath.startsWith(`${backupsDir}/`)) return json({ error: 'invalid backup ID' }, 400);
   if (!existsSync(fullPath)) return json({ error: 'backup not found' }, 404);
 
   // streams the file without loading it into memory — Bun handles this
   return new Response(Bun.file(fullPath), {
     headers: {
-      'Content-Type':        'application/octet-stream',
+      'Content-Type': 'application/octet-stream',
       'Content-Disposition': `attachment; filename="${backupId}.tar.gz"`,
     },
   });

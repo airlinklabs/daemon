@@ -1,11 +1,12 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // port of the original attach.ts
 // the only change: ws type is ServerWebSocket<WsData> not ws.WebSocket
 // readyState === 1 means OPEN in both
 
 import type { ServerWebSocket } from 'bun';
-import type { WsData } from './server';
 import { docker } from '../handlers/docker';
 import logger from '../logger';
+import type { WsData } from './server';
 
 export async function attachToContainer(id: string, ws: ServerWebSocket<WsData>): Promise<void> {
   try {
@@ -17,7 +18,7 @@ export async function attachToContainer(id: string, ws: ServerWebSocket<WsData>)
       follow: true,
       stdout: true,
       stderr: true,
-      tail:   100,
+      tail: 100,
     });
 
     logStream.on('data', (chunk: Buffer) => {
@@ -38,7 +39,9 @@ export async function attachToContainer(id: string, ws: ServerWebSocket<WsData>)
     // store a cleanup fn so wsClose can destroy the stream on disconnect
     // this prevents dockerode log streams from leaking when the panel disconnects
     (ws.data as WsData & { _logCleanup?: () => void })._logCleanup = () => {
-      try { (logStream as unknown as { destroy(): void }).destroy(); } catch {}
+      try {
+        (logStream as unknown as { destroy(): void }).destroy();
+      } catch {}
     };
 
     logger.debug(`attached to container ${id}`);

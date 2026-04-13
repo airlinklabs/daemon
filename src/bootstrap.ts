@@ -1,3 +1,4 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // this module runs its logic immediately when imported.
 // it must be the first import in app.ts so it runs before config.ts reads Bun.env.
 //
@@ -10,8 +11,8 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // bun --compile bundles these into the binary as static assets
-import envTemplate          from '../example.env'          with { type: 'text' };
-import defaultConfig        from '../storage/config.json';
+import envTemplate from '../example.env' with { type: 'text' };
+import defaultConfig from '../storage/config.json';
 import defaultFileSpecifier from '../storage/fileSpecifier.json';
 
 function parseEnv(content: string): Record<string, string> {
@@ -22,9 +23,8 @@ function parseEnv(content: string): Record<string, string> {
     const eq = trimmed.indexOf('=');
     if (eq === -1) continue;
     const key = trimmed.slice(0, eq).trim();
-    let val   = trimmed.slice(eq + 1).trim();
-    if ((val.startsWith('"') && val.endsWith('"')) ||
-        (val.startsWith("'") && val.endsWith("'"))) {
+    let val = trimmed.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
       val = val.slice(1, -1);
     }
     result[key] = val;

@@ -1,6 +1,7 @@
-import { generateCredential, revokeCredentialForContainer, getActiveSessionCount } from '../handlers/sftp';
-import { validateContainerId } from '../validation';
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
+import { generateCredential, getActiveSessionCount, revokeCredentialForContainer } from '../handlers/sftp';
 import logger from '../logger';
+import { validateContainerId } from '../validation';
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -11,17 +12,21 @@ function json(data: unknown, status = 200): Response {
 
 export async function handleSftpCreate(req: Request): Promise<Response> {
   let body: { id?: string };
-  try { body = await req.json() as typeof body; } catch { return json({ error: 'invalid json body' }, 400); }
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
   if (!body.id || typeof body.id !== 'string') return json({ error: 'container ID is required' }, 400);
   if (!validateContainerId(body.id)) return json({ error: 'invalid container ID format' }, 400);
 
   try {
     const cred = await generateCredential(body.id);
     return json({
-      username:  cred.username,
-      password:  cred.password,
-      host:      cred.host,
-      port:      cred.port,
+      username: cred.username,
+      password: cred.password,
+      host: cred.host,
+      port: cred.port,
       expiresAt: cred.expiresAt,
     });
   } catch (err) {
@@ -33,7 +38,11 @@ export async function handleSftpCreate(req: Request): Promise<Response> {
 
 export async function handleSftpRevoke(req: Request): Promise<Response> {
   let body: { id?: string };
-  try { body = await req.json() as typeof body; } catch { return json({ error: 'invalid json body' }, 400); }
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
   if (!body.id || typeof body.id !== 'string') return json({ error: 'container ID is required' }, 400);
   if (!validateContainerId(body.id)) return json({ error: 'invalid container ID format' }, 400);
 

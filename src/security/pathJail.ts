@@ -1,10 +1,11 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // replaces the C addons that did openat/renameat. we get the same security
 // guarantees by resolving symlinks and checking the result stays inside the
 // volume dir. not as low-level but works cross-platform and doesn't need gcc.
 
 import { realpathSync } from 'node:fs';
-import { rename }       from 'node:fs/promises';
-import { join, resolve, sep, dirname, basename } from 'node:path';
+import { rename } from 'node:fs/promises';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 
 // throws if resolvedPath escapes base. returns the safe resolved path.
 export function jailPath(base: string, relative: string): string {
@@ -41,12 +42,15 @@ export function jailPath(base: string, relative: string): string {
 
 // safe rename: validates both src and dest are inside base before renaming
 export async function jailRename(base: string, oldRel: string, newRel: string): Promise<void> {
-  const safeSrc  = jailPath(base, oldRel);
+  const safeSrc = jailPath(base, oldRel);
   const safeDest = jailPath(base, newRel);
 
   // make sure dest parent exists
   const destParent = dirname(safeDest);
-  await Bun.spawn(['mkdir', '-p', destParent], { stdout: 'pipe', stderr: 'pipe' }).exited;
+  await Bun.spawn(['mkdir', '-p', destParent], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  }).exited;
 
   await rename(safeSrc, safeDest);
 }

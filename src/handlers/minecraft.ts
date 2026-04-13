@@ -1,15 +1,26 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import { MinecraftServerListPing } from 'minecraft-status';
-import logger from '../logger';
 
 // these error codes all mean the server isn't ready to answer yet
 // not real errors — return empty response rather than 500
 const TRANSIENT_CODES = new Set([
-  'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH',
-  'ENETUNREACH', 'ENOTFOUND', 'ENOTCONN', 'EPIPE', 'ECONNABORTED',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'ENOTCONN',
+  'EPIPE',
+  'ECONNABORTED',
 ]);
 
 export function isTransientError(error: unknown): boolean {
-  const err = error as { code?: string; cause?: { code?: string }; message?: string };
+  const err = error as {
+    code?: string;
+    cause?: { code?: string };
+    message?: string;
+  };
   const code = err?.code || err?.cause?.code || '';
   if (TRANSIENT_CODES.has(code)) return true;
   const msg = (err?.message || '').toLowerCase();
@@ -21,15 +32,19 @@ export async function fetchMinecraftPlayers(
   port: number,
   timeout = 5000,
 ): Promise<{
-  players:       { name: string; uuid: string }[];
-  maxPlayers:    number;
+  players: { name: string; uuid: string }[];
+  maxPlayers: number;
   onlinePlayers: number;
-  description:   string;
-  version:       string;
-  online:        boolean;
+  description: string;
+  version: string;
+  online: boolean;
 }> {
-  const response = await MinecraftServerListPing.ping(4, host, port, timeout) as {
-    players?: { max?: number; online?: number; sample?: { name: string; id: string }[] };
+  const response = (await MinecraftServerListPing.ping(4, host, port, timeout)) as {
+    players?: {
+      max?: number;
+      online?: number;
+      sample?: { name: string; id: string }[];
+    };
     description?: string | { text?: string };
     version?: { name?: string };
   };
@@ -44,10 +59,10 @@ export async function fetchMinecraftPlayers(
 
   return {
     players,
-    maxPlayers:    response.players?.max    ?? 0,
+    maxPlayers: response.players?.max ?? 0,
     onlinePlayers: response.players?.online ?? 0,
     description,
-    version:  response.version?.name ?? '',
-    online:   true,
+    version: response.version?.name ?? '',
+    online: true,
   };
 }

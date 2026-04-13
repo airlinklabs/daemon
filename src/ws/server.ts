@@ -1,23 +1,23 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import type { ServerWebSocket } from 'bun';
-import { attachToContainer } from './attach';
-import { startStatusPolling, stopStatusPolling } from './status';
-import { subscribe } from './events';
-import { sendCommandToContainer } from '../handlers/docker';
-import { validateContainerId } from '../validation';
 import config from '../config';
+import { sendCommandToContainer } from '../handlers/docker';
 import logger from '../logger';
+import { attachToContainer } from './attach';
+import { subscribe } from './events';
+import { startStatusPolling, stopStatusPolling } from './status';
 
 export type WsData = {
-  route:       'container' | 'containerstatus' | 'containerevents';
+  route: 'container' | 'containerstatus' | 'containerevents';
   containerId: string;
-  authed:      boolean;
-  timer?:      ReturnType<typeof setInterval>;
-  unsub?:      () => void;
+  authed: boolean;
+  timer?: ReturnType<typeof setInterval>;
+  unsub?: () => void;
   _logCleanup?: () => void;
 };
 
 let openWsCount = 0;
-const MAX_WS    = 500;
+const MAX_WS = 500;
 
 export const openConnections = new Set<ServerWebSocket<WsData>>();
 
@@ -41,7 +41,7 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
     return;
   }
 
-  if (!msg || !msg.event) {
+  if (!msg?.event) {
     ws.send(JSON.stringify({ error: 'missing event field' }));
     return;
   }
@@ -54,6 +54,7 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
       return;
     }
     ws.data.authed = true;
+    ws.send(JSON.stringify({ event: 'auth', status: 'ok' }));
 
     // start the appropriate subscription now that we're authed
     if (ws.data.route === 'container') {
@@ -62,7 +63,7 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
       ws.data.timer = startStatusPolling(ws.data.containerId, ws);
     } else if (ws.data.route === 'containerevents') {
       ws.data.unsub = subscribe(ws.data.containerId, (event) => {
-        if (ws.readyState === 1) ws.send(JSON.stringify({ event: 'lifecycle', data: event }));
+        if (ws.readyState === 1) ws.send(JSON.stringify(event));
       });
     }
     return;
@@ -83,7 +84,7 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
       return;
     }
     // fire and forget — same as the original
-    sendCommandToContainer(ws.data.containerId, msg.command).catch(err => {
+    sendCommandToContainer(ws.data.containerId, msg.command).catch((err) => {
       logger.error(`command send failed for ${ws.data.containerId}`, err);
     });
     return;
@@ -104,9 +105,6 @@ export function wsClose(ws: ServerWebSocket<WsData>, code: number, _reason: stri
 }
 
 // builds the data object attached to each WS upgrade
-export function buildWsData(
-  route: 'container' | 'containerstatus' | 'containerevents',
-  containerId: string,
-): WsData {
+export function buildWsData(route: 'container' | 'containerstatus' | 'containerevents', containerId: string): WsData {
   return { route, containerId, authed: false };
 }

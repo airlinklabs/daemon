@@ -1,98 +1,131 @@
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
+import { createHmac } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { Worker } from 'worker_threads';
-import { guiHtml } from './html';
+import { join, resolve } from 'node:path';
 import config from '../config';
+import { guiHtml } from './html';
 
-// spawns the server as a background Worker thread.
-// eval:true passes source code directly, avoiding path resolution
-// inside compiled executables where import.meta.url points to a
-// virtual B:\~BUN path that new Worker() cannot resolve.
-function spawnServerWorker(): Worker {
-  const resolved = import.meta.resolve('../server.ts');
-  return new Worker(`import '${resolved}';`, {
-    eval: true,
-    env: { ...process.env, DAEMON_WORKER_MODE: '1' },
+function signRequest(key: string, method: string, path: string, ts: number): string {
+  const payload = `${ts}:${method}:${path}:`;
+  return createHmac('sha256', key).update(payload).digest('hex');
+}
+
+async function authenticatedGet(path: string): Promise<Response> {
+  const ts = Math.floor(Date.now() / 1000);
+  const sig = signRequest(config.key, 'GET', path, ts);
+  const basicAuth = btoa(`Airlink:${config.key}`);
+  return fetch(`http://localhost:${config.port}${path}`, {
+    headers: {
+      Authorization: `Basic ${basicAuth}`,
+      'X-Airlink-Timestamp': String(ts),
+      'X-Airlink-Signature': sig,
+    },
   });
 }
 
-function parseLogLine(raw: string): { time: string; level: string; msg: string } | null {
-  const m = raw.match(/^\[(\d+:\d+:\d+)\] (\w+)\s*: (.*)/);
-  if (!m) return null;
-  return { time: m[1], level: m[2].toLowerCase().trim(), msg: m[3] };
+function spawnServerProcess(): ReturnType<typeof Bun.spawn> {
+  return Bun.spawn([process.execPath, '--no-gui'], {
+    stdout: 'inherit',
+    stderr: 'inherit',
+    env: { ...process.env, DAEMON_WORKER_MODE: '1' },
+    cwd: process.cwd(),
+  });
 }
 
-// returns true if the GUI launched successfully, false if webview-bun isn't available
 export async function runGui(): Promise<boolean> {
-  // dynamic import so a missing native lib doesn't crash headless starts
   let Webview: { new (debug: boolean): any };
-  let SizeHint: { NONE: number };
+  let SizeHint: any;
 
   try {
     const mod = await import('webview-bun');
-    Webview   = mod.Webview;
-    SizeHint  = mod.SizeHint ?? { NONE: 0 };
+    Webview = mod.Webview;
+    SizeHint = mod.SizeHint ?? { NONE: 0 };
   } catch (err) {
-    process.stderr.write(`[gui] webview-bun failed to load — falling back to headless\n[gui] reason: ${err}\n`);
+    process.stderr.write(`[gui] webview-bun unavailable — falling back to headless\n[gui] reason: ${err}\n`);
     return false;
   }
 
-  let daemonWorker: Worker | null = spawnServerWorker();
+  let daemonProc: ReturnType<typeof Bun.spawn> | null = spawnServerProcess();
 
-  // wait for the server worker to signal it has bound the port before navigating.
-  // falls back after 3s so a slow start or a crash doesn't hang the window forever.
-  await new Promise<void>(resolve => {
-    const timeout = setTimeout(resolve, 3000);
+  await new Promise<void>((resolve) => setTimeout(resolve, 2500));
 
-    function handler(data: any) {
-      if (data?.type === 'ready') {
-        clearTimeout(timeout);
-        daemonWorker!.off('message', handler);
-        resolve();
-      }
-    }
-
-    daemonWorker!.on('message', handler);
-  });
-
-  // write HTML to a temp file so the WebView doesn't hit data: URL size limits
   const htmlPath = join(tmpdir(), 'airlinkd-gui.html');
-  writeFileSync(htmlPath, guiHtml, 'utf-8');
+  try {
+    writeFileSync(htmlPath, guiHtml, 'utf-8');
+  } catch (err) {
+    process.stderr.write(`[gui] failed to write temp html: ${err}\n`);
+    daemonProc?.kill();
+    return false;
+  }
 
   let wv: any;
   try {
     wv = new Webview(false);
   } catch (err) {
-    process.stderr.write(`[gui] failed to create webview window — falling back to headless\n[gui] reason: ${err}\n`);
-    process.stderr.write('[gui] on Windows, make sure the WebView2 runtime is installed:\n');
-    process.stderr.write('[gui] https://developer.microsoft.com/en-us/microsoft-edge/webview2/\n');
-    daemonWorker?.terminate();
+    process.stderr.write(`[gui] failed to create webview — falling back to headless\n[gui] reason: ${err}\n`);
+    if (process.platform === 'win32') {
+      process.stderr.write(
+        '[gui] install WebView2 runtime: https://developer.microsoft.com/en-us/microsoft-edge/webview2/\n',
+      );
+    } else {
+      process.stderr.write('[gui] on Linux, install: libwebkit2gtk-4.0 or libwebkit2gtk-4.1\n');
+    }
+    daemonProc?.kill();
     return false;
   }
 
-  wv.title  = 'Airlink Daemon';
-  wv.size   = { width: 960, height: 620, hint: SizeHint.NONE };
-  // pass port in the query string so the JS can pick it up
+  wv.title = 'Airlink Daemon';
+  wv.size = { width: 960, height: 620, hint: SizeHint.NONE };
   wv.navigate(`file://${htmlPath}?${config.port}`);
 
+  wv.bind('fetchStats', async () => {
+    try {
+      const [rootRes, statsRes] = await Promise.all([
+        authenticatedGet('/'),
+        authenticatedGet('/stats'),
+      ]);
+      if (!rootRes.ok || !statsRes.ok) {
+        return JSON.stringify({ ok: false });
+      }
+      const root = await rootRes.json();
+      const stats = await statsRes.json();
+      return JSON.stringify({ ok: true, root, stats });
+    } catch {
+      return JSON.stringify({ ok: false });
+    }
+  });
+
   wv.bind('stopDaemon', () => {
-    if (!daemonWorker) return JSON.stringify({ ok: false });
-    daemonWorker.terminate();
-    daemonWorker = null;
+    if (!daemonProc) return JSON.stringify({ ok: false, reason: 'not running' });
+    try {
+      daemonProc.kill();
+    } catch {
+      /* already dead */
+    }
+    daemonProc = null;
     return JSON.stringify({ ok: true });
   });
 
   wv.bind('startDaemon', () => {
-    if (daemonWorker) return JSON.stringify({ ok: false, reason: 'already running' });
-    daemonWorker = spawnServerWorker();
-    return JSON.stringify({ ok: true });
+    if (daemonProc) return JSON.stringify({ ok: false, reason: 'already running' });
+    try {
+      daemonProc = spawnServerProcess();
+      return JSON.stringify({ ok: true });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: String(err) });
+    }
   });
 
-  // the WebView JS polls this instead of receiving pushed events,
-  // avoiding cross-thread event loop conflicts with webview.run()
+  wv.bind('getDaemonStatus', () => {
+    if (!daemonProc) return JSON.stringify({ running: false });
+    const exited = daemonProc.exitCode !== null;
+    if (exited) daemonProc = null;
+    return JSON.stringify({ running: !exited });
+  });
+
   wv.bind('pollLogs', (sinceStr: string) => {
-    const since   = parseInt(sinceStr, 10) || 0;
+    const since = parseInt(sinceStr, 10) || 0;
     const logPath = join(process.cwd(), 'logs/combined.log');
     try {
       if (!existsSync(logPath)) return JSON.stringify({ lines: [], next: 0 });
@@ -104,28 +137,38 @@ export async function runGui(): Promise<boolean> {
   });
 
   wv.bind('listFiles', (pathArg: string) => {
-    const cwd     = process.cwd();
-    const target  = resolve(cwd, pathArg || '.');
-    // path jail: never escape the working directory
+    const cwd = process.cwd();
+    const target = resolve(cwd, pathArg || '.');
     if (!target.startsWith(cwd)) return JSON.stringify([]);
     try {
       const entries = readdirSync(target, { withFileTypes: true });
-      return JSON.stringify(entries.map(e => ({
-        name:  e.name,
-        isDir: e.isDirectory(),
-        size:  e.isFile()
-          ? (() => { try { return statSync(join(target, e.name)).size; } catch { return 0; } })()
-          : null,
-      })));
+      return JSON.stringify(
+        entries.map((e) => ({
+          name: e.name,
+          isDir: e.isDirectory(),
+          size: e.isFile()
+            ? (() => {
+                try {
+                  return statSync(join(target, e.name)).size;
+                } catch {
+                  return 0;
+                }
+              })()
+            : null,
+        })),
+      );
     } catch {
       return JSON.stringify([]);
     }
   });
 
-  wv.run(); // blocks until the window is closed
+  wv.run();
 
-  // clean up after window closes
-  daemonWorker?.terminate();
+  try {
+    daemonProc?.kill();
+  } catch {
+    /* already dead */
+  }
 
   return true;
 }

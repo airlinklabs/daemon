@@ -1,19 +1,21 @@
-import { cpus, totalmem, freemem } from 'node:os';
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
+
 import { existsSync, readFileSync } from 'node:fs';
 import { rename } from 'node:fs/promises';
+import { cpus, freemem, totalmem } from 'node:os';
 import { join } from 'node:path';
 import logger from '../logger';
 
-const storagePath     = join(process.cwd(), 'storage/systemStats.json');
+const storagePath = join(process.cwd(), 'storage/systemStats.json');
 const tempStoragePath = join(process.cwd(), 'storage/systemStats.tmp.json');
-const maxAge          = 30 * 60 * 1000;
+const maxAge = 30 * 60 * 1000;
 
 interface SystemStat {
   timestamp: string;
-  RamMax:    string;
-  Ram:       string;
-  CoresMax:  number;
-  Cores:     string;
+  RamMax: string;
+  Ram: string;
+  CoresMax: number;
+  Cores: string;
 }
 
 let statsLog: SystemStat[] = [];
@@ -22,7 +24,7 @@ let statsLog: SystemStat[] = [];
 // sample cpu times, wait 100ms, sample again, compute delta
 function getCpuPercent(): Promise<number> {
   const before = cpus();
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     setTimeout(() => {
       const after = cpus();
       let totalIdle = 0;
@@ -32,8 +34,9 @@ function getCpuPercent(): Promise<number> {
         const b = before[i].times;
         const a = after[i].times;
         const dIdle = a.idle - b.idle;
-        const dTick = (Object.values(a) as number[]).reduce((s, v) => s + v, 0)
-                    - (Object.values(b) as number[]).reduce((s, v) => s + v, 0);
+        const dTick =
+          (Object.values(a) as number[]).reduce((s, v) => s + v, 0) -
+          (Object.values(b) as number[]).reduce((s, v) => s + v, 0);
         totalIdle += dIdle;
         totalTick += dTick;
       }
@@ -45,24 +48,24 @@ function getCpuPercent(): Promise<number> {
 }
 
 export async function getCurrentStats(): Promise<SystemStat> {
-  const timestamp   = new Date().toISOString();
+  const timestamp = new Date().toISOString();
   const totalMemory = totalmem() / (1024 * 1024);
-  const freeMemory  = freemem() / (1024 * 1024);
-  const usedMemory  = totalMemory - freeMemory;
-  const cpuUsage    = await getCpuPercent();
+  const freeMemory = freemem() / (1024 * 1024);
+  const usedMemory = totalMemory - freeMemory;
+  const cpuUsage = await getCpuPercent();
 
   return {
     timestamp,
-    RamMax:   `${totalMemory.toFixed(2)} MB`,
-    Ram:      `${usedMemory.toFixed(2)} MB`,
+    RamMax: `${totalMemory.toFixed(2)} MB`,
+    Ram: `${usedMemory.toFixed(2)} MB`,
     CoresMax: cpus().length,
-    Cores:    `${(cpuUsage * 100).toFixed(2)}%`,
+    Cores: `${(cpuUsage * 100).toFixed(2)}%`,
   };
 }
 
 function cleanOldEntries(): void {
   const now = Date.now();
-  statsLog = statsLog.filter(e => now - new Date(e.timestamp).getTime() <= maxAge);
+  statsLog = statsLog.filter((e) => now - new Date(e.timestamp).getTime() <= maxAge);
 }
 
 export function saveStats(stats: SystemStat): void {
@@ -77,7 +80,7 @@ export function saveStats(stats: SystemStat): void {
   // write to temp, then rename — same atomicity guarantee as before
   Bun.write(tempStoragePath, JSON.stringify(statsLog, null, 2))
     .then(() => rename(tempStoragePath, storagePath))
-    .catch(err => logger.error('failed to write stats file', err));
+    .catch((err) => logger.error('failed to write stats file', err));
 }
 
 export function getTotalStats(): SystemStat[] {
@@ -98,7 +101,7 @@ export function initStatsCollection(): void {
   // load existing stats from disk
   if (existsSync(storagePath)) {
     try {
-      const data   = readFileSync(storagePath, 'utf8').trim();
+      const data = readFileSync(storagePath, 'utf8').trim();
       if (data) {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed)) {

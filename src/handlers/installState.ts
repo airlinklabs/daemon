@@ -1,3 +1,4 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import { join } from 'node:path';
 
 const logsPath = join(process.cwd(), 'storage/install_logs.json');

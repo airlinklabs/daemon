@@ -1,36 +1,35 @@
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import crypto from 'node:crypto';
-import { resolve, join } from 'node:path';
-import { existsSync, chownSync } from 'node:fs';
+import { chownSync, existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+import config from '../config';
 import logger from '../logger';
 import { docker } from './docker';
-import config from '../config';
 
 export interface SftpCredential {
-  username:  string;
-  password:  string;
-  host:      string;
-  port:      number;
+  username: string;
+  password: string;
+  host: string;
+  port: number;
   expiresAt: number;
 }
 
 interface ActiveSession {
-  containerId:       string;
-  username:          string;
+  containerId: string;
+  username: string;
   sftpContainerName: string;
-  port:              number;
-  expiresAt:         number;
-  timer:             ReturnType<typeof setTimeout>;
+  port: number;
+  expiresAt: number;
+  timer: ReturnType<typeof setTimeout>;
 }
 
-const SESSION_TTL_MS  = 24 * 60 * 60 * 1000;
-const SFTP_IMAGE      = 'atmoz/sftp';
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const SFTP_IMAGE = 'atmoz/sftp';
 const SFTP_USER_PREFIX = 'alsftp_';
 const PORT_RANGE_START = 3003;
-const PORT_RANGE_END   = 4000;
+const PORT_RANGE_END = 4000;
 
-const BLOCKED_PORTS = new Set([
-  3000, 3001, 3002, 3003, 3306, 3389, 4000, 5432, 5900, 6379, 8080, 8443, 8888,
-]);
+const BLOCKED_PORTS = new Set([3000, 3001, 3002, 3003, 3306, 3389, 4000, 5432, 5900, 6379, 8080, 8443, 8888]);
 
 const activeSessions = new Map<string, ActiveSession>();
 
@@ -50,7 +49,11 @@ function generatePassword(): string {
 // check if a port is free by trying to bind it — Bun.listen throws if busy
 async function portIsBusy(port: number): Promise<boolean> {
   try {
-    const server = Bun.listen({ hostname: '0.0.0.0', port, socket: { data() {} } });
+    const server = Bun.listen({
+      hostname: '0.0.0.0',
+      port,
+      socket: { data() {} },
+    });
     server.stop(true);
     return false;
   } catch {
@@ -96,19 +99,21 @@ async function startSftpContainer(
 ): Promise<void> {
   try {
     await docker.getContainer(containerName).remove({ force: true });
-  } catch { /* didn't exist, fine */ }
+  } catch {
+    /* didn't exist, fine */
+  }
 
   // atmoz/sftp requires the upload dir to be owned by the user (uid 1000)
   chownSync(volumePath, 1000, 1000);
 
   const container = await docker.createContainer({
-    name:  containerName,
+    name: containerName,
     Image: SFTP_IMAGE,
-    Cmd:   [`${username}:${password}:::upload`],
+    Cmd: [`${username}:${password}:::upload`],
     HostConfig: {
-      Binds:        [`${volumePath}:/home/${username}/upload`],
+      Binds: [`${volumePath}:/home/${username}/upload`],
       PortBindings: { '22/tcp': [{ HostPort: String(port) }] },
-      AutoRemove:   true,
+      AutoRemove: true,
     },
   });
 
@@ -118,7 +123,9 @@ async function startSftpContainer(
 async function stopSftpContainer(containerName: string): Promise<void> {
   try {
     await docker.getContainer(containerName).stop({ t: 3 });
-  } catch { /* already gone */ }
+  } catch {
+    /* already gone */
+  }
 }
 
 export async function generateCredential(containerId: string): Promise<SftpCredential> {
@@ -132,17 +139,24 @@ export async function generateCredential(containerId: string): Promise<SftpCrede
 
   await pullSftpImage();
 
-  const port              = await allocatePort();
-  const username          = generateUsername(containerId);
-  const password          = generatePassword();
+  const port = await allocatePort();
+  const username = generateUsername(containerId);
+  const password = generatePassword();
   const sftpContainerName = `alsftp_${containerId}`;
-  const expiresAt         = Date.now() + SESSION_TTL_MS;
+  const expiresAt = Date.now() + SESSION_TTL_MS;
 
   await startSftpContainer(sftpContainerName, username, password, volumePath, port);
 
   const timer = setTimeout(() => revokeCredential(sessionKey), SESSION_TTL_MS);
 
-  activeSessions.set(sessionKey, { containerId, username, sftpContainerName, port, expiresAt, timer });
+  activeSessions.set(sessionKey, {
+    containerId,
+    username,
+    sftpContainerName,
+    port,
+    expiresAt,
+    timer,
+  });
 
   const host = config.remote;
   logger.info(`SFTP session started for container ${containerId}: user=${username} port=${port}`);
@@ -170,9 +184,12 @@ export function getActiveSessionCount(): number {
 }
 
 // clean up expired sessions every hour — belt and braces on top of the per-session timer
-setInterval(async () => {
-  const now = Date.now();
-  for (const [key, session] of activeSessions.entries()) {
-    if (session.expiresAt <= now) await revokeCredential(key);
-  }
-}, 60 * 60 * 1000);
+setInterval(
+  async () => {
+    const now = Date.now();
+    for (const [key, session] of activeSessions.entries()) {
+      if (session.expiresAt <= now) await revokeCredential(key);
+    }
+  },
+  60 * 60 * 1000,
+);

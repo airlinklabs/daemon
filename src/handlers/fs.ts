@@ -1,18 +1,23 @@
-import { resolve, join, dirname, extname, basename } from 'node:path';
-import { readdir, lstat, stat, readFile, writeFile, unlink, rm, appendFile, mkdir } from 'node:fs/promises';
+// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
+
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { appendFile, lstat, mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { dirname, extname, join, resolve } from 'node:path';
+import logger from '../logger';
 import { jailPath, jailRename } from '../security/pathJail';
 import fileSpecifier from '../utils/fileSpecifier';
-import logger from '../logger';
 
 // per-container cache to avoid hammering the filesystem on every list request
-const listCache = new Map<string, {
-  lastRequest: number;
-  count: number;
-  cache: unknown;
-  path: string;
-}>();
+const listCache = new Map<
+  string,
+  {
+    lastRequest: number;
+    count: number;
+    cache: unknown;
+    path: string;
+  }
+>();
 
 async function getDirSize(dir: string, depth = 0): Promise<number> {
   if (depth > 20) return 0;
@@ -27,9 +32,13 @@ async function getDirSize(dir: string, depth = 0): Promise<number> {
         if (s.isSymbolicLink()) continue;
         if (s.isDirectory()) total += await getDirSize(full, depth + 1);
         else total += s.size;
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     }
-  } catch { /* skip */ }
+  } catch {
+    /* skip */
+  }
   return total;
 }
 
@@ -37,7 +46,12 @@ export async function listDir(id: string, relativePath = '/', filter?: string): 
   const now = Date.now();
 
   if (!listCache.has(id)) {
-    listCache.set(id, { lastRequest: now, count: 0, cache: null, path: relativePath });
+    listCache.set(id, {
+      lastRequest: now,
+      count: 0,
+      cache: null,
+      path: relativePath,
+    });
   }
 
   const rateData = listCache.get(id)!;
@@ -66,29 +80,33 @@ export async function listDir(id: string, relativePath = '/', filter?: string): 
 
   const results = await Promise.all(
     entries.map(async (dirent) => {
-      const ext      = extname(dirent.name).substring(1);
+      const ext = extname(dirent.name).substring(1);
       const category = await fileSpecifier.getCategory(ext);
-      const full     = join(targetDirectory, dirent.name);
+      const full = join(targetDirectory, dirent.name);
 
       let size: number;
       if (dirent.isDirectory()) {
         size = await getDirSize(full);
       } else {
-        try { size = (await stat(full)).size; } catch { size = 0; }
+        try {
+          size = (await stat(full)).size;
+        } catch {
+          size = 0;
+        }
       }
 
       return {
-        name:      dirent.name,
-        type:      dirent.isDirectory() ? 'directory' : 'file',
+        name: dirent.name,
+        type: dirent.isDirectory() ? 'directory' : 'file',
         extension: dirent.isDirectory() ? null : ext,
-        category:  dirent.isDirectory() ? null : category,
+        category: dirent.isDirectory() ? null : category,
         size,
       };
-    })
+    }),
   );
 
   const limited = results.slice(0, 256);
-  const filtered = filter ? limited.filter(i => i.name.includes(filter)) : limited;
+  const filtered = filter ? limited.filter((i) => i.name.includes(filter)) : limited;
   rateData.cache = filtered;
   return filtered;
 }
@@ -114,7 +132,6 @@ export async function getFileContent(id: string, relativePath = '/'): Promise<st
 
 export async function writeFileContent(id: string, relativePath: string, content: string | Buffer): Promise<void> {
   const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
-  await mkdir(baseDirectory, { recursive: true });
   const filePath = jailPath(baseDirectory, relativePath);
   await mkdir(dirname(filePath), { recursive: true });
   if (typeof content === 'string') await writeFile(filePath, content, 'utf-8');
@@ -149,7 +166,12 @@ export async function renameFile(id: string, oldPath: string, newPath: string): 
 }
 
 // download a file from a URL into the container volume
-export async function downloadToVolume(id: string, url: string, relativePath: string, env?: Record<string, string>): Promise<void> {
+export async function downloadToVolume(
+  id: string,
+  url: string,
+  relativePath: string,
+  env?: Record<string, string>,
+): Promise<void> {
   const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
   const filePath = jailPath(baseDirectory, relativePath);
 
@@ -194,11 +216,7 @@ export async function copyIntoVolume(id: string, sourcePath: string, destRelativ
     await mkdir(destPath, { recursive: true });
     const entries = await readdir(sourcePath, { withFileTypes: true });
     for (const e of entries) {
-      await copyIntoVolume(
-        id,
-        join(sourcePath, e.name),
-        join(destRelative, e.name),
-      );
+      await copyIntoVolume(id, join(sourcePath, e.name), join(destRelative, e.name));
     }
   } else {
     await mkdir(dirname(destPath), { recursive: true });
@@ -212,10 +230,10 @@ export async function zipPaths(id: string, filePaths: string[], zipname: string)
   const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
 
   const files = filePaths
-    .flatMap(f => (typeof f === 'string' ? f.split(',').map(s => s.trim()) : [f]))
-    .map(f => ({
+    .flatMap((f) => (typeof f === 'string' ? f.split(',').map((s) => s.trim()) : [f]))
+    .map((f) => ({
       cleanPath: f.replace(/[[\]"']/g, '').trim(),
-      fullPath:  join(baseDirectory, f.replace(/[[\]"']/g, '').trim()),
+      fullPath: join(baseDirectory, f.replace(/[[\]"']/g, '').trim()),
     }));
 
   const firstFileDir = dirname(files[0].fullPath);
@@ -228,14 +246,26 @@ export async function zipPaths(id: string, filePaths: string[], zipname: string)
   try {
     for (const { cleanPath, fullPath } of files) {
       const dest = join(staging, cleanPath);
-      await Bun.spawn(['mkdir', '-p', dirname(dest)], { stdout: 'pipe', stderr: 'pipe' }).exited;
-      await Bun.spawn(['cp', '-r', fullPath, dest], { stdout: 'pipe', stderr: 'pipe' }).exited;
+      await Bun.spawn(['mkdir', '-p', dirname(dest)], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }).exited;
+      await Bun.spawn(['cp', '-r', fullPath, dest], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }).exited;
     }
 
-    const proc = Bun.spawn(['zip', '-r', '-9', zipPath, '.'], { cwd: staging, stdout: 'pipe', stderr: 'pipe' });
+    const proc = Bun.spawn(['zip', '-r', '-9', zipPath, '.'], {
+      cwd: staging,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
     const code = await proc.exited;
     if (code !== 0) {
-      const err = await (proc.stderr instanceof ReadableStream ? new Response(proc.stderr).text() : Promise.resolve(""));
+      const err = await (proc.stderr instanceof ReadableStream
+        ? new Response(proc.stderr).text()
+        : Promise.resolve(''));
       throw new Error(`zip failed (exit ${code}): ${err}`);
     }
   } finally {
@@ -248,8 +278,8 @@ export async function zipPaths(id: string, filePaths: string[], zipname: string)
 // unzip an archive inside a container volume using system unzip or tar
 export async function unzipPath(id: string, relativePath: string, zipname: string): Promise<void> {
   const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
-  const archivePath   = join(baseDirectory, relativePath, zipname);
-  const extractPath   = dirname(archivePath);
+  const archivePath = join(baseDirectory, relativePath, zipname);
+  const extractPath = dirname(archivePath);
 
   if (!existsSync(archivePath)) throw new Error(`file not found: ${archivePath}`);
 
@@ -257,22 +287,37 @@ export async function unzipPath(id: string, relativePath: string, zipname: strin
   let proc: ReturnType<typeof Bun.spawn>;
 
   if (ext === '.zip') {
-    proc = Bun.spawn(['unzip', '-o', archivePath, '-d', extractPath], { stdout: 'pipe', stderr: 'pipe' });
+    proc = Bun.spawn(['unzip', '-o', archivePath, '-d', extractPath], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
   } else if (ext === '.tar') {
-    proc = Bun.spawn(['tar', '-xf', archivePath, '-C', extractPath], { stdout: 'pipe', stderr: 'pipe' });
+    proc = Bun.spawn(['tar', '-xf', archivePath, '-C', extractPath], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
   } else if (ext === '.gz' || ext === '.tgz') {
-    proc = Bun.spawn(['tar', '-xzf', archivePath, '-C', extractPath], { stdout: 'pipe', stderr: 'pipe' });
+    proc = Bun.spawn(['tar', '-xzf', archivePath, '-C', extractPath], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
   } else if (ext === '.rar') {
-    proc = Bun.spawn(['unrar', 'x', archivePath, extractPath], { stdout: 'pipe', stderr: 'pipe' });
+    proc = Bun.spawn(['unrar', 'x', archivePath, extractPath], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
   } else if (ext === '.7z') {
-    proc = Bun.spawn(['7z', 'x', archivePath, `-o${extractPath}`], { stdout: 'pipe', stderr: 'pipe' });
+    proc = Bun.spawn(['7z', 'x', archivePath, `-o${extractPath}`], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
   } else {
     throw new Error(`unsupported archive type: ${ext}`);
   }
 
   const code = await proc.exited;
   if (code !== 0) {
-    const err = await (proc.stderr instanceof ReadableStream ? new Response(proc.stderr).text() : Promise.resolve(""));
+    const err = await (proc.stderr instanceof ReadableStream ? new Response(proc.stderr).text() : Promise.resolve(''));
     throw new Error(`extraction failed (exit ${code}): ${err}`);
   }
 }
