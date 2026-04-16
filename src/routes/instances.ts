@@ -417,7 +417,17 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
     const size = statSync(backupPath).size;
     logger.debug(`backup created: ${backupPath} (${size} bytes)`);
 
-    return json({ message: 'backup created successfully', backupId, fileName });
+    return json({
+      success: true,
+      message: 'backup created successfully',
+      backup: {
+        uuid: backupId,
+        filePath: `${body.id}/${fileName}`,
+        size,
+      },
+      backupId,
+      fileName,
+    });
   } catch (err) {
     logger.error(`error creating backup for container ${body.id}`, err);
     return json(

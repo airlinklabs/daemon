@@ -14,6 +14,18 @@ const targets = [
   },
 ];
 
+console.log('checking TypeScript...');
+const tscProc = Bun.spawn(['bunx', 'tsc', '--noEmit'], {
+  stdout: 'inherit',
+  stderr: 'inherit',
+});
+const tscCode = await tscProc.exited;
+if (tscCode !== 0) {
+  console.error('TypeScript check failed');
+  process.exit(1);
+}
+console.log('TypeScript check passed');
+
 await Bun.spawn(['mkdir', '-p', 'dist'], {
   stdout: 'inherit',
   stderr: 'inherit',

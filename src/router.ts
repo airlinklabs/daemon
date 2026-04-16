@@ -115,6 +115,28 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
   const behindProxy = Bun.env.BEHIND_PROXY === 'true';
   const effectiveIp = behindProxy ? (req.headers.get('x-forwarded-for')?.split(',')[0].trim() ?? socketIp) : socketIp;
 
+  // /healthz and /gui/stats are unauthenticated — only accessible from localhost
+  // the GUI uses these to poll daemon status without needing the key
+  if (key === 'GET /healthz' || key === 'GET /gui/stats') {
+    const isLocalhost = socketIp === '127.0.0.1' || socketIp === '::1' || socketIp === 'localhost';
+    if (!isLocalhost) {
+      return withSecurityHeaders(new Response(JSON.stringify({ error: 'local only' }), { status: 403 }));
+    }
+    if (key === 'GET /healthz') {
+      return withSecurityHeaders(
+        new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }),
+      );
+    }
+    const { handleRoot, handleStats } = await import('./routes/core');
+    const rootResp = await handleRoot(req);
+    const statsResp = await handleStats(req);
+    const root = (await rootResp.json()) as Record<string, unknown>;
+    const stats = (await statsResp.json()) as Record<string, unknown>;
+    return withSecurityHeaders(
+      new Response(JSON.stringify({ ...root, ...stats }), { headers: { 'Content-Type': 'application/json' } }),
+    );
+  }
+
   // security chain — runs on every request, no exceptions
   const ipErr = getAllowedIpCheck(effectiveIp);
   if (ipErr) return withSecurityHeaders(ipErr);

@@ -38,7 +38,8 @@ export async function verifyHmac(req: Request, key: string): Promise<Response | 
   }
 
   const url = new URL(req.url);
-  const body = req.method === 'GET' || req.method === 'DELETE' ? '' : await req.clone().text();
+  const bodylessMethod = req.method === 'GET';
+  const body = bodylessMethod ? '' : await req.clone().text();
 
   const expected = sign(key, req.method, url.pathname, body, ts);
   const expBuf = Buffer.from(expected, 'hex');

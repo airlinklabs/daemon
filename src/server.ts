@@ -4,6 +4,7 @@ import { checkDocker, checkDockerRunning, initContainerStateMap } from './handle
 import { getCurrentStats, initStatsCollection, saveStats } from './handlers/stats';
 import logger, { drawHeader } from './logger';
 import { handleHttpRequest } from './router';
+import { startTui } from './tui';
 import { validateContainerId } from './validation';
 import type { WsData } from './ws/server';
 import { buildWsData, openConnections, wsClose, wsMessage, wsOpen } from './ws/server';
@@ -77,8 +78,9 @@ export const server = Bun.serve<WsData>({
 logger.ok(`listening on port ${config.port}`);
 
 if (process.env.DAEMON_WORKER_MODE === '1') {
-  // tell the GUI thread the port is bound and we're ready to receive requests
   (self as unknown as Worker).postMessage({ type: 'ready', port: config.port });
+} else {
+  startTui();
 }
 
 setInterval(async () => {

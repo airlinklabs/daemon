@@ -51,12 +51,22 @@ function write(level: Level, msg: string, extra?: unknown) {
 }
 
 export function drawHeader(version: string, port: number) {
-  const inner = `airlinkd ${version} -- port ${port}`;
-  const border = `+${'-'.repeat(inner.length + 2)}+`;
-  process.stdout.write(`${BOLD}${BLU}${border}${RESET}\n`);
-  process.stdout.write(`${BOLD}${BLU}| ${inner} |${RESET}\n`);
-  process.stdout.write(`${DIM}  run as daemon for airlink panel${RESET}\n`);
-  process.stdout.write(`${BOLD}${BLU}${border}${RESET}\n`);
+  const art = [
+    '                                              ',
+    '  /$$$$$$ /$$         /$$/$$         /$$      ',
+    ' /$$__  $$|__/        | $$|__/        | $$      ',
+    '| $$  \\\\ $$/$$ /$$$$$$| $$/$$/$$$$$$$| $$   /$$',
+    '| $$$$$$$| $$/$$__  $| $| $| $$__  $| $$  /$$/',
+    '| $$__  $| $| $$  \\\\_| $| $| $$  \\\\ $| $$$$$$/ ',
+    '| $$  | $| $| $$     | $| $| $$  | $| $$_  $$ ',
+    '| $$  | $| $| $$     | $| $| $$  | $| $$ \\\\  $$',
+    '|__/  |__|__|__/     |__|__|__/  |__|__/  \\\\__/',
+    '                                              ',
+  ];
+  for (const line of art) {
+    process.stdout.write(`${BOLD}${BLU}${line}${RESET}\n`);
+  }
+  process.stdout.write(`${DIM}  daemon v${version}  \u2022  port ${port}  \u2022  airlinklabs${RESET}\n`);
   process.stdout.write('\n');
 }
 
