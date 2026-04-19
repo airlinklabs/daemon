@@ -10,6 +10,18 @@ function hmacSign(key: string, method: string, path: string, body: string, times
   return crypto.createHmac('sha256', key).update(payload).digest('hex');
 }
 
+function serializeRequestBody(data: unknown): string {
+  if (data == null) return '';
+  if (typeof data === 'string') return data;
+  if (Buffer.isBuffer(data)) return '';
+
+  try {
+    return JSON.stringify(data);
+  } catch {
+    return '';
+  }
+}
+
 // Verifies X-Airlink-Timestamp and X-Airlink-Signature on incoming requests.
 // Runs after basicAuthMiddleware — both checks must pass.
 //
@@ -47,9 +59,7 @@ export function hmacVerificationMiddleware(req: Request, res: Response, next: Ne
     return;
   }
 
-  const body = req.body
-    ? typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
-    : '';
+  const body = serializeRequestBody(req.body);
 
   // Sign only pathname — no query string. The panel signs before axios appends
   // query params, so we must verify against the same path-only string.

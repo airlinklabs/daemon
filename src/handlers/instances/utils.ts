@@ -4,8 +4,28 @@ import path from "path";
 import afs from "../filesystem/fs";
 import logger from "../../utils/logger";
 
+const resolveDockerSocketPath = (): string => {
+  if (process.platform === "win32") {
+    return "//./pipe/docker_engine";
+  }
+
+  const dockerHost = process.env.DOCKER_HOST;
+  if (dockerHost?.startsWith("unix://")) {
+    return dockerHost.replace("unix://", "");
+  }
+
+  if (process.platform === "darwin") {
+    const desktopSocket = path.join(process.env.HOME || "", ".docker", "run", "docker.sock");
+    if (desktopSocket && fs.existsSync(desktopSocket)) {
+      return desktopSocket;
+    }
+  }
+
+  return "/var/run/docker.sock";
+};
+
 export const docker = new Docker({
-  socketPath: process.platform === "win32" ? "//./pipe/docker_engine" : "/var/run/docker.sock",
+  socketPath: resolveDockerSocketPath(),
 });
 
 const parseJavaCommand = (env: Record<string, string>): string => {

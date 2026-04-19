@@ -640,4 +640,63 @@ router.get(
   }
 );
 
+router.post("/container/backup/upload", async (req: Request, res: Response) => {
+  const { id, backupUuid } = req.query;
+
+  if (!id || typeof id !== "string") {
+    res.status(400).json({ error: "Container ID is required." });
+    return;
+  }
+
+  if (!backupUuid || typeof backupUuid !== "string") {
+    res.status(400).json({ error: "Backup UUID is required." });
+    return;
+  }
+
+  try {
+    const backupsDir = path.resolve("backups", id);
+    if (!fs.existsSync(backupsDir)) {
+      fs.mkdirSync(backupsDir, { recursive: true });
+    }
+
+    const backupFileName = `${backupUuid}.tar.gz`;
+    const backupPath = path.join(backupsDir, backupFileName);
+
+    // bodyParser.raw() consumes octet-stream payloads into req.body Buffer.
+    // If we only pipe req, we can end up writing an empty/corrupt archive.
+    if (Buffer.isBuffer(req.body)) {
+      fs.writeFileSync(backupPath, req.body);
+      res.status(200).json({
+        success: true,
+        message: "Backup uploaded successfully",
+        filePath: `backups/${id}/${backupFileName}`,
+      });
+      return;
+    }
+
+    const fileStream = fs.createWriteStream(backupPath);
+    req.pipe(fileStream);
+
+    fileStream.on("finish", () => {
+      res.status(200).json({
+        success: true,
+        message: "Backup uploaded successfully",
+        filePath: `backups/${id}/${backupFileName}`,
+      });
+    });
+
+    fileStream.on("error", (error: Error) => {
+      logger.error("Error uploading backup file:", error);
+      res.status(500).json({ error: "Failed to upload backup file" });
+    });
+  } catch (error) {
+    logger.error(`Error uploading backup:`, error);
+    res.status(500).json({
+      error: `Failed to upload backup: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+    });
+  }
+});
+
 export default router;
