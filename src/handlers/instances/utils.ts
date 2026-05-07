@@ -1,5 +1,6 @@
 import Docker from "dockerode";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import afs from "../filesystem/fs";
 import logger from "../../utils/logger";
@@ -102,9 +103,18 @@ export const getContainerStats = async (id: string) => {
     const memoryLimit = statsStream.memory_stats.limit;
     const memoryPercentage = ((memoryUsage / memoryLimit) * 100).toFixed(2);
 
-    const cpuDelta = statsStream.cpu_stats.cpu_usage.total_usage - statsStream.precpu_stats.cpu_usage.total_usage;
-    const systemCpuDelta = statsStream.cpu_stats.system_cpu_usage - statsStream.precpu_stats.system_cpu_usage;
-    const cpuUsage = ((cpuDelta / systemCpuDelta) * statsStream.cpu_stats.online_cpus * 100).toFixed(2);
+    // A single stream:false snapshot often returns precpu_stats as all-zeros,
+    // making the CPU delta calculation report 0% even under load.
+    // Take two snapshots ~600 ms apart and compute the delta between them.
+    await new Promise(r => setTimeout(r, 600));
+    const statsStream2 = await container.stats({ stream: false });
+
+    const cpuDelta    = statsStream2.cpu_stats.cpu_usage.total_usage    - statsStream.cpu_stats.cpu_usage.total_usage;
+    const systemDelta = statsStream2.cpu_stats.system_cpu_usage         - statsStream.cpu_stats.system_cpu_usage;
+    const onlineCpus  = statsStream2.cpu_stats.online_cpus || os.cpus().length;
+    const cpuUsage    = systemDelta > 0
+      ? ((cpuDelta / systemDelta) * onlineCpus * 100).toFixed(2)
+      : '0.00';
 
     const storageUsage = (await afs.getDirectorySizeHandler(id, './') / (1024 * 1000)).toFixed(2);
 

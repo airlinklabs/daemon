@@ -163,8 +163,14 @@ export const startContainer = async (
     HostConfig: {
       Binds: [`${volumePath}:/home/container`],
       PortBindings: portBindings,
+      // Memory is passed in MB — convert to bytes for Docker.
       Memory: Memory * 1024 * 1024,
-      NanoCpus: Math.max(0.5, Cpu / 100) * 1e9,
+      // CpuShares is a *soft* weight, not a hard quota.
+      // 1024 shares = normal priority (one core's weight).
+      // Cpu is a percentage: 100 = 1 core weight, 200 = 2 core weight, 50 = half.
+      // Using CpuShares instead of NanoCpus prevents Docker's CFS bandwidth
+      // throttler from starving containers when the host CPU is idle.
+      CpuShares: Math.max(2, Math.round((Cpu / 100) * 1024)),
       RestartPolicy: { Name: 'no' },
     },
     ExposedPorts: exposedPorts,
