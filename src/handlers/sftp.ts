@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import crypto from 'node:crypto';
 import { chownSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';

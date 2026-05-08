@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 
 import { access, readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';

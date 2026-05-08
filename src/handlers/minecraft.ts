@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import { MinecraftServerListPing } from 'minecraft-status';
 
 // these error codes all mean the server isn't ready to answer yet

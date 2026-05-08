@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // port of the original attach.ts
 // the only change: ws type is ServerWebSocket<WsData> not ws.WebSocket
 // readyState === 1 means OPEN in both

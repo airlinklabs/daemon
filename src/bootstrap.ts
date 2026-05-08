@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // this module runs its logic immediately when imported.
 // it must be the first import in app.ts so it runs before config.ts reads Bun.env.
 //
@@ -42,7 +41,7 @@ if (!existsSync(envPath)) {
       process.env[key] = val;
     }
   }
-  process.stdout.write('[bootstrap] no .env found — created with defaults. edit it and restart.\n');
+  process.stdout.write('no .env found, so I made one with defaults. tweak it and restart when ready.\n');
 }
 
 for (const dir of ['logs', 'storage', 'storage/alc', 'storage/alc/files', 'volumes', 'backups']) {

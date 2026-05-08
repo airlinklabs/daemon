@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // nothing fancy, just counts hits per IP per minute and says no when they go over
 
 const hits = new Map<string, { count: number; resetAt: number }>();

@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // replaces the C addons that did openat/renameat. we get the same security
 // guarantees by resolving symlinks and checking the result stays inside the
 // volume dir. not as low-level but works cross-platform and doesn't need gcc.

@@ -1,4 +1,40 @@
+export {};
+
 const firstArg = process.argv[2];
+const args = process.argv.slice(2);
+
+function printHelp(): void {
+  const bin = process.argv[1]?.split('/').pop() || 'airlinkd';
+  console.log(`Airlink daemon
+
+Usage:
+  ${bin} [start]
+  ${bin} configure --panel <url> --key <key>
+  ${bin} --help
+
+Commands:
+  start       Run the daemon. This is the default when no command is given.
+  configure  Write .env values for the panel host and daemon key.
+
+Options:
+  -h, --help  Show this help.
+
+Examples:
+  ${bin}
+  ${bin} start
+  ${bin} configure --panel http://panel.example.com:3000 --key your-node-key
+  ${bin} configure -p http://localhost:3000 -k your-node-key`);
+}
+
+if (args.includes('--help') || args.includes('-h')) {
+  if (firstArg === 'configure') {
+    const { printConfigureHelp } = await import('./configure');
+    printConfigureHelp();
+  } else {
+    printHelp();
+  }
+  process.exit(0);
+}
 
 if (firstArg === 'configure') {
   const { runConfigure } = await import('./configure');
@@ -6,30 +42,12 @@ if (firstArg === 'configure') {
   process.exit(0);
 }
 
-import './bootstrap';
-
-function hasDisplay(): boolean {
-  if (process.platform === 'win32') return true;
-  if (process.platform === 'darwin') {
-    return !process.env.SSH_CLIENT && !process.env.SSH_TTY;
-  }
-  return !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+if (firstArg && firstArg !== 'start') {
+  console.error(`Unknown command: ${firstArg}`);
+  console.log('Run with --help to see the available commands.');
+  process.exit(1);
 }
 
-const args = process.argv.slice(2);
-const forceGui = args.includes('--gui');
-const forceHeadless = args.includes('--no-gui');
-const devGui = args.includes('--dev-gui');
-
-if (devGui) {
-  const { runDevGui } = await import('./gui/dev-server');
-  await runDevGui();
-} else if (forceGui || (!forceHeadless && hasDisplay())) {
-  const { runGui } = await import('./gui/window');
-  const launched = await runGui();
-  if (!launched) {
-    await import('./server');
-  }
-} else {
-  await import('./server');
-}
+await import('./protobufLong');
+await import('./bootstrap');
+await import('./server');

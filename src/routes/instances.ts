@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 
 import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';

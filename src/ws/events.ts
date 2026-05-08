@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // simple pub/sub for container lifecycle events
 // EventEmitter would also work but a plain Map is cleaner to reason about
 

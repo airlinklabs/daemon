@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 
 import type { Dirent } from 'node:fs';
 import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';

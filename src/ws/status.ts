@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // polls container stats every 2s and pushes them over the WS
 // the panel uses this to update the server card indicators in real time
 

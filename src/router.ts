@@ -1,8 +1,6 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 
 import config from './config';
 import logger from './logger';
-// route handlers — all imported up front so they hoist fine
 import { handleRoot, handleStats } from './routes/core';
 import {
   handleFsAppend,
@@ -43,8 +41,6 @@ import { checkRateLimit } from './security/rateLimit';
 
 type Handler = (req: Request, params: Record<string, string>) => Promise<Response> | Response;
 
-// exact route map: "METHOD /path" → handler
-// using function declarations so they hoist above the Map
 const exactRoutes = new Map<string, Handler>([
   ['GET /', handleRoot],
   ['GET /stats', handleStats],
@@ -82,7 +78,6 @@ const exactRoutes = new Map<string, Handler>([
   ['POST /radar/zip', handleRadarZip],
 ]);
 
-// dynamic routes for path segments like /container/status/:id
 const dynamicRoutes: [RegExp, string[], string, Handler][] = [
   [
     /^\/container\/status\/([a-zA-Z0-9_-]+)$/,
@@ -96,7 +91,6 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
   const url = new URL(req.url);
   const key = `${req.method} ${url.pathname}`;
 
-  // reject oversized requests before we read anything
   const contentLength = parseInt(req.headers.get('content-length') ?? '0', 10);
   if (contentLength > 100 * 1024 * 1024) {
     return withSecurityHeaders(
@@ -107,37 +101,22 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
     );
   }
 
-  // extract real socket IP — req.ip does not exist in Bun
-  // server.requestIP(req) returns the actual socket address, no header spoofing possible
   const rawIp = server.requestIP(req);
   const socketIp = rawIp?.address.replace(/^::ffff:/, '') ?? 'unknown';
 
   const behindProxy = Bun.env.BEHIND_PROXY === 'true';
   const effectiveIp = behindProxy ? (req.headers.get('x-forwarded-for')?.split(',')[0].trim() ?? socketIp) : socketIp;
 
-  // /healthz and /gui/stats are unauthenticated — only accessible from localhost
-  // the GUI uses these to poll daemon status without needing the key
-  if (key === 'GET /healthz' || key === 'GET /gui/stats') {
+  if (key === 'GET /healthz') {
     const isLocalhost = socketIp === '127.0.0.1' || socketIp === '::1' || socketIp === 'localhost';
     if (!isLocalhost) {
       return withSecurityHeaders(new Response(JSON.stringify({ error: 'local only' }), { status: 403 }));
     }
-    if (key === 'GET /healthz') {
-      return withSecurityHeaders(
-        new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }),
-      );
-    }
-    const { handleRoot, handleStats } = await import('./routes/core');
-    const rootResp = await handleRoot(req);
-    const statsResp = await handleStats(req);
-    const root = (await rootResp.json()) as Record<string, unknown>;
-    const stats = (await statsResp.json()) as Record<string, unknown>;
     return withSecurityHeaders(
-      new Response(JSON.stringify({ ...root, ...stats }), { headers: { 'Content-Type': 'application/json' } }),
+      new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }),
     );
   }
 
-  // security chain — runs on every request, no exceptions
   const ipErr = getAllowedIpCheck(effectiveIp);
   if (ipErr) return withSecurityHeaders(ipErr);
 
@@ -150,8 +129,6 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
   const rlErr = checkRateLimit(effectiveIp);
   if (rlErr) return withSecurityHeaders(rlErr);
 
-  // reject unexpected content types on mutation requests
-  // DELETE with body is intentional for several routes — don't block it
   if (req.method !== 'GET') {
     const ct = req.headers.get('content-type') ?? '';
     const ok =
@@ -169,7 +146,6 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
     }
   }
 
-  // exact match
   const handler = exactRoutes.get(key);
   if (handler) {
     try {
@@ -184,7 +160,6 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
     }
   }
 
-  // dynamic match
   for (const [pattern, paramNames, method, dynHandler] of dynamicRoutes) {
     if (req.method !== method) continue;
     const match = url.pathname.match(pattern);

@@ -1,10 +1,8 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import config from './config';
 import { checkDocker, checkDockerRunning, initContainerStateMap } from './handlers/docker';
 import { getCurrentStats, initStatsCollection, saveStats } from './handlers/stats';
 import logger, { drawHeader } from './logger';
 import { handleHttpRequest } from './router';
-import { startTui } from './tui';
 import { validateContainerId } from './validation';
 import type { WsData } from './ws/server';
 import { buildWsData, openConnections, wsClose, wsMessage, wsOpen } from './ws/server';
@@ -39,7 +37,7 @@ try {
   await checkDockerRunning();
   await initContainerStateMap();
 } catch (err) {
-  logger.error('docker init failed — container operations will not work', err as Error);
+  logger.error('docker is not ready, so container actions are paused for now', err as Error);
 }
 initStatsCollection();
 
@@ -75,13 +73,9 @@ export const server = Bun.serve<WsData>({
     : undefined,
 });
 
-logger.ok(`listening on port ${config.port}`);
+logger.ok(`ready on port ${config.port}`);
 
-if (process.env.DAEMON_WORKER_MODE === '1') {
-  (self as unknown as Worker).postMessage({ type: 'ready', port: config.port });
-} else {
-  startTui();
-}
+if (process.env.DAEMON_WORKER_MODE === '1') (self as unknown as Worker).postMessage({ type: 'ready', port: config.port });
 
 setInterval(async () => {
   try {
@@ -93,7 +87,7 @@ setInterval(async () => {
 }, config.statsInterval);
 
 async function shutdown(signal: string): Promise<void> {
-  logger.info(`received ${signal}, shutting down`);
+  logger.info(`${signal} received, shutting down`);
 
   server.stop(false);
 
@@ -108,7 +102,7 @@ async function shutdown(signal: string): Promise<void> {
 
   await new Promise<void>((resolve) => setTimeout(resolve, 10_000));
 
-  logger.info('shutdown complete');
+  logger.info('shutdown finished');
   process.exit(0);
 }
 

@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import { timingSafeEqual } from 'node:crypto';
 import config from '../config';
 import logger from '../logger';

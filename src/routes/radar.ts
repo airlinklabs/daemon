@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import { scanVolume } from '../handlers/radar/scan';
 import { zipScanVolume } from '../handlers/radar/zip';
 import logger from '../logger';

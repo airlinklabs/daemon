@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import type { ServerWebSocket } from 'bun';
 import config from '../config';
 import { sendCommandToContainer } from '../handlers/docker';

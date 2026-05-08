@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // loads the file spec map from storage — used by the install handler to find installer scripts
 // this file is part of the daemon config, not generated at runtime
 

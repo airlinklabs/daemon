@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 
 import { mkdirSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';

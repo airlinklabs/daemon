@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 // bun loads .env automatically, no dotenv needed
 
 const required = (key: string, fallback?: string): string => {

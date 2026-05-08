@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 export function validateContainerId(id: string): boolean {
   if (!id || typeof id !== 'string') return false;
   return /^[a-zA-Z0-9_-]+$/.test(id) && id.length >= 1 && id.length <= 64;

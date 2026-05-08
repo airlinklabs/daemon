@@ -1,7 +1,5 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
-
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { appendFile, lstat, mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, lstat, mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import logger from '../logger';
@@ -220,8 +218,7 @@ export async function copyIntoVolume(id: string, sourcePath: string, destRelativ
     }
   } else {
     await mkdir(dirname(destPath), { recursive: true });
-    const buf = await readFile(sourcePath);
-    await writeFile(destPath, buf);
+    await copyFile(sourcePath, destPath);
   }
 }
 

@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import { generateCredential, getActiveSessionCount, revokeCredentialForContainer } from '../handlers/sftp';
 import logger from '../logger';
 import { validateContainerId } from '../validation';

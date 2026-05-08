@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import { fetchMinecraftPlayers, isTransientError } from '../handlers/minecraft';
 import logger from '../logger';
 

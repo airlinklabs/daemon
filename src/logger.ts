@@ -1,4 +1,3 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 import { appendFileSync } from 'node:fs';
 
 const ESC = '\x1b';
@@ -23,11 +22,11 @@ const levelColor: Record<Level, string> = {
 };
 
 const levelLabel: Record<Level, string> = {
-  info: 'INFO ',
-  warn: 'WARN ',
-  error: 'ERROR',
-  debug: 'DEBUG',
-  ok: 'OK   ',
+  info: 'info ',
+  warn: 'warn ',
+  error: 'nope ',
+  debug: 'debug',
+  ok: 'good ',
 };
 
 function ts(): string {
@@ -66,7 +65,7 @@ export function drawHeader(version: string, port: number) {
   for (const line of art) {
     process.stdout.write(`${BOLD}${BLU}${line}${RESET}\n`);
   }
-  process.stdout.write(`${DIM}  daemon v${version}  \u2022  port ${port}  \u2022  airlinklabs${RESET}\n`);
+  process.stdout.write(`${DIM}  daemon v${version}  -  port ${port}  -  streaming logs below${RESET}\n`);
   process.stdout.write('\n');
 }
 

@@ -1,8 +1,26 @@
-// This code was written by thavanish(https://github.com/thavanish) for airlinklabs
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import chalk from 'chalk';
+
+export function printConfigureHelp(): void {
+  const bin = process.argv[1]?.split('/').pop() || 'airlinkd';
+  console.log(`Configure this daemon
+
+Usage:
+  ${bin} configure --panel <url> --key <key>
+  ${bin} configure -p <url> -k <key>
+
+What it does:
+  - checks that the panel URL answers
+  - writes .env in the current directory
+  - stores the panel host as "remote"
+  - stores the node key as "key"
+  - keeps existing .env values unless they are being configured
+
+Example:
+  ${bin} configure --panel http://localhost:3000 --key your-node-key`);
+}
 
 async function validatePanelUrl(url: string): Promise<boolean> {
   try {
@@ -76,40 +94,43 @@ export async function runConfigure(args: string[]): Promise<void> {
   const { panelUrl: rawPanelUrl, key } = parseArguments(filteredArgs);
 
   if (!rawPanelUrl || !key) {
-    console.error(chalk.red('[error] missing required parameters'));
-    console.log(chalk.yellow('usage: airlinkd configure --panel <url> --key <key>'));
-    console.log(chalk.yellow('   or: airlinkd configure -p <url> -k <key>'));
+    console.error(chalk.red('missing --panel or --key'));
+    printConfigureHelp();
     process.exit(1);
   }
 
   const panelUrl = rawPanelUrl.replace(/\/$/, '');
 
-  console.log(chalk.blue('[info] validating panel URL...'));
+  console.log(chalk.blue('checking the panel...'));
   const isValid = await validatePanelUrl(panelUrl);
 
   if (!isValid) {
-    console.error(chalk.red('[error] panel URL unreachable — is the panel running?'));
+    console.error(chalk.red('could not reach the panel. is it running?'));
     process.exit(1);
   }
 
-  console.log(chalk.green('[ok] panel URL is valid'));
-  console.log(chalk.blue('[info] writing .env...'));
+  console.log(chalk.green('panel answered'));
+  console.log(chalk.blue('writing .env...'));
 
   try {
     await updateEnvFile(panelUrl, key);
-    console.log(chalk.green('[ok] daemon configured'));
+    console.log(chalk.green('daemon configured'));
     console.log(chalk.blue('Panel URL:'), chalk.cyan(panelUrl));
     console.log(chalk.blue('Daemon Key:'), chalk.cyan(key));
   } catch (err) {
-    console.error(chalk.red('[error] failed to write .env:'), err);
+    console.error(chalk.red('could not write .env:'), err);
     process.exit(1);
   }
 }
 
 if (import.meta.main) {
   const filteredArgs = process.argv.slice(2).filter((a) => a !== '--');
+  if (filteredArgs.includes('--help') || filteredArgs.includes('-h')) {
+    printConfigureHelp();
+    process.exit(0);
+  }
   runConfigure(filteredArgs).catch((err) => {
-    console.error(chalk.red('[error] unexpected error:'), err);
+    console.error(chalk.red('configure crashed:'), err);
     process.exit(1);
   });
 }
