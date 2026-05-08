@@ -48,21 +48,22 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
   if (msg.event === 'auth') {
     const key = msg.args?.[0];
     if (key !== config.key) {
+      logger.warn(`ws auth rejected for ${ws.data.containerId}`);
       ws.send(JSON.stringify({ error: 'invalid key' }));
       ws.close(1008, 'auth failed');
       return;
     }
     ws.data.authed = true;
-    ws.send(JSON.stringify({ event: 'auth', status: 'ok' }));
+    logger.ok(`ws auth ok: ${ws.data.route}/${ws.data.containerId}`);
 
-    // start the appropriate subscription now that we're authed
     if (ws.data.route === 'container') {
+      ws.send(JSON.stringify({ event: 'auth', status: 'ok' }));
       attachToContainer(ws.data.containerId, ws);
     } else if (ws.data.route === 'containerstatus') {
       ws.data.timer = startStatusPolling(ws.data.containerId, ws);
     } else if (ws.data.route === 'containerevents') {
       ws.data.unsub = subscribe(ws.data.containerId, (event) => {
-        if (ws.readyState === 1) ws.send(JSON.stringify(event));
+        if (ws.readyState === 1) ws.send(JSON.stringify({ event: 'lifecycle', data: event }));
       });
     }
     return;
@@ -82,14 +83,14 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
       ws.send(JSON.stringify({ error: 'missing command' }));
       return;
     }
-    // fire and forget — same as the original
+    logger.debug(`cmd → ${ws.data.containerId}: ${msg.command}`);
     sendCommandToContainer(ws.data.containerId, msg.command).catch((err) => {
       logger.error(`command send failed for ${ws.data.containerId}`, err);
     });
     return;
   }
 
-  logger.debug(`unknown ws event: ${msg.event}`);
+  logger.debug(`unknown ws event from ${ws.data.containerId}: ${msg.event}`);
 }
 
 export function wsClose(ws: ServerWebSocket<WsData>, code: number, _reason: string): void {

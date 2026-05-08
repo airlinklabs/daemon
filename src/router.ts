@@ -87,47 +87,75 @@ const dynamicRoutes: [RegExp, string[], string, Handler][] = [
   ],
 ];
 
+function isPrivateIp(ip: string): boolean {
+  return (
+    ip === '127.0.0.1' ||
+    ip === '::1' ||
+    ip === 'localhost' ||
+    ip.startsWith('10.') ||
+    ip.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ip)
+  );
+}
+
+function jsonError(error: string, status: number): Response {
+  return new Response(JSON.stringify({ error }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
 export async function handleHttpRequest(req: Request, server: ReturnType<typeof Bun.serve>): Promise<Response> {
+  const started = Date.now();
   const url = new URL(req.url);
   const key = `${req.method} ${url.pathname}`;
 
+  let effectiveIp = 'unknown';
+  const finish = (res: Response): Response => {
+    const wrapped = withSecurityHeaders(res);
+    if (key !== 'GET /healthz') {
+      logger.info(`${req.method} ${url.pathname} ${effectiveIp} → ${wrapped.status} [${Date.now() - started}ms]`);
+    }
+    return wrapped;
+  };
+
   const contentLength = parseInt(req.headers.get('content-length') ?? '0', 10);
   if (contentLength > 100 * 1024 * 1024) {
-    return withSecurityHeaders(
-      new Response(JSON.stringify({ error: 'request too large' }), {
-        status: 413,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
+    return finish(jsonError('request too large', 413));
   }
 
   const rawIp = server.requestIP(req);
   const socketIp = rawIp?.address.replace(/^::ffff:/, '') ?? 'unknown';
 
   const behindProxy = Bun.env.BEHIND_PROXY === 'true';
-  const effectiveIp = behindProxy ? (req.headers.get('x-forwarded-for')?.split(',')[0].trim() ?? socketIp) : socketIp;
+  effectiveIp = socketIp;
+  if (behindProxy) {
+    if (isPrivateIp(socketIp)) {
+      effectiveIp = req.headers.get('x-forwarded-for')?.split(',')[0].trim() || socketIp;
+    } else {
+      logger.warn(`BEHIND_PROXY=true but ${socketIp} is not a trusted proxy`);
+    }
+  }
 
   if (key === 'GET /healthz') {
     const isLocalhost = socketIp === '127.0.0.1' || socketIp === '::1' || socketIp === 'localhost';
     if (!isLocalhost) {
-      return withSecurityHeaders(new Response(JSON.stringify({ error: 'local only' }), { status: 403 }));
+      return finish(jsonError('local only', 403));
     }
-    return withSecurityHeaders(
-      new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }),
-    );
+    return finish(new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }));
   }
 
   const ipErr = getAllowedIpCheck(effectiveIp);
-  if (ipErr) return withSecurityHeaders(ipErr);
+  if (ipErr) return finish(ipErr);
 
   const authErr = checkBasicAuth(req, config.key);
-  if (authErr) return withSecurityHeaders(authErr);
+  if (authErr) return finish(authErr);
 
   const hmacErr = await verifyHmac(req, config.key);
-  if (hmacErr) return withSecurityHeaders(hmacErr);
+  if (hmacErr) return finish(hmacErr);
 
   const rlErr = checkRateLimit(effectiveIp);
-  if (rlErr) return withSecurityHeaders(rlErr);
+  if (rlErr) return finish(rlErr);
 
   if (req.method !== 'GET') {
     const ct = req.headers.get('content-type') ?? '';
@@ -138,25 +166,17 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
       ct.startsWith('text/') ||
       ct.startsWith('multipart/');
     if (!ok) {
-      return withSecurityHeaders(
-        new Response(JSON.stringify({ error: 'unsupported content type' }), {
-          status: 415,
-        }),
-      );
+      return finish(jsonError('unsupported content type', 415));
     }
   }
 
   const handler = exactRoutes.get(key);
   if (handler) {
     try {
-      return withSecurityHeaders(await handler(req, {}));
+      return finish(await handler(req, {}));
     } catch (err) {
       logger.error(`route error: ${key}`, err);
-      return withSecurityHeaders(
-        new Response(JSON.stringify({ error: 'internal error' }), {
-          status: 500,
-        }),
-      );
+      return finish(jsonError('internal error', 500));
     }
   }
 
@@ -171,16 +191,12 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
     });
 
     try {
-      return withSecurityHeaders(await dynHandler(req, params));
+      return finish(await dynHandler(req, params));
     } catch (err) {
       logger.error(`route error: ${url.pathname}`, err);
-      return withSecurityHeaders(
-        new Response(JSON.stringify({ error: 'internal error' }), {
-          status: 500,
-        }),
-      );
+      return finish(jsonError('internal error', 500));
     }
   }
 
-  return withSecurityHeaders(new Response(JSON.stringify({ error: 'not found' }), { status: 404 }));
+  return finish(jsonError('not found', 404));
 }

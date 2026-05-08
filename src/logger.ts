@@ -1,4 +1,6 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync } from 'node:fs';
+
+mkdirSync('logs', { recursive: true });
 
 const ESC = '\x1b';
 const RESET = `${ESC}[0m`;
@@ -24,9 +26,9 @@ const levelColor: Record<Level, string> = {
 const levelLabel: Record<Level, string> = {
   info: 'info ',
   warn: 'warn ',
-  error: 'nope ',
-  debug: 'debug',
-  ok: 'good ',
+  error: 'err  ',
+  debug: 'dbg  ',
+  ok: 'ok   ',
 };
 
 function ts(): string {
@@ -36,7 +38,12 @@ function ts(): string {
 function write(level: Level, msg: string, extra?: unknown) {
   const color = levelColor[level];
   const label = levelLabel[level];
-  const extraStr = extra !== undefined ? ` ${extra instanceof Error ? extra.message : JSON.stringify(extra)}` : '';
+  const extraStr =
+    extra instanceof Error
+      ? ` ${extra.message}\n  ${extra.stack?.split('\n').slice(1, 4).join('\n  ') ?? ''}`
+      : extra !== undefined
+        ? ` ${JSON.stringify(extra)}`
+        : '';
 
   const line = `${GRAY}${ts()}${RESET} ${color}${BOLD}${label}${RESET} ${color}${msg}${extraStr}${RESET}`;
   process.stdout.write(`${line}\n`);
@@ -51,16 +58,9 @@ function write(level: Level, msg: string, extra?: unknown) {
 
 export function drawHeader(version: string, port: number) {
   const art = [
-    '                                              ',
-    '  /$$$$$$ /$$         /$$/$$         /$$      ',
-    ' /$$__  $$|__/        | $$|__/        | $$      ',
-    '| $$  \\\\ $$/$$ /$$$$$$| $$/$$/$$$$$$$| $$   /$$',
-    '| $$$$$$$| $$/$$__  $| $| $| $$__  $| $$  /$$/',
-    '| $$__  $| $| $$  \\\\_| $| $| $$  \\\\ $| $$$$$$/ ',
-    '| $$  | $| $| $$     | $| $| $$  | $| $$_  $$ ',
-    '| $$  | $| $| $$     | $| $| $$  | $| $$ \\\\  $$',
-    '|__/  |__|__|__/     |__|__|__/  |__|__/  \\\\__/',
-    '                                              ',
+    '  A I R L I N K D',
+    '  =============',
+    '  panel daemon',
   ];
   for (const line of art) {
     process.stdout.write(`${BOLD}${BLU}${line}${RESET}\n`);

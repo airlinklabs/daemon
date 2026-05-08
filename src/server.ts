@@ -81,8 +81,9 @@ setInterval(async () => {
   try {
     const stats = await getCurrentStats();
     saveStats(stats);
+    logger.debug(`host stats: ${stats.Ram} RAM, ${stats.Cores} CPU`);
   } catch (err) {
-    logger.error('error collecting stats', err);
+    logger.error('could not collect host stats', err);
   }
 }, config.statsInterval);
 

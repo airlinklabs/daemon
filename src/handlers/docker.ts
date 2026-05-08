@@ -1,6 +1,6 @@
 // dockerode — no bun-native docker socket client exists, this is the best option
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import Docker from 'dockerode';
 import logger from '../logger';
@@ -48,13 +48,11 @@ export async function initContainerStateMap(): Promise<void> {
       const name = (c.Names?.[0] || '').replace(/^\//, '');
       if (name) stateMap.set(name, c.State === 'running');
     }
-    logger.info(`seeded state map with ${containers.length} containers`);
+    logger.info(`found ${containers.length} containers on boot`);
   } catch (err) {
-    logger.error('failed to seed container state map', err);
+    logger.error('could not map containers on boot', err);
   }
 
-  // subscribe to docker events — keeps map current without polling
-  // holy fuck dockerode's event API is weird but this is the right way
   await subscribeToDockerEvents();
 }
 
@@ -73,6 +71,9 @@ async function subscribeToDockerEvents(): Promise<void> {
         };
         const id = event.id;
         const name = event.Actor?.Attributes?.name ?? '';
+        if (event.Action === 'start' || event.Action === 'die' || event.Action === 'destroy') {
+          logger.debug(`container ${name || id.slice(0, 12)} → ${event.Action}`);
+        }
 
         if (event.Action === 'start') {
           stateMap.set(id, true);
@@ -90,18 +91,18 @@ async function subscribeToDockerEvents(): Promise<void> {
     });
 
     stream.on('error', (err: Error) => {
-      logger.error('docker event stream error — reconnecting in 5s', err);
+      logger.error('docker event stream had a bad time, reconnecting in 5s', err);
       setTimeout(subscribeToDockerEvents, 5000);
     });
 
     stream.on('end', () => {
-      logger.warn('docker event stream ended — reconnecting in 2s');
+      logger.warn('docker event stream dropped, reconnecting in 2s');
       setTimeout(subscribeToDockerEvents, 2000);
     });
 
-    logger.info('docker event stream subscribed');
+    logger.info('watching docker events now');
   } catch (err) {
-    logger.error('failed to subscribe to docker events — retrying in 5s', err);
+    logger.error('could not watch docker events, trying again in 5s', err);
     setTimeout(subscribeToDockerEvents, 5000);
   }
 }
@@ -123,11 +124,46 @@ export type ContainerStats = {
   exists: boolean;
   memory: { usage: number; limit: number; percentage: number };
   cpu: { percentage: number };
+  storage: { usage: number };
 };
+
+function getStorageUsageMb(id: string): number {
+  const volumePath = resolve(process.cwd(), 'volumes', id);
+  if (!existsSync(volumePath)) return 0;
+
+  function walk(dir: string): number {
+    let total = 0;
+    for (const entry of readdirSync(dir)) {
+      const p = join(dir, entry);
+      const link = lstatSync(p);
+      if (link.isSymbolicLink()) continue;
+      if (link.isDirectory()) {
+        total += walk(p);
+      } else if (link.isFile()) {
+        total += statSync(p).size;
+      }
+    }
+    return total;
+  }
+
+  return walk(volumePath) / 1024 / 1024;
+}
 
 export async function getContainerStats(id: string): Promise<ContainerStats | null> {
   try {
     const container = docker.getContainer(id);
+    const info = await container.inspect();
+    const storage = { usage: getStorageUsageMb(id) };
+    if (!info.State.Running) {
+      return {
+        running: false,
+        exists: true,
+        memory: { usage: 0, limit: 0, percentage: 0 },
+        cpu: { percentage: 0 },
+        storage,
+      };
+    }
+
     const stats = await container.stats({ stream: false });
 
     const memUsage = (stats.memory_stats.usage as number) ?? 0;
@@ -154,15 +190,18 @@ export async function getContainerStats(id: string): Promise<ContainerStats | nu
         limit: memLimit,
         percentage: (memActual / memLimit) * 100,
       },
-      cpu: { percentage: Math.min(100, cpuPercent) },
+      cpu: { percentage: Math.max(0, cpuPercent) },
+      storage,
     };
   } catch (err: unknown) {
-    if (err instanceof Error && err.message.includes('no such container')) return null;
+    const statusCode = (err as { statusCode?: number })?.statusCode;
+    if (statusCode === 404 || (err instanceof Error && err.message.includes('no such container'))) return null;
     return {
       running: false,
       exists: true,
       memory: { usage: 0, limit: 0, percentage: 0 },
       cpu: { percentage: 0 },
+      storage: { usage: getStorageUsageMb(id) },
     };
   }
 }
@@ -233,6 +272,7 @@ export function initContainer(id: string): string {
 
 // pull an image and stream progress over the events WS
 export async function pullImageWithProgress(image: string, containerId: string): Promise<void> {
+  logger.info(`pulling image ${image}`);
   emit(containerId, { type: 'pulling', message: `pulling image ${image}` });
 
   await new Promise<void>((resolve, reject) => {
@@ -256,7 +296,8 @@ export async function pullImageWithProgress(image: string, containerId: string):
             });
             reject(err);
           } else {
-            emit(containerId, { type: 'pulling', message: 'image pulled' });
+            logger.ok(`image ${image} is ready`);
+            emit(containerId, { type: 'pulling', message: `image ${image} is ready` });
             resolve();
           }
         },
@@ -283,14 +324,15 @@ export async function startContainer(
   Memory: number,
   Cpu: number,
 ): Promise<void> {
-  emit(id, { type: 'pulling', message: 'preparing environment' });
+  logger.info(`kicking off ${id} with image ${image}`);
+  emit(id, { type: 'pulling', message: `cleaning up any old ${id} container first` });
 
   // force-remove any existing container with this name before creating a new one
   try {
     await docker.getContainer(id).remove({ force: true });
   } catch (err: unknown) {
     if ((err as { statusCode?: number })?.statusCode !== 404) {
-      logger.warn(`could not remove existing container ${id}: ${(err as Error)?.message}`);
+      logger.warn(`could not remove old ${id} container: ${(err as Error)?.message}`);
     }
   }
 
@@ -312,7 +354,7 @@ export async function startContainer(
     imageExists = false;
     emit(id, {
       type: 'pulling',
-      message: `image not found locally — pulling from registry`,
+      message: `image not found locally, pulling from registry`,
     });
   }
 
@@ -320,7 +362,7 @@ export async function startContainer(
     await pullImageWithProgress(image, id);
   }
 
-  emit(id, { type: 'creating', message: 'creating container' });
+  emit(id, { type: 'creating', message: `creating ${id}` });
 
   // pre-write eula=true so minecraft servers don't exit on first boot
   const eulaPath = join(volumePath, 'eula.txt');
@@ -409,7 +451,7 @@ export async function startContainer(
     Tty: true,
   });
 
-  emit(id, { type: 'starting', message: 'starting container' });
+  emit(id, { type: 'starting', message: `starting ${id}` });
   await container.start();
   emit(id, { type: 'started', message: 'server started' });
 }

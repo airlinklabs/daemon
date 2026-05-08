@@ -3,16 +3,39 @@ import config from '../config';
 import logger from '../logger';
 
 const WINDOW_SECS = 30;
+const seenNonces = new Set<string>();
 
-function sign(key: string, method: string, path: string, body: string, ts: number): string {
-  const payload = `${ts}:${method.toUpperCase()}:${path}:${body}`;
+function sign(key: string, method: string, path: string, body: string, ts: number, nonce: string): string {
+  const payload = nonce
+    ? `${ts}:${nonce}:${method.toUpperCase()}:${path}:${body}`
+    : `${ts}:${method.toUpperCase()}:${path}:${body}`;
   return new Bun.CryptoHasher('sha256', key).update(payload).digest('hex');
+}
+
+function rememberNonce(ts: number, nonceValue: string): Response | null {
+  const now = Math.floor(Date.now() / 1000);
+  for (const nonce of seenNonces) {
+    const nonceTs = parseInt(nonce.split(':', 1)[0], 10);
+    if (Number.isNaN(nonceTs) || Math.abs(now - nonceTs) > WINDOW_SECS) seenNonces.delete(nonce);
+  }
+
+  const cacheKey = `${ts}:${nonceValue}`;
+  if (seenNonces.has(cacheKey)) {
+    return new Response(JSON.stringify({ error: 'replayed request' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  seenNonces.add(cacheKey);
+  return null;
 }
 
 // returns null if valid, returns a Response error if not
 export async function verifyHmac(req: Request, key: string): Promise<Response | null> {
   const tsHeader = req.headers.get('x-airlink-timestamp');
   const sigHeader = req.headers.get('x-airlink-signature');
+  const nonceHeader = req.headers.get('x-airlink-nonce') ?? '';
 
   if (!tsHeader || !sigHeader) {
     return new Response(JSON.stringify({ error: 'missing HMAC headers' }), {
@@ -40,7 +63,7 @@ export async function verifyHmac(req: Request, key: string): Promise<Response | 
   const bodylessMethod = req.method === 'GET';
   const body = bodylessMethod ? '' : await req.clone().text();
 
-  const expected = sign(key, req.method, url.pathname, body, ts);
+  const expected = sign(key, req.method, url.pathname, body, ts, nonceHeader);
   const expBuf = Buffer.from(expected, 'hex');
   const gotBuf = Buffer.from(sigHeader, 'hex');
 
@@ -49,6 +72,14 @@ export async function verifyHmac(req: Request, key: string): Promise<Response | 
       status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
+  }
+
+  if (nonceHeader) {
+    const replayErr = rememberNonce(ts, nonceHeader);
+    if (replayErr) return replayErr;
+  } else if (req.method !== 'GET') {
+    const replayErr = rememberNonce(ts, sigHeader);
+    if (replayErr) return replayErr;
   }
 
   return null;
