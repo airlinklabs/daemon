@@ -25,11 +25,6 @@ async function updateEnvFile(panelUrl: string, key: string): Promise<void> {
 
     const envConfig = dotenv.parse(envContent || '');
 
-    const remoteIp = panelUrl
-        .replace(/https?:\/\//, '')
-        .split(':')[0];
-
-    envConfig.remote = remoteIp;
     envConfig.key = key;
 
     if (!envConfig.version) envConfig.version = '1.0.0';

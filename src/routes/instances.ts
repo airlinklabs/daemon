@@ -212,7 +212,7 @@ const state = getServerState(id);
 });
 
 router.post("/container/start", async (req: Request, res: Response) => {
-  const { id, image, ports, env, Memory, Cpu, StartCommand } = req.body;
+  const { id, image, ports, env, Memory, Cpu, Storage, StartCommand } = req.body;
 
   if (!id || !image) {
     res.status(400).json({ error: "Container ID and Image are required." });
@@ -258,7 +258,7 @@ router.post("/container/start", async (req: Request, res: Response) => {
   logger.warn(`Starting ${id}: image=${image} START=${environmentVariables["START"]?.slice(0, 120)}`);
 
   try {
-    await startContainer(id, image, environmentVariables, ports, Memory, Cpu);
+    await startContainer(id, image, environmentVariables, ports, Memory, Cpu, Storage);
     res.status(200).json({ message: `Container ${id} started successfully.` });
   } catch (error) {
     logger.error(`Error starting container`, error);

@@ -11,7 +11,8 @@ export const startContainer = async (
   env: Record<string, string> = {},
   ports: string = "",
   Memory: number,
-  Cpu: number
+  Cpu: number,
+  Storage?: number
 ): Promise<void> => {
   emitContainerEvent(id, { type: 'pulling', message: 'Preparing environment' });
 
@@ -171,6 +172,8 @@ export const startContainer = async (
       // Using CpuShares instead of NanoCpus prevents Docker's CFS bandwidth
       // throttler from starving containers when the host CPU is idle.
       CpuShares: Math.max(2, Math.round((Cpu / 100) * 1024)),
+      // Requires overlay2 with d_type=true and pquota mount options; unsupported drivers ignore it.
+      StorageOpt: Storage ? { size: `${Storage}m` } : undefined,
       RestartPolicy: { Name: 'no' },
     },
     ExposedPorts: exposedPorts,
@@ -240,7 +243,7 @@ export const createInstaller = async (
     HostConfig: {
       Binds: [`${volumePath}:/mnt/server`],
       AutoRemove: false,
-      NetworkMode: "host",
+      NetworkMode: "bridge",
     },
   });
 
