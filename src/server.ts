@@ -14,12 +14,27 @@ function tryUpgrade(req: Request, server: ReturnType<typeof Bun.serve>): boolean
   const containerId = parts[1];
 
   const validRoutes = ['container', 'containerstatus', 'containerevents'];
-  if (!validRoutes.includes(route) || !containerId) return false;
-  if (!validateContainerId(containerId)) return false;
+  if (!validRoutes.includes(route) || !containerId) {
+    logger.debug(`ws upgrade rejected: invalid route or no containerId: ${url.pathname}`);
+    return false;
+  }
+  if (!validateContainerId(containerId)) {
+    logger.warn(`ws upgrade rejected: invalid containerId format: ${containerId}`);
+    return false;
+  }
 
-  return server.upgrade(req, {
+  logger.debug(`ws upgrade attempting: ${route}/${containerId}`);
+  const upgraded = server.upgrade(req, {
     data: buildWsData(route as 'container' | 'containerstatus' | 'containerevents', containerId),
   });
+  
+  if (upgraded) {
+    logger.debug(`ws upgrade successful: ${route}/${containerId}`);
+  } else {
+    logger.warn(`ws upgrade failed for: ${route}/${containerId}`);
+  }
+  
+  return upgraded;
 }
 
 process.on('uncaughtException', (err) => {

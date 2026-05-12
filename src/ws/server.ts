@@ -36,14 +36,18 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
   try {
     msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
   } catch {
+    logger.warn(`ws message parse error from ${ws.data.containerId}`);
     ws.send(JSON.stringify({ error: 'invalid json' }));
     return;
   }
 
   if (!msg?.event) {
+    logger.warn(`ws message missing event field from ${ws.data.containerId}`);
     ws.send(JSON.stringify({ error: 'missing event field' }));
     return;
   }
+
+  logger.debug(`ws message received: ${ws.data.containerId} event=${msg.event} authed=${ws.data.authed}`);
 
   if (msg.event === 'auth') {
     const key = msg.args?.[0];
@@ -55,6 +59,9 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
     }
     ws.data.authed = true;
     logger.ok(`ws auth ok: ${ws.data.route}/${ws.data.containerId}`);
+
+    // Send auth confirmation to client (expected by panel)
+    ws.send(JSON.stringify({ event: 'auth', status: 'ok' }));
 
     if (ws.data.route === 'container') {
       attachToContainer(ws.data.containerId, ws);
@@ -69,16 +76,19 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
   }
 
   if (!ws.data.authed) {
+    logger.warn(`unauthenticated message from ${ws.data.containerId}: ${msg.event}`);
     ws.send(JSON.stringify({ error: 'not authenticated' }));
     return;
   }
 
   if (msg.event === 'CMD') {
     if (ws.data.route !== 'container') {
+      logger.warn(`CMD event on non-container route: ${ws.data.route}/${ws.data.containerId}`);
       ws.send(JSON.stringify({ error: 'CMD only valid on /container route' }));
       return;
     }
     if (!msg.command || typeof msg.command !== 'string') {
+      logger.warn(`invalid command from ${ws.data.containerId}: ${JSON.stringify(msg)}`);
       ws.send(JSON.stringify({ error: 'missing command' }));
       return;
     }
