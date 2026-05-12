@@ -656,19 +656,34 @@ export async function sendCommandToContainer(id: string, command: string): Promi
       return;
     }
 
-    // attach a new stdin stream and write the command to it
-    // docker allows multiple concurrent attach streams on the same container
+    const cleanedCommand = command.replace(/\r\n?/g, '\n').replace(/\n+$/g, '');
+    if (!cleanedCommand.trim()) {
+      logger.warn(`empty command ignored for container ${id}`);
+      return;
+    }
+
     const stream = await container.attach({
       stream: true,
       stdin: true,
       stdout: false,
       stderr: false,
     });
-    stream.write(`${command}\n`);
-    stream.end();
 
-    logger.debug(`command sent to container ${id}: ${command}`);
+    await new Promise<void>((resolve, reject) => {
+      const onError = (err: unknown) => reject(err instanceof Error ? err : new Error(String(err)));
+      const onClose = () => resolve();
+      stream.once('error', onError);
+      stream.once('close', onClose);
+      try {
+        stream.end(`${cleanedCommand}\n`);
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+
+    logger.debug(`command sent to container ${id}: ${cleanedCommand}`);
   } catch (error) {
     logger.error(`failed to send command to container ${id}`, error);
   }
 }
+

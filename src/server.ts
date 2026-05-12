@@ -4,37 +4,59 @@ import { getCurrentStats, initStatsCollection, saveStats } from './handlers/stat
 import logger, { drawHeader } from './logger';
 import { handleHttpRequest } from './router';
 import { validateContainerId } from './validation';
+import { getAllowedIpCheck } from './security/hmac';
+import { checkRateLimit } from './security/rateLimit';
 import type { WsData } from './ws/server';
 import { buildWsData, openConnections, wsClose, wsMessage, wsOpen } from './ws/server';
 
-function tryUpgrade(req: Request, server: ReturnType<typeof Bun.serve>): boolean {
+function isPrivateIp(ip: string): boolean {
+  return (
+    ip === '127.0.0.1' ||
+    ip === '::1' ||
+    ip === 'localhost' ||
+    ip.startsWith('10.') ||
+    ip.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ip)
+  );
+}
+
+function resolveEffectiveIp(req: Request, server: ReturnType<typeof Bun.serve>): string {
+  const rawIp = server.requestIP(req);
+  const socketIp = rawIp?.address.replace(/^::ffff:/, '') ?? 'unknown';
+
+  if (Bun.env.BEHIND_PROXY === 'true') {
+    if (isPrivateIp(socketIp)) {
+      return req.headers.get('x-forwarded-for')?.split(',')[0].trim() || socketIp;
+    }
+    logger.warn(`BEHIND_PROXY=true but ${socketIp} is not a trusted proxy`);
+  }
+
+  return socketIp;
+}
+
+function attemptUpgrade(req: Request, server: ReturnType<typeof Bun.serve>): boolean | Response {
+  if (req.method !== 'GET') return false;
+
   const url = new URL(req.url);
   const parts = url.pathname.split('/').filter(Boolean);
   const route = parts[0];
   const containerId = parts[1];
 
   const validRoutes = ['container', 'containerstatus', 'containerevents'];
-  if (!validRoutes.includes(route) || !containerId) {
-    logger.debug(`ws upgrade rejected: invalid route or no containerId: ${url.pathname}`);
-    return false;
-  }
-  if (!validateContainerId(containerId)) {
-    logger.warn(`ws upgrade rejected: invalid containerId format: ${containerId}`);
-    return false;
-  }
+  if (!validRoutes.includes(route) || !containerId) return false;
+  if (parts.length !== 2) return false;
+  if (!validateContainerId(containerId)) return false;
 
-  logger.debug(`ws upgrade attempting: ${route}/${containerId}`);
-  const upgraded = server.upgrade(req, {
+  const effectiveIp = resolveEffectiveIp(req, server);
+  const ipErr = getAllowedIpCheck(effectiveIp);
+  if (ipErr) return ipErr;
+
+  const rlErr = checkRateLimit(effectiveIp, 60);
+  if (rlErr) return rlErr;
+
+  return server.upgrade(req, {
     data: buildWsData(route as 'container' | 'containerstatus' | 'containerevents', containerId),
   });
-  
-  if (upgraded) {
-    logger.debug(`ws upgrade successful: ${route}/${containerId}`);
-  } else {
-    logger.warn(`ws upgrade failed for: ${route}/${containerId}`);
-  }
-  
-  return upgraded;
 }
 
 process.on('uncaughtException', (err) => {
@@ -61,7 +83,9 @@ export const server = Bun.serve<WsData>({
   hostname: '0.0.0.0',
 
   fetch(req, server) {
-    if (tryUpgrade(req, server)) return;
+    const upgradeResult = attemptUpgrade(req, server);
+    if (upgradeResult === true) return;
+    if (upgradeResult instanceof Response) return upgradeResult;
     return handleHttpRequest(req, server);
   },
 

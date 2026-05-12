@@ -49,11 +49,12 @@ export async function verifyHmac(req: Request, key: string): Promise<Response | 
   }
 
   const ts = parseInt(tsHeader, 10);
-  if (Number.isNaN(ts))
+  if (Number.isNaN(ts)) {
     return new Response(JSON.stringify({ error: 'bad timestamp' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
+  }
 
   const drift = Math.abs(Math.floor(Date.now() / 1000) - ts);
   if (drift > WINDOW_SECS) {
@@ -68,8 +69,16 @@ export async function verifyHmac(req: Request, key: string): Promise<Response | 
   const body = bodylessMethod ? '' : await req.clone().text();
 
   const expected = sign(key, req.method, url.pathname, body, ts, nonceHeader);
-  const expBuf = Buffer.from(expected, 'hex');
-  const gotBuf = Buffer.from(sigHeader, 'hex');
+  let expBuf = Buffer.from(expected, 'hex');
+  let gotBuf: Buffer;
+  try {
+    gotBuf = Buffer.from(sigHeader, 'hex');
+  } catch {
+    return new Response(JSON.stringify({ error: 'invalid signature' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
 
   if (expBuf.length !== gotBuf.length || !timingSafeEqual(expBuf, gotBuf)) {
     return new Response(JSON.stringify({ error: 'invalid signature' }), {
@@ -102,8 +111,30 @@ export function checkBasicAuth(req: Request, expectedKey: string): Response | nu
     });
   }
 
-  const decoded = atob(header.slice(6));
+  let decoded = '';
+  try {
+    decoded = atob(header.slice(6));
+  } catch {
+    return new Response(JSON.stringify({ error: 'unauthorized' }), {
+      status: 401,
+      headers: {
+        'Content-Type': 'application/json',
+        'WWW-Authenticate': 'Basic realm="airlinkd"',
+      },
+    });
+  }
+
   const colon = decoded.indexOf(':');
+  if (colon < 0) {
+    return new Response(JSON.stringify({ error: 'unauthorized' }), {
+      status: 401,
+      headers: {
+        'Content-Type': 'application/json',
+        'WWW-Authenticate': 'Basic realm="airlinkd"',
+      },
+    });
+  }
+
   const user = decoded.slice(0, colon);
   const pass = decoded.slice(colon + 1);
 

@@ -296,23 +296,39 @@ export async function handleContainerKill(req: Request): Promise<Response> {
 }
 
 export async function handleContainerCommand(req: Request): Promise<Response> {
-  let body: { id?: string; command?: string };
+  let body: { id?: string; command?: string; args?: string[]; data?: unknown; value?: unknown; payload?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
     return json({ error: 'invalid json body' }, 400);
   }
-  if (!body.id || !body.command) return json({ error: 'container ID and command are required' }, 400);
-  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+  if (!body.id || !validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+
+  const commandCandidate =
+    typeof body.command === 'string'
+      ? body.command
+      : typeof body.data === 'string'
+        ? body.data
+        : typeof body.value === 'string'
+          ? body.value
+          : typeof body.payload === 'string'
+            ? body.payload
+            : typeof body.args?.[0] === 'string'
+              ? body.args[0]
+              : '';
+
+  const command = commandCandidate.replace(/\r\n?/g, '\n').trim();
+  if (!command) return json({ error: 'container command is required' }, 400);
 
   try {
-    await sendCommandToContainer(body.id, body.command);
+    await sendCommandToContainer(body.id, command);
     return json({ message: `command sent to container ${body.id}` });
   } catch (err) {
     logger.error('error sending command', err);
     return json({ error: `failed to send command to container ${body.id}` }, 500);
   }
 }
+
 
 export async function handleContainerDelete(req: Request): Promise<Response> {
   let body: { id?: string };
