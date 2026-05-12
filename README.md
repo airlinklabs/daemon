@@ -18,6 +18,7 @@ Each physical or virtual machine that hosts game servers runs one daemon instanc
 - npm v9 or later
 - Git
 - Docker (running and accessible to the daemon process)
+- COMING SOON: Podman support to replace docker
 
 ---
 
