@@ -57,7 +57,6 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
     logger.ok(`ws auth ok: ${ws.data.route}/${ws.data.containerId}`);
 
     if (ws.data.route === 'container') {
-      ws.send(JSON.stringify({ event: 'auth', status: 'ok' }));
       attachToContainer(ws.data.containerId, ws);
     } else if (ws.data.route === 'containerstatus') {
       ws.data.timer = startStatusPolling(ws.data.containerId, ws);

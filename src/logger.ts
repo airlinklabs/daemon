@@ -12,32 +12,28 @@ const GRN = `${ESC}[32m`;
 const BLU = `${ESC}[34m`;
 const MAG = `${ESC}[35m`;
 const GRAY = `${ESC}[90m`;
+const BG_RED = `${ESC}[41m`;
+const BG_YEL = `${ESC}[43m`;
+const BG_BLU = `${ESC}[44m`;
+const BG_GRN = `${ESC}[42m`;
+const BG_MAG = `${ESC}[45m`;
 
 type Level = 'info' | 'warn' | 'error' | 'debug' | 'ok';
 
-const levelColor: Record<Level, string> = {
-  info: BLU,
-  warn: YEL,
-  error: RED,
-  debug: MAG,
-  ok: GRN,
-};
-
-const levelLabel: Record<Level, string> = {
-  info: 'info ',
-  warn: 'warn ',
-  error: 'err  ',
-  debug: 'dbg  ',
-  ok: 'ok   ',
+const levels: Record<Level, { color: string; bg: string; icon: string; label: string }> = {
+  info:  { color: BLU, bg: BG_BLU, icon: 'i', label: 'INFO ' },
+  warn:  { color: YEL, bg: BG_YEL, icon: '!', label: 'WARN ' },
+  error: { color: RED, bg: BG_RED, icon: 'x', label: 'ERROR' },
+  debug: { color: MAG, bg: BG_MAG, icon: '*', label: 'DEBUG' },
+  ok:    { color: GRN, bg: BG_GRN, icon: '+', label: 'OK   ' },
 };
 
 function ts(): string {
-  return new Date().toTimeString().split(' ')[0];
+  return new Date().toISOString().replace('T', ' ').split('.')[0];
 }
 
 function write(level: Level, msg: string, extra?: unknown) {
-  const color = levelColor[level];
-  const label = levelLabel[level];
+  const { color, bg, icon, label } = levels[level];
   const extraStr =
     extra instanceof Error
       ? ` ${extra.message}\n  ${extra.stack?.split('\n').slice(1, 4).join('\n  ') ?? ''}`
@@ -45,10 +41,10 @@ function write(level: Level, msg: string, extra?: unknown) {
         ? ` ${JSON.stringify(extra)}`
         : '';
 
-  const line = `${GRAY}${ts()}${RESET} ${color}${BOLD}${label}${RESET} ${color}${msg}${extraStr}${RESET}`;
+  const line = `${GRAY}${ts()}${RESET} ${color}${icon} ${bg}${BOLD}${label}${RESET} ${color}${msg}${extraStr}${RESET}`;
   process.stdout.write(`${line}\n`);
 
-  const fileMsg = `[${ts()}] ${label}: ${msg}${extraStr}\n`;
+  const fileMsg = `[${ts()}] ${label.trim()}: ${msg}${extraStr}\n`;
   try {
     appendFileSync(`logs/${level === 'error' ? 'error' : 'combined'}.log`, fileMsg);
   } catch {
@@ -57,26 +53,25 @@ function write(level: Level, msg: string, extra?: unknown) {
 }
 
 export function drawHeader(version: string, port: number) {
-  const art = [
-    '  A I R L I N K D',
-    '  =============',
-    '  panel daemon',
+  const lines = [
+    '',
+    `  ${BOLD}${BLU}╳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╳${RESET}`,
+    `  ${BOLD}${BLU}      AirLink - Open Source Project by AirlinkLabs${RESET}`,
+    `  ${BOLD}${BLU}      Daemon v${version}  •  Port ${port}${RESET}`,
+    `  ${BOLD}${BLU}╳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╳${RESET}`,
+    '',
   ];
-  for (const line of art) {
-    process.stdout.write(`${BOLD}${BLU}${line}${RESET}\n`);
-  }
-  process.stdout.write(`${DIM}  daemon v${version}  -  port ${port}  -  streaming logs below${RESET}\n`);
-  process.stdout.write('\n');
+  for (const l of lines) process.stdout.write(`${l}\n`);
 }
 
 const logger = {
-  info: (msg: string, extra?: unknown) => write('info', msg, extra),
-  warn: (msg: string, extra?: unknown) => write('warn', msg, extra),
+  info:  (msg: string, extra?: unknown) => write('info',  msg, extra),
+  warn:  (msg: string, extra?: unknown) => write('warn',  msg, extra),
   error: (msg: string, extra?: unknown) => write('error', msg, extra),
+  ok:    (msg: string, extra?: unknown) => write('ok',    msg, extra),
   debug: (msg: string, extra?: unknown) => {
     if (Bun.env.DEBUG === 'true') write('debug', msg, extra);
   },
-  ok: (msg: string, extra?: unknown) => write('ok', msg, extra),
 };
 
 export default logger;

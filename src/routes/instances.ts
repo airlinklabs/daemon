@@ -1,6 +1,6 @@
 
 import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { create as tarCreate, extract as tarExtract } from 'tar';
 import {
   createInstaller,
@@ -396,9 +396,9 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
     const backupsDir = resolve(process.cwd(), 'backups', body.id);
     mkdirSync(backupsDir, { recursive: true });
 
-    const backupId = crypto.randomUUID();
-    const fileName = `${backupId}.tar.gz`;
-    const backupPath = join(backupsDir, fileName);
+    const backupUuid = crypto.randomUUID();
+    const backupFileName = `${backupUuid}.tar.gz`;
+    const backupPath = join(backupsDir, backupFileName);
 
     await tarCreate(
       {
@@ -418,14 +418,14 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
 
     return json({
       success: true,
-      message: 'backup created successfully',
+      message: 'Backup created successfully',
       backup: {
-        uuid: backupId,
-        filePath: `${body.id}/${fileName}`,
+        uuid: backupUuid,
+        name: body.name,
+        filePath: `backups/${body.id}/${backupFileName}`,
         size,
+        createdAt: new Date().toISOString(),
       },
-      backupId,
-      fileName,
     });
   } catch (err) {
     logger.error(`error creating backup for container ${body.id}`, err);
@@ -439,21 +439,21 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
 }
 
 export async function handleContainerRestore(req: Request): Promise<Response> {
-  let body: { id?: string; backupId?: string };
+  let body: { id?: string; backupPath?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
     return json({ error: 'invalid json body' }, 400);
   }
   if (!body.id) return json({ error: 'container ID is required' }, 400);
-  if (!body.backupId || typeof body.backupId !== 'string') return json({ error: 'backup ID is required' }, 400);
+  if (!body.backupPath || typeof body.backupPath !== 'string') return json({ error: 'backup path is required' }, 400);
   if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
 
-  // construct and validate path from id + backupId — no user-controlled path traversal possible
-  const backupsDir = resolve(process.cwd(), 'backups', body.id);
-  const fullPath = join(backupsDir, `${body.backupId}.tar.gz`);
-  if (!fullPath.startsWith(`${backupsDir}/`)) return json({ error: 'invalid backup ID' }, 400);
-  if (!existsSync(fullPath)) return json({ error: 'backup not found' }, 404);
+  // constrain path to the backups directory for this container
+  const allowedBackupsDir = resolve(process.cwd(), 'backups', body.id);
+  const fullPath = resolve(process.cwd(), body.backupPath);
+  if (!fullPath.startsWith(`${allowedBackupsDir}/`)) return json({ error: 'invalid backup path' }, 400);
+  if (!existsSync(fullPath)) return json({ error: 'backup file not found' }, 404);
 
   try {
     const volumePath = resolve(process.cwd(), `volumes/${body.id}`);
@@ -473,7 +473,7 @@ export async function handleContainerRestore(req: Request): Promise<Response> {
 
     await tarExtract({ file: fullPath, cwd: volumePath });
 
-    return json({ success: true, message: 'backup restored successfully' });
+    return json({ success: true, message: 'Backup restored successfully' });
   } catch (err) {
     logger.error(`error restoring backup for container ${body.id}`, err);
     return json(
@@ -486,23 +486,22 @@ export async function handleContainerRestore(req: Request): Promise<Response> {
 }
 
 export async function handleContainerBackupDelete(req: Request): Promise<Response> {
-  let body: { id?: string; backupId?: string };
+  let body: { backupPath?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
     return json({ error: 'invalid json body' }, 400);
   }
-  if (!body.id || !validateContainerId(body.id)) return json({ error: 'valid container ID required' }, 400);
-  if (!body.backupId || typeof body.backupId !== 'string') return json({ error: 'backup ID is required' }, 400);
+  if (!body.backupPath || typeof body.backupPath !== 'string') return json({ error: 'backup path is required' }, 400);
 
-  const backupsDir = resolve(process.cwd(), 'backups', body.id);
-  const fullPath = join(backupsDir, `${body.backupId}.tar.gz`);
-  if (!fullPath.startsWith(`${backupsDir}/`)) return json({ error: 'invalid backup ID' }, 400);
-  if (!existsSync(fullPath)) return json({ error: 'backup not found' }, 404);
+  const allowedBackupsRoot = resolve(process.cwd(), 'backups');
+  const fullPath = resolve(process.cwd(), body.backupPath);
+  if (!fullPath.startsWith(`${allowedBackupsRoot}/`)) return json({ error: 'invalid backup path' }, 400);
+  if (!existsSync(fullPath)) return json({ error: 'backup file not found' }, 404);
 
   try {
     unlinkSync(fullPath);
-    return json({ message: 'backup deleted successfully' });
+    return json({ success: true, message: 'Backup deleted successfully' });
   } catch (err) {
     logger.error('error deleting backup', err);
     return json(
@@ -516,22 +515,56 @@ export async function handleContainerBackupDelete(req: Request): Promise<Respons
 
 export function handleContainerBackupDownload(req: Request): Response {
   const params = new URL(req.url).searchParams;
-  const id = params.get('id');
-  const backupId = params.get('backupId');
+  const backupPath = params.get('backupPath');
 
-  if (!id || !validateContainerId(id)) return json({ error: 'valid container ID required' }, 400);
-  if (!backupId || typeof backupId !== 'string') return json({ error: 'backup ID is required' }, 400);
+  if (!backupPath || typeof backupPath !== 'string') return json({ error: 'backup path is required' }, 400);
 
-  const backupsDir = resolve(process.cwd(), 'backups', id);
-  const fullPath = join(backupsDir, `${backupId}.tar.gz`);
-  if (!fullPath.startsWith(`${backupsDir}/`)) return json({ error: 'invalid backup ID' }, 400);
-  if (!existsSync(fullPath)) return json({ error: 'backup not found' }, 404);
+  const allowedBackupsRoot = resolve(process.cwd(), 'backups');
+  const fullPath = resolve(process.cwd(), backupPath);
+  if (!fullPath.startsWith(`${allowedBackupsRoot}/`)) return json({ error: 'invalid backup path' }, 400);
+  if (!existsSync(fullPath)) return json({ error: 'backup file not found' }, 404);
 
-  // streams the file without loading it into memory — Bun handles this
+  const fileName = basename(fullPath);
+
   return new Response(Bun.file(fullPath), {
     headers: {
-      'Content-Type': 'application/octet-stream',
-      'Content-Disposition': `attachment; filename="${backupId}.tar.gz"`,
+      'Content-Type': 'application/gzip',
+      'Content-Disposition': `attachment; filename="${fileName}"`,
     },
   });
+}
+
+export async function handleContainerBackupUpload(req: Request): Promise<Response> {
+  const params = new URL(req.url).searchParams;
+  const id = params.get('id');
+  const backupUuid = params.get('backupUuid');
+
+  if (!id || typeof id !== 'string') return json({ error: 'container ID is required' }, 400);
+  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  if (!backupUuid || typeof backupUuid !== 'string') return json({ error: 'backup UUID is required' }, 400);
+
+  try {
+    const backupsDir = resolve(process.cwd(), 'backups', id);
+    mkdirSync(backupsDir, { recursive: true });
+
+    const backupFileName = `${backupUuid}.tar.gz`;
+    const backupPath = join(backupsDir, backupFileName);
+
+    const buffer = await req.arrayBuffer();
+    await Bun.write(backupPath, buffer);
+
+    return json({
+      success: true,
+      message: 'Backup uploaded successfully',
+      filePath: `backups/${id}/${backupFileName}`,
+    });
+  } catch (err) {
+    logger.error('error uploading backup', err);
+    return json(
+      {
+        error: `failed to upload backup: ${err instanceof Error ? err.message : 'unknown error'}`,
+      },
+      500,
+    );
+  }
 }

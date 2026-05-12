@@ -38,6 +38,10 @@ export async function verifyHmac(req: Request, key: string): Promise<Response | 
   const nonceHeader = req.headers.get('x-airlink-nonce') ?? '';
 
   if (!tsHeader || !sigHeader) {
+    if (Bun.env.REQUIRE_HMAC === 'false') {
+      logger.warn(`unsigned request allowed (REQUIRE_HMAC=false): ${req.method} ${new URL(req.url).pathname}`);
+      return null;
+    }
     return new Response(JSON.stringify({ error: 'missing HMAC headers' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
