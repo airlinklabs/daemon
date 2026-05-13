@@ -3,35 +3,38 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import Docker from 'dockerode';
+import config from '../config';
 import logger from '../logger';
 import { emit } from '../ws/events';
+import { createRuntime } from './containerRuntime';
 
-export const docker = new Docker({
-  socketPath: process.platform === 'win32' ? '//./pipe/docker_engine' : '/var/run/docker.sock',
-});
+const runtime = createRuntime(config.containerRuntime);
+export const docker = runtime;
 
-// check docker is installed
+// check docker/podman is installed
 export async function checkDocker(): Promise<void> {
-  const proc = Bun.spawn(['docker', '--version'], {
+  const cmd = runtime.name === 'docker' ? 'docker' : 'podman';
+  const proc = Bun.spawn([cmd, '--version'], {
     stdout: 'pipe',
     stderr: 'pipe',
   });
   const code = await proc.exited;
   if (code !== 0) {
-    logger.error('docker is not installed or not in PATH, bailing');
+    logger.error(`${cmd} is not installed or not in PATH, bailing`);
     process.exit(1);
   }
 }
 
-// check docker daemon is running
+// check docker/podman daemon is running
 export async function checkDockerRunning(): Promise<void> {
-  const proc = Bun.spawn(['docker', 'ps', '-q'], {
+  const cmd = runtime.name === 'docker' ? 'docker' : 'podman';
+  const proc = Bun.spawn([cmd, 'ps', '-q'], {
     stdout: 'pipe',
     stderr: 'pipe',
   });
   const code = await proc.exited;
   if (code !== 0) {
-    logger.error('docker is not running, start it and try again');
+    logger.error(`${cmd} is not running, start it and try again`);
     process.exit(1);
   }
 }
@@ -656,6 +659,9 @@ export async function sendCommandToContainer(id: string, command: string): Promi
       return;
     }
 
+    const actualRunning = info.State.Running;
+    logger.debug(`container ${id} running state: ${actualRunning}, status: ${info.State.Status}`);
+
     const cleanedCommand = command.replace(/\r\n?/g, '\n').replace(/\n+$/g, '');
     if (!cleanedCommand.trim()) {
       logger.warn(`empty command ignored for container ${id}`);
@@ -669,17 +675,13 @@ export async function sendCommandToContainer(id: string, command: string): Promi
       stderr: false,
     });
 
-    await new Promise<void>((resolve, reject) => {
-      const onError = (err: unknown) => reject(err instanceof Error ? err : new Error(String(err)));
-      const onClose = () => resolve();
-      stream.once('error', onError);
-      stream.once('close', onClose);
-      try {
-        stream.end(`${cleanedCommand}\n`);
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
-    });
+    try {
+      stream.write(`${cleanedCommand}\n`);
+      stream.end();
+    } catch (err) {
+      logger.error(`failed to write command to stream for ${id}`, err);
+      throw err;
+    }
 
     logger.debug(`command sent to container ${id}: ${cleanedCommand}`);
   } catch (error) {

@@ -16,6 +16,7 @@ const config = {
   debug: Bun.env.DEBUG === 'true',
   version: required('version', '3.0.0'),
   statsInterval: parseInt(Bun.env.STATS_INTERVAL ?? '10000', 10),
+  containerRuntime: (Bun.env.CONTAINER_RUNTIME || 'docker') as 'docker' | 'podman',
   allowedIps:
     Bun.env.ALLOWED_IPS?.split(',')
       .map((s) => s.trim())

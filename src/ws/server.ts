@@ -34,7 +34,14 @@ type IncomingCommand = {
 };
 
 function extractCommand(msg: IncomingCommand): string | null {
-  const candidates = [msg.command, msg.data, msg.value, msg.payload];
+  // panel specifically sends msg.command, check it first
+  if (typeof msg.command === 'string') {
+    const trimmed = msg.command.replace(/\r\n?/g, '\n').trim();
+    if (trimmed) return trimmed;
+  }
+  
+  // fallback to other fields for compatibility
+  const candidates = [msg.data, msg.value, msg.payload];
 
   for (const candidate of candidates) {
     if (typeof candidate === 'string') {
@@ -100,6 +107,8 @@ export function wsOpen(ws: ServerWebSocket<WsData>): void {
 }
 
 export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): void {
+  logger.debug(`ws message received: ${typeof raw === 'string' ? raw.substring(0, 100) : 'binary'}`);
+  
   let msg: IncomingCommand | null = null;
 
   try {
@@ -116,6 +125,8 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
   }
 
   const event = (msg.event ?? '').trim();
+  logger.debug(`ws event parsed: "${event}", authenticated: ${ws.data.authed}`);
+  
   if (!event) {
     ws.send(JSON.stringify({ error: 'missing event field' }));
     ws.close(1008, 'missing event');
@@ -154,6 +165,8 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
   }
 
   if (isCommandEvent(event)) {
+    logger.debug(`command event detected, route: ${ws.data.route}`);
+    
     if (ws.data.route !== 'container') {
       ws.send(JSON.stringify({ error: 'CMD only valid on /container route' }));
       ws.close(1008, 'invalid route');
