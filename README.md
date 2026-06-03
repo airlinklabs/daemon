@@ -1,6 +1,6 @@
 # Airlink Daemon
 
-**Node agent for Airlink Panel — v2.0.0-rc1**
+**Node agent for Airlink Panel — v3.0.0**
 
 The daemon runs on each node server and handles container lifecycle, resource monitoring, file management, and SFTP. The panel communicates with it over HTTP using basic auth and optional HMAC request signing.
 
@@ -14,7 +14,6 @@ Each physical or virtual machine that hosts game servers runs one daemon instanc
 
 ## Prerequisites
 
-- Node.js v18 or later
 - npm v9 or later
 - Git
 - Docker (running and accessible to the daemon process)
