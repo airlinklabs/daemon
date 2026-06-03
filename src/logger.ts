@@ -54,10 +54,17 @@ function write(level: Level, msg: string, extra?: unknown) {
 export function drawHeader(version: string, port: number) {
   const lines = [
     '',
-    `  ${BOLD}${BLU}╳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╳${RESET}`,
-    `  ${BOLD}${BLU}      AirLink - Open Source Project by AirlinkLabs${RESET}`,
-    `  ${BOLD}${BLU}      Daemon v${version}  •  Port ${port}${RESET}`,
-    `  ${BOLD}${BLU}╳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╳${RESET}`,
+    '                                              ',
+    '  /$$$$$$ /$$         /$$/$$         /$$      ',
+    ' /$$__  $|__/        | $|__/        | $$      ',
+    '| $$  \\ $$/$$ /$$$$$$| $$/$$/$$$$$$$| $$   /$$',
+    '| $$$$$$$| $$/$$__  $| $| $| $$__  $| $$  /$$/',
+    '| $$__  $| $| $$  \\__| $| $| $$  \\ $| $$$$$$/ ',
+    '| $$  | $| $| $$     | $| $| $$  | $| $$_  $$ ',
+    '| $$  | $| $| $$     | $| $| $$  | $| $$ \\  $$',
+    '|__/  |__|__|__/     |__|__|__/  |__|__/  \\__/',
+    '                                              ',
+    '-----Airlinkd - By Airlinklabs MIT LICENSE-----',
     '',
   ];
   for (const l of lines) process.stdout.write(`${l}\n`);
