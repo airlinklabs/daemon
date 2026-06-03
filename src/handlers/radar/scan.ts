@@ -1,9 +1,7 @@
-
 import { access, readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import logger from '../../logger';
 
-interface Pattern {
+export interface RadarPattern {
   type: 'filename' | 'extension' | 'content';
   pattern: string;
   description: string;
@@ -12,15 +10,15 @@ interface Pattern {
   size_greater_than?: number;
 }
 
-interface RadarScript {
+export interface RadarScript {
   name: string;
   description: string;
   version: string;
-  patterns: Pattern[];
+  patterns: RadarPattern[];
 }
 
 interface ScanResult {
-  pattern: Pattern;
+  pattern: RadarPattern;
   matches: { path: string; size?: number }[];
 }
 
@@ -33,8 +31,6 @@ export async function scanVolume(id: string, script: RadarScript): Promise<ScanR
     throw new Error(`volume directory for ${id} does not exist`);
   }
 
-  logger.info(`starting radar scan on volume ${id} using script: ${script.name}`);
-
   const results: ScanResult[] = [];
 
   for (const pattern of script.patterns) {
@@ -43,7 +39,6 @@ export async function scanVolume(id: string, script: RadarScript): Promise<ScanR
     try {
       if (pattern.type === 'content') {
         // content scanning is intentionally not implemented to avoid reading huge volumes
-        logger.warn(`content scanning not implemented for pattern: ${pattern.pattern}`);
         continue;
       }
 
@@ -70,16 +65,13 @@ export async function scanVolume(id: string, script: RadarScript): Promise<ScanR
               try {
                 re = new RegExp(pattern.content, 'i');
               } catch {
-                logger.warn(`invalid regex in pattern content: ${pattern.content}`);
                 continue;
               }
               if (!re.test(content)) continue;
             } else {
-              logger.debug(`skipping content scan for large file: ${file}`);
               continue;
             }
           } catch {
-            logger.debug(`skipping binary or unreadable file: ${file}`);
             continue;
           }
         }
@@ -88,13 +80,8 @@ export async function scanVolume(id: string, script: RadarScript): Promise<ScanR
       }
 
       if (scanResult.matches.length > 0) results.push(scanResult);
-    } catch (err) {
-      logger.error(`error processing pattern ${pattern.pattern}`, err);
-    }
+    } catch {}
   }
-
-  const totalMatches = results.reduce((s, r) => s + r.matches.length, 0);
-  logger.info(`radar scan complete on volume ${id}: ${totalMatches} matches across ${results.length} patterns`);
 
   return results;
 }

@@ -1,5 +1,5 @@
-import protobuf from 'protobufjs';
 import Long from 'long';
+import protobuf from 'protobufjs';
 
 type LongCtor = typeof Long;
 const candidate = Long as unknown as LongCtor & { default?: LongCtor };

@@ -3,9 +3,9 @@ import { checkDocker, checkDockerRunning, initContainerStateMap } from './handle
 import { getCurrentStats, initStatsCollection, saveStats } from './handlers/stats';
 import logger, { drawHeader } from './logger';
 import { handleHttpRequest } from './router';
-import { validateContainerId } from './validation';
 import { getAllowedIpCheck } from './security/hmac';
 import { checkRateLimit } from './security/rateLimit';
+import { validateContainerId } from './validation';
 import type { WsData } from './ws/server';
 import { buildWsData, openConnections, wsClose, wsMessage, wsOpen } from './ws/server';
 
@@ -78,6 +78,18 @@ try {
 }
 initStatsCollection();
 
+const tls =
+  config.tlsCertPath && config.tlsKeyPath
+    ? {
+        cert: Bun.file(config.tlsCertPath),
+        key: Bun.file(config.tlsKeyPath),
+      }
+    : undefined;
+
+if (config.tlsCertPath && !config.tlsKeyPath) {
+  logger.warn('TLS certificate configured without TLS key; TLS disabled');
+}
+
 export const server = Bun.serve<WsData>({
   port: config.port,
   hostname: '0.0.0.0',
@@ -104,23 +116,18 @@ export const server = Bun.serve<WsData>({
     },
   },
 
-  tls: config.tlsCertPath
-    ? {
-        cert: Bun.file(config.tlsCertPath),
-        key: Bun.file(config.tlsKeyPath!),
-      }
-    : undefined,
+  tls,
 });
 
 logger.ok(`ready on port ${config.port}`);
 
-if (process.env.DAEMON_WORKER_MODE === '1') (self as unknown as Worker).postMessage({ type: 'ready', port: config.port });
+if (process.env.DAEMON_WORKER_MODE === '1')
+  (self as unknown as Worker).postMessage({ type: 'ready', port: config.port });
 
 setInterval(async () => {
   try {
     const stats = await getCurrentStats();
     saveStats(stats);
-    logger.debug(`host stats: ${stats.Ram} RAM, ${stats.Cores} CPU`);
   } catch (err) {
     logger.error('could not collect host stats', err);
   }

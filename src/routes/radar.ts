@@ -1,5 +1,6 @@
-import { scanVolume } from '../handlers/radar/scan';
-import { zipScanVolume } from '../handlers/radar/zip';
+import { z } from 'zod';
+import { type RadarPattern, type RadarScript, scanVolume } from '../handlers/radar/scan';
+import { type ZipOptions, zipScanVolume } from '../handlers/radar/zip';
 import logger from '../logger';
 import { validateContainerId } from '../validation';
 
@@ -10,91 +11,95 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-export async function handleRadarScan(req: Request): Promise<Response> {
-  let body: { id?: string; script?: unknown };
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const containerIdSchema = z.string().min(1).refine(validateContainerId, 'invalid container ID format');
+
+const radarPatternSchema = z.object({
+  type: z.enum(['filename', 'extension', 'content']),
+  pattern: z.string().min(1),
+  description: z.string(),
+  content: z.string().optional(),
+  size_less_than: z.number().optional(),
+  size_greater_than: z.number().optional(),
+}) satisfies z.ZodType<RadarPattern>;
+
+const radarScriptSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  version: z.string(),
+  patterns: z.array(radarPatternSchema),
+}) satisfies z.ZodType<RadarScript>;
+
+const folderListSchema = z.array(z.string().regex(/^[a-zA-Z0-9_\-.]+$/));
+
+const radarScanRequestSchema = z.object({
+  id: containerIdSchema,
+  script: radarScriptSchema,
+});
+
+const radarZipRequestSchema = z.object({
+  id: containerIdSchema,
+  include: folderListSchema.optional(),
+  exclude: folderListSchema.optional(),
+  maxFileSizeMb: z.number().min(1).max(32).optional(),
+});
+
+async function readJsonRecord(req: Request): Promise<Record<string, unknown> | Response> {
   try {
-    body = (await req.json()) as typeof body;
+    const body: unknown = await req.json();
+    if (!isRecord(body)) return json({ error: 'json body must be an object' }, 400);
+    return body;
   } catch {
     return json({ error: 'invalid json body' }, 400);
   }
-  if (!body.id || !body.script) return json({ error: 'container ID and script are required' }, 400);
-  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID format' }, 400);
+}
+
+export async function handleRadarScan(req: Request): Promise<Response> {
+  const body = await readJsonRecord(req);
+  if (body instanceof Response) return body;
+
+  const parsed = radarScanRequestSchema.safeParse(body);
+  if (!parsed.success) return json({ error: 'valid radar scan request is required' }, 400);
+  const { id, script } = parsed.data;
 
   try {
-    logger.info(`received radar scan request for container ${body.id}`);
-    const results = await scanVolume(body.id, body.script as Parameters<typeof scanVolume>[1]);
+    const results = await scanVolume(id, script);
     return json({
       success: true,
-      message: `scan completed for container ${body.id}`,
+      message: `scan completed for container ${id}`,
       results,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.error(`error scanning container ${body.id}`, err);
+    logger.error(`error scanning container ${id}`, err);
     return json({ success: false, error: `failed to scan container: ${msg}` }, 500);
   }
 }
 
 export async function handleRadarZip(req: Request): Promise<Response> {
-  let body: {
-    id?: string;
-    include?: unknown;
-    exclude?: unknown;
-    maxFileSizeMb?: unknown;
-  };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id || typeof body.id !== 'string') return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID format' }, 400);
+  const body = await readJsonRecord(req);
+  if (body instanceof Response) return body;
 
-  const folderPattern = /^[a-zA-Z0-9_\-.]+$/;
-
-  if (body.include !== undefined) {
-    if (
-      !Array.isArray(body.include) ||
-      body.include.some((f) => typeof f !== 'string' || !folderPattern.test(f as string))
-    ) {
-      return json({ error: 'invalid include list' }, 400);
-    }
-  }
-
-  if (body.exclude !== undefined) {
-    if (
-      !Array.isArray(body.exclude) ||
-      body.exclude.some((f) => typeof f !== 'string' || !folderPattern.test(f as string))
-    ) {
-      return json({ error: 'invalid exclude list' }, 400);
-    }
-  }
-
-  if (
-    body.maxFileSizeMb !== undefined &&
-    (typeof body.maxFileSizeMb !== 'number' || body.maxFileSizeMb < 1 || body.maxFileSizeMb > 32)
-  ) {
-    return json({ error: 'maxFileSizeMb must be a number between 1 and 32' }, 400);
-  }
+  const parsed = radarZipRequestSchema.safeParse(body);
+  if (!parsed.success) return json({ error: 'valid radar zip request is required' }, 400);
+  const { id, ...options }: { id: string } & ZipOptions = parsed.data;
 
   try {
-    logger.info(`received radar zip request for container ${body.id}`);
-    const zipBuffer = await zipScanVolume(body.id, {
-      include: body.include as string[] | undefined,
-      exclude: body.exclude as string[] | undefined,
-      maxFileSizeMb: body.maxFileSizeMb as number | undefined,
-    });
+    const zipBuffer = await zipScanVolume(id, options);
 
-    return new Response(zipBuffer as unknown as BodyInit, {
+    return new Response(zipBuffer, {
       headers: {
         'Content-Type': 'application/zip',
-        'Content-Disposition': `attachment; filename="scan-${body.id}.zip"`,
-        'Content-Length': String(zipBuffer.length),
+        'Content-Disposition': `attachment; filename="scan-${id}.zip"`,
+        'Content-Length': String(zipBuffer.byteLength),
       },
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.error(`error zipping container ${body.id}`, err);
+    logger.error(`error zipping container ${id}`, err);
     return json({ success: false, error: `failed to zip container: ${msg}` }, 500);
   }
 }

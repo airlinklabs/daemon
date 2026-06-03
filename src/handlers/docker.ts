@@ -2,14 +2,16 @@
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import Docker from 'dockerode';
 import config from '../config';
 import logger from '../logger';
 import { emit } from '../ws/events';
+import { normalizeConsoleCommand } from './consoleCommand';
 import { createRuntime } from './containerRuntime';
 
 const runtime = createRuntime(config.containerRuntime);
 export const docker = runtime;
+const CONSOLE_FIFO_RELATIVE_PATH = join('.airlinkd', 'console.in');
+const CONSOLE_FIFO_WRITE_TIMEOUT_MS = 3_000;
 
 // check docker/podman is installed
 export async function checkDocker(): Promise<void> {
@@ -74,10 +76,6 @@ async function subscribeToDockerEvents(): Promise<void> {
         };
         const id = event.id;
         const name = event.Actor?.Attributes?.name ?? '';
-        if (event.Action === 'start' || event.Action === 'die' || event.Action === 'destroy') {
-          logger.debug(`container ${name || id.slice(0, 12)} → ${event.Action}`);
-        }
-
         if (event.Action === 'start') {
           stateMap.set(id, true);
           if (name) stateMap.set(name, true);
@@ -103,7 +101,7 @@ async function subscribeToDockerEvents(): Promise<void> {
       setTimeout(subscribeToDockerEvents, 2000);
     });
 
-    logger.info('watching docker events now');
+    logger.info('docker event stream connected');
   } catch (err) {
     logger.error('could not watch docker events, trying again in 5s', err);
     setTimeout(subscribeToDockerEvents, 5000);
@@ -112,8 +110,7 @@ async function subscribeToDockerEvents(): Promise<void> {
 
 // null means unknown — caller can fall back to inspect()
 export function isContainerRunning(id: string): boolean | null {
-  if (!stateMap.has(id)) return null;
-  return stateMap.get(id)!;
+  return stateMap.get(id) ?? null;
 }
 
 export function setContainerRunning(id: string, running: boolean): void {
@@ -243,7 +240,6 @@ export function parsePortBindings(ports: string): {
     // format: containerPort or containerPort/proto
     const [containerPort, proto = 'tcp'] = rest.split('/');
     if (!hostPort || !containerPort || Number.isNaN(Number(hostPort)) || Number.isNaN(Number(containerPort))) {
-      logger.warn(`invalid port mapping: ${trimmed}`);
       continue;
     }
 
@@ -275,7 +271,7 @@ export function initContainer(id: string): string {
 
 // pull an image and stream progress over the events WS
 export async function pullImageWithProgress(image: string, containerId: string): Promise<void> {
-  logger.info(`pulling image ${image}`);
+  logger.info('pulling container image', { image, containerId });
   emit(containerId, { type: 'pulling', message: `pulling image ${image}` });
 
   await new Promise<void>((resolve, reject) => {
@@ -299,7 +295,6 @@ export async function pullImageWithProgress(image: string, containerId: string):
             });
             reject(err);
           } else {
-            logger.ok(`image ${image} is ready`);
             emit(containerId, { type: 'pulling', message: `image ${image} is ready` });
             resolve();
           }
@@ -327,7 +322,7 @@ export async function startContainer(
   Memory: number,
   Cpu: number,
 ): Promise<void> {
-  logger.info(`kicking off ${id} with image ${image}`);
+  logger.info('starting container', { containerId: id, image });
   emit(id, { type: 'pulling', message: `cleaning up any old ${id} container first` });
 
   // force-remove any existing container with this name before creating a new one
@@ -387,13 +382,13 @@ export async function startContainer(
   const originalCmd: string[] = Array.isArray(rawCmd) ? rawCmd : [rawCmd];
 
   const quoted = (args: string[]) => args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
-  let execLine: string;
+  let startLine: string;
   if (originalEntrypoint.length > 0) {
-    execLine = `exec ${quoted(originalEntrypoint)}${originalCmd.length > 0 ? ` ${quoted(originalCmd)}` : ''}`;
+    startLine = `${quoted(originalEntrypoint)}${originalCmd.length > 0 ? ` ${quoted(originalCmd)}` : ''}`;
   } else if (originalCmd.length > 0) {
-    execLine = `exec ${quoted(originalCmd)}`;
+    startLine = quoted(originalCmd);
   } else {
-    execLine = 'exec /bin/sh';
+    startLine = '/bin/sh';
   }
 
   const airlinkdDir = join(volumePath, '.airlinkd');
@@ -420,7 +415,13 @@ export async function startContainer(
     '',
     'export PS1="container@airlinkd \\w \\$ "',
     '',
-    execLine,
+    'AIRLINKD_CONSOLE_FIFO=/home/container/.airlinkd/console.in',
+    'if [ ! -p "$AIRLINKD_CONSOLE_FIFO" ]; then',
+    '  rm -f "$AIRLINKD_CONSOLE_FIFO"',
+    '  mkfifo "$AIRLINKD_CONSOLE_FIFO"',
+    'fi',
+    '',
+    `while true; do cat "$AIRLINKD_CONSOLE_FIFO"; done | ${startLine}`,
   ];
 
   writeFileSync(join(airlinkdDir, 'init.sh'), `${wrapperLines.join('\n')}\n`, {
@@ -633,7 +634,6 @@ export async function killContainer(id: string): Promise<void> {
 export async function deleteContainer(id: string): Promise<void> {
   try {
     await docker.getContainer(id).remove({ force: true });
-    logger.info(`container ${id} deleted`);
   } catch (err: unknown) {
     if ((err as { statusCode?: number })?.statusCode !== 404) {
       logger.warn(`deleteContainer for ${id}: ${(err as Error)?.message}`);
@@ -646,7 +646,32 @@ export async function deleteContainerAndVolume(id: string): Promise<void> {
   const volumePath = resolve(process.cwd(), 'volumes', id);
   if (existsSync(volumePath)) {
     rmSync(volumePath, { recursive: true, force: true });
-    logger.info(`volume for ${id} deleted`);
+  }
+}
+
+async function writeCommandToConsoleFifo(id: string, command: string): Promise<void> {
+  const fifoPath = resolve(process.cwd(), 'volumes', id, CONSOLE_FIFO_RELATIVE_PATH);
+  if (!existsSync(fifoPath) || !statSync(fifoPath).isFIFO()) {
+    throw new Error(`console command FIFO is not ready for container ${id}; restart the container with the current daemon`);
+  }
+
+  const proc = Bun.spawn(['sh', '-c', 'printf "%s\\n" "$1" > "$2"', 'airlinkd-console-command', command, fifoPath], {
+    stdout: 'ignore',
+    stderr: 'pipe',
+  });
+
+  const timeout = setTimeout(() => {
+    proc.kill();
+  }, CONSOLE_FIFO_WRITE_TIMEOUT_MS);
+
+  try {
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) {
+      const stderr = await new Response(proc.stderr).text().catch(() => '');
+      throw new Error(`console FIFO write exited with code ${exitCode}${stderr ? `: ${stderr.trim()}` : ''}`);
+    }
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -655,37 +680,17 @@ export async function sendCommandToContainer(id: string, command: string): Promi
     const container = docker.getContainer(id);
     const info = await container.inspect().catch(() => null);
     if (!info?.State.Running) {
-      logger.warn(`container ${id} is not running — cannot send command`);
-      return;
+      throw new Error(`container ${id} is not running`);
     }
 
-    const actualRunning = info.State.Running;
-    logger.debug(`container ${id} running state: ${actualRunning}, status: ${info.State.Status}`);
-
-    const cleanedCommand = command.replace(/\r\n?/g, '\n').replace(/\n+$/g, '');
-    if (!cleanedCommand.trim()) {
-      logger.warn(`empty command ignored for container ${id}`);
-      return;
+    const cleanedCommand = normalizeConsoleCommand(command);
+    if (!cleanedCommand) {
+      throw new Error(`empty command ignored for container ${id}`);
     }
 
-    const stream = await container.attach({
-      stream: true,
-      stdin: true,
-      stdout: false,
-      stderr: false,
-    });
-
-    try {
-      stream.write(`${cleanedCommand}\n`);
-      stream.end();
-    } catch (err) {
-      logger.error(`failed to write command to stream for ${id}`, err);
-      throw err;
-    }
-
-    logger.debug(`command sent to container ${id}: ${cleanedCommand}`);
+    await writeCommandToConsoleFifo(id, cleanedCommand);
   } catch (error) {
     logger.error(`failed to send command to container ${id}`, error);
+    throw error;
   }
 }
-

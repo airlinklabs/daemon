@@ -1,4 +1,3 @@
-
 import config from './config';
 import logger from './logger';
 import { handleRoot, handleStats } from './routes/core';

@@ -1,4 +1,3 @@
-
 import { mkdirSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import {
@@ -109,10 +108,10 @@ export async function handleFsFileWrite(req: Request): Promise<Response> {
   const { id, path, content } = body;
   if (!id) return json({ error: 'container ID is required' }, 400);
   if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
-  if (!validatePath(path ?? '')) return json({ error: 'invalid file path' }, 400);
+  if (!path || !validatePath(path)) return json({ error: 'invalid file path' }, 400);
 
   try {
-    await writeFileContent(id, path!, content ?? '');
+    await writeFileContent(id, path, content ?? '');
     return json({ message: 'file content successfully saved' });
   } catch (err) {
     return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
@@ -335,7 +334,6 @@ export async function handleFsAppend(req: Request): Promise<Response> {
     }
 
     await appendChunk(id, targetPath, chunk);
-    logger.debug(`appended chunk ${chunkIndex + 1}/${totalChunks} to file`);
     return json({
       message: 'chunk successfully appended',
       fileName,

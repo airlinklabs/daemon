@@ -5,7 +5,6 @@ mkdirSync('logs', { recursive: true });
 const ESC = '\x1b';
 const RESET = `${ESC}[0m`;
 const BOLD = `${ESC}[1m`;
-const DIM = `${ESC}[2m`;
 const RED = `${ESC}[31m`;
 const YEL = `${ESC}[33m`;
 const GRN = `${ESC}[32m`;
@@ -21,11 +20,11 @@ const BG_MAG = `${ESC}[45m`;
 type Level = 'info' | 'warn' | 'error' | 'debug' | 'ok';
 
 const levels: Record<Level, { color: string; bg: string; icon: string; label: string }> = {
-  info:  { color: BLU, bg: BG_BLU, icon: 'i', label: 'INFO ' },
-  warn:  { color: YEL, bg: BG_YEL, icon: '!', label: 'WARN ' },
+  info: { color: BLU, bg: BG_BLU, icon: 'i', label: 'INFO ' },
+  warn: { color: YEL, bg: BG_YEL, icon: '!', label: 'WARN ' },
   error: { color: RED, bg: BG_RED, icon: 'x', label: 'ERROR' },
   debug: { color: MAG, bg: BG_MAG, icon: '*', label: 'DEBUG' },
-  ok:    { color: GRN, bg: BG_GRN, icon: '+', label: 'OK   ' },
+  ok: { color: GRN, bg: BG_GRN, icon: '+', label: 'OK   ' },
 };
 
 function ts(): string {
@@ -65,10 +64,10 @@ export function drawHeader(version: string, port: number) {
 }
 
 const logger = {
-  info:  (msg: string, extra?: unknown) => write('info',  msg, extra),
-  warn:  (msg: string, extra?: unknown) => write('warn',  msg, extra),
+  info: (msg: string, extra?: unknown) => write('info', msg, extra),
+  warn: (msg: string, extra?: unknown) => write('warn', msg, extra),
   error: (msg: string, extra?: unknown) => write('error', msg, extra),
-  ok:    (msg: string, extra?: unknown) => write('ok',    msg, extra),
+  ok: (msg: string, extra?: unknown) => write('ok', msg, extra),
   debug: (msg: string, extra?: unknown) => {
     if (Bun.env.DEBUG === 'true') write('debug', msg, extra);
   },

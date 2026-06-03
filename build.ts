@@ -1,4 +1,4 @@
-export {};
+import { mkdir, rm } from 'node:fs/promises';
 
 const targets = [
   { target: 'bun-linux-x64', out: 'dist/airlinkd-linux-x64' },
@@ -25,10 +25,8 @@ if (tscCode !== 0) {
 }
 console.log('TypeScript check passed');
 
-await Bun.spawn(['mkdir', '-p', 'dist'], {
-  stdout: 'inherit',
-  stderr: 'inherit',
-}).exited;
+await rm('dist', { recursive: true, force: true });
+await mkdir('dist', { recursive: true });
 
 for (const { target, out } of targets) {
   console.log(`building ${out}...`);

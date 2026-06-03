@@ -2,7 +2,6 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { appendFile, copyFile, lstat, mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
-import logger from '../logger';
 import { jailPath, jailRename } from '../security/pathJail';
 import fileSpecifier from '../utils/fileSpecifier';
 
@@ -52,7 +51,8 @@ export async function listDir(id: string, relativePath = '/', filter?: string): 
     });
   }
 
-  const rateData = listCache.get(id)!;
+  const rateData = listCache.get(id);
+  if (!rateData) throw new Error('list cache was not initialized');
 
   // return cached result if the same path was requested within the last second
   if (rateData.cache && now - rateData.lastRequest < 1000 && rateData.path === relativePath) {
@@ -67,7 +67,6 @@ export async function listDir(id: string, relativePath = '/', filter?: string): 
 
   if (rateData.count > 5) {
     rateData.cache = { error: 'Too many requests, please wait 3 seconds.' };
-    logger.warn('too many list requests from one container, throttling');
     setTimeout(() => listCache.delete(id), 3000);
     return rateData.cache;
   }
@@ -135,7 +134,6 @@ export async function writeFileContent(id: string, relativePath: string, content
   await mkdir(dirname(filePath), { recursive: true });
   if (typeof content === 'string') await writeFile(filePath, content, 'utf-8');
   else await writeFile(filePath, content);
-  logger.debug(`file written: ${filePath}`);
 }
 
 export function getFilePath(id: string, relativePath = '/'): string {
@@ -193,7 +191,6 @@ export async function downloadToVolume(
     let content = await response.text();
     content = content.replace(/\$ALVKT\((\w+)\)/g, (_, varName: string) => {
       if (env[varName] !== undefined) return env[varName];
-      logger.warn(`ALVKT variable "${varName}" not found in env, replacing with empty string`);
       return '';
     });
     await writeFile(filePath, content, 'utf-8');
@@ -201,8 +198,6 @@ export async function downloadToVolume(
     const buffer = await response.arrayBuffer();
     await writeFile(filePath, Buffer.from(buffer));
   }
-
-  logger.debug(`file downloaded to ${filePath}`);
 }
 
 // copy a file from an arbitrary source path into the container volume

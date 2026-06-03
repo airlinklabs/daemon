@@ -39,7 +39,7 @@ function extractCommand(msg: IncomingCommand): string | null {
     const trimmed = msg.command.replace(/\r\n?/g, '\n').trim();
     if (trimmed) return trimmed;
   }
-  
+
   // fallback to other fields for compatibility
   const candidates = [msg.data, msg.value, msg.payload];
 
@@ -103,12 +103,9 @@ export function wsOpen(ws: ServerWebSocket<WsData>): void {
   openWsCount++;
   openConnections.add(ws);
   startAuthTimer(ws);
-  logger.debug(`ws open: ${ws.data.route}/${ws.data.containerId} (${openWsCount} total)`);
 }
 
 export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): void {
-  logger.debug(`ws message received: ${typeof raw === 'string' ? raw.substring(0, 100) : 'binary'}`);
-  
   let msg: IncomingCommand | null = null;
 
   try {
@@ -124,16 +121,16 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
     msg = { event: 'CMD', command: fallbackCommand };
   }
 
-  const event = (msg.event ?? '').trim();
-  logger.debug(`ws event parsed: "${event}", authenticated: ${ws.data.authed}`);
-  
+  const event = (msg.event ?? (extractCommand(msg) ? 'CMD' : '')).trim();
+  const eventName = event.toLowerCase();
+
   if (!event) {
     ws.send(JSON.stringify({ error: 'missing event field' }));
     ws.close(1008, 'missing event');
     return;
   }
 
-  if (event === 'auth') {
+  if (eventName === 'auth') {
     const key = extractAuthKey(msg);
     if (key !== config.key) {
       logger.warn(`ws auth rejected for ${ws.data.containerId}`);
@@ -144,7 +141,6 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
 
     ws.data.authed = true;
     clearAuthTimer(ws);
-    logger.ok(`ws auth ok: ${ws.data.route}/${ws.data.containerId}`);
 
     if (ws.data.route === 'container') {
       attachToContainer(ws.data.containerId, ws);
@@ -164,9 +160,7 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
     return;
   }
 
-  if (isCommandEvent(event)) {
-    logger.debug(`command event detected, route: ${ws.data.route}`);
-    
+  if (isCommandEvent(eventName)) {
     if (ws.data.route !== 'container') {
       ws.send(JSON.stringify({ error: 'CMD only valid on /container route' }));
       ws.close(1008, 'invalid route');
@@ -177,17 +171,14 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
       ws.send(JSON.stringify({ error: 'missing command' }));
       return;
     }
-    logger.debug(`cmd → ${ws.data.containerId}: ${command}`);
     sendCommandToContainer(ws.data.containerId, command).catch((err) => {
       logger.error(`command send failed for ${ws.data.containerId}`, err);
     });
     return;
   }
-
-  logger.debug(`unknown ws event from ${ws.data.containerId}: ${event}`);
 }
 
-export function wsClose(ws: ServerWebSocket<WsData>, code: number, _reason: string): void {
+export function wsClose(ws: ServerWebSocket<WsData>, _code: number, _reason: string): void {
   openWsCount = Math.max(0, openWsCount - 1);
   openConnections.delete(ws);
   clearAuthTimer(ws);
@@ -195,8 +186,6 @@ export function wsClose(ws: ServerWebSocket<WsData>, code: number, _reason: stri
   if (ws.data.timer) stopStatusPolling(ws.data.timer);
   if (ws.data.unsub) ws.data.unsub();
   if (ws.data._logCleanup) ws.data._logCleanup();
-
-  logger.debug(`ws closed: ${ws.data.route}/${ws.data.containerId} code=${code}`);
 }
 
 // builds the data object attached to each WS upgrade

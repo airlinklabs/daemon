@@ -1,4 +1,3 @@
-
 import { existsSync, readFileSync } from 'node:fs';
 import { rename } from 'node:fs/promises';
 import { cpus, freemem, totalmem } from 'node:os';

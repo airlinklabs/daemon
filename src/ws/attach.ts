@@ -25,7 +25,6 @@ export async function attachToContainer(id: string, ws: ServerWebSocket<WsData>)
     });
 
     logStream.on('end', () => {
-      logger.debug(`log stream ended for ${id} — closing ws so client reattaches`);
       if (ws.readyState === 1) ws.close(1000, 'stream ended');
     });
 
@@ -36,12 +35,9 @@ export async function attachToContainer(id: string, ws: ServerWebSocket<WsData>)
         (logStream as unknown as { destroy(): void }).destroy();
       } catch {}
     };
-
-    logger.debug(`attached to container ${id}`);
-  } catch (err) {
+  } catch {
     // container doesn't exist yet or has stopped — close cleanly without sending
     // any text to the terminal (xterm would render it as container output)
-    logger.debug(`attach skipped for ${id}: ${err instanceof Error ? err.message : err}`);
     if (ws.readyState === 1) ws.close(1000, 'container not available');
   }
 }

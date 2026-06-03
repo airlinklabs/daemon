@@ -1,4 +1,3 @@
-
 import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { create as tarCreate, extract as tarExtract } from 'tar';
@@ -110,7 +109,6 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
           imageExists = false;
         }
         if (!imageExists) {
-          logger.info(`pulling image ${image} for container ${id}`);
           await pullImageWithProgress(image, id);
         }
       }
@@ -141,14 +139,12 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
           const { url, fileName } = s;
 
           if (!url || !fileName) {
-            logger.warn(`invalid script entry: ${JSON.stringify(s)}`);
             continue;
           }
 
           // resolve $ALVKT(VAR) in the URL itself before downloading
           const resolvedUrl = url.replace(/\$ALVKT\((\w+)\)/g, (_, v: string) => envVars[v] ?? '');
           if (!resolvedUrl) {
-            logger.warn(`failed to resolve URL for script: ${JSON.stringify(s)}`);
             continue;
           }
 
@@ -231,12 +227,10 @@ export async function handleContainerStart(req: Request): Promise<Response> {
   let updatedCmd = StartCommand ?? '';
   updatedCmd = updatedCmd.replace(/\{\{(\w+)\}\}/g, (_, v: string) => {
     if (envVars[v] !== undefined) return envVars[v];
-    logger.warn(`variable "${v}" not found in environment ({{}} style)`);
     return '';
   });
   updatedCmd = updatedCmd.replace(/\$ALVKT\((\w+)\)/g, (_, v: string) => {
     if (envVars[v] !== undefined) return envVars[v];
-    logger.warn(`variable "${v}" not found in environment ($ALVKT style)`);
     return '';
   });
 
@@ -245,8 +239,6 @@ export async function handleContainerStart(req: Request): Promise<Response> {
     envVars.START = updatedCmd;
     envVars.STARTUP = updatedCmd;
   }
-
-  logger.warn(`starting ${id}: image=${image} START=${(envVars.START ?? '').slice(0, 120)}`);
 
   try {
     await startContainer(id, image, envVars, ports ?? '', Memory ?? 512, Cpu ?? 100);
@@ -328,7 +320,6 @@ export async function handleContainerCommand(req: Request): Promise<Response> {
     return json({ error: `failed to send command to container ${body.id}` }, 500);
   }
 }
-
 
 export async function handleContainerDelete(req: Request): Promise<Response> {
   let body: { id?: string };
@@ -430,8 +421,6 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
     );
 
     const size = statSync(backupPath).size;
-    logger.debug(`backup created: ${backupPath} (${size} bytes)`);
-
     return json({
       success: true,
       message: 'Backup created successfully',

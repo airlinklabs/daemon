@@ -6,10 +6,10 @@ export interface ContainerRuntime {
   getContainer(id: string): Docker.Container;
   listContainers(opts?: Docker.ContainerListOptions): Promise<Docker.ContainerInfo[]>;
   getEvents(opts?: Docker.GetEventsOptions): Promise<NodeJS.ReadableStream>;
-  pull(image: string, opts?: any): Promise<NodeJS.ReadableStream>;
+  pull(image: string, opts?: object): Promise<NodeJS.ReadableStream>;
   createContainer(opts: Docker.ContainerCreateOptions): Promise<Docker.Container>;
   getImage(name: string): Docker.Image;
-  modem: any;
+  modem: Docker['modem'];
 }
 
 export class DockerRuntime implements ContainerRuntime {
@@ -32,7 +32,7 @@ export class DockerRuntime implements ContainerRuntime {
     return this.docker.getEvents(opts);
   }
 
-  pull(image: string, opts?: any): Promise<NodeJS.ReadableStream> {
+  pull(image: string, opts?: object): Promise<NodeJS.ReadableStream> {
     return this.docker.pull(image, opts);
   }
 
@@ -44,7 +44,7 @@ export class DockerRuntime implements ContainerRuntime {
     return this.docker.getImage(name);
   }
 
-  get modem(): any {
+  get modem(): Docker['modem'] {
     return this.docker.modem;
   }
 }
@@ -55,7 +55,6 @@ export class PodmanRuntime implements ContainerRuntime {
 
   constructor(socketPath: string) {
     this.podman = new Docker({ socketPath });
-    logger.info('using podman runtime (podman API is docker-compatible)');
   }
 
   getContainer(id: string): Docker.Container {
@@ -70,7 +69,7 @@ export class PodmanRuntime implements ContainerRuntime {
     return this.podman.getEvents(opts);
   }
 
-  pull(image: string, opts?: any): Promise<NodeJS.ReadableStream> {
+  pull(image: string, opts?: object): Promise<NodeJS.ReadableStream> {
     return this.podman.pull(image, opts);
   }
 
@@ -82,7 +81,7 @@ export class PodmanRuntime implements ContainerRuntime {
     return this.podman.getImage(name);
   }
 
-  get modem(): any {
+  get modem(): Docker['modem'] {
     return this.podman.modem;
   }
 }
@@ -95,7 +94,7 @@ export function createRuntime(type: 'docker' | 'podman' = 'docker'): ContainerRu
         : '/var/run/docker.sock'
       : '/run/podman/podman.sock';
 
-  logger.info(`initializing ${type} runtime at ${socketPath}`);
+  logger.info('container runtime initialized', { runtime: type, socketPath });
 
   return type === 'docker' ? new DockerRuntime(socketPath) : new PodmanRuntime(socketPath);
 }

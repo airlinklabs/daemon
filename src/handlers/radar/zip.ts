@@ -1,10 +1,8 @@
-
 import type { Dirent } from 'node:fs';
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { copyFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
-import logger from '../../logger';
 
 // folders that are safe to include — contain plugins, mods, config
 const DEFAULT_INCLUDE = ['plugins', 'mods', 'config', 'addons', 'datapacks'];
@@ -53,7 +51,7 @@ const SCANNABLE_EXTENSIONS = new Set([
 
 const MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024;
 
-interface ZipOptions {
+export interface ZipOptions {
   include?: string[];
   exclude?: string[];
   maxFileSizeMb?: number;
@@ -61,7 +59,7 @@ interface ZipOptions {
 
 // collect scannable files then zip with system zip — most secure approach
 // no archiver library, no in-memory buffer growing without bound
-export async function zipScanVolume(id: string, options: ZipOptions = {}): Promise<Buffer> {
+export async function zipScanVolume(id: string, options: ZipOptions = {}): Promise<ArrayBuffer> {
   const baseDir = resolve(process.cwd(), `volumes/${id}`);
   const realVolumesDir = resolve(process.cwd(), 'volumes');
 
@@ -99,7 +97,6 @@ export async function zipScanVolume(id: string, options: ZipOptions = {}): Promi
     }
 
     if (!realFolderPath.startsWith(realVolumeDir + sep)) {
-      logger.warn(`skipping ${folderName}: resolves outside volume`);
       continue;
     }
 
@@ -109,12 +106,6 @@ export async function zipScanVolume(id: string, options: ZipOptions = {}): Promi
     await walkForFiles(realVolumeDir, realFolderPath, folderName, requestedExclude, maxFileSize, filesToZip);
   }
 
-  if (filesToZip.length === 0) {
-    logger.info(`no scannable files found in volume ${id}`);
-  }
-
-  logger.info(`zipping ${filesToZip.length} files from volume ${id} for scan`);
-
   // stage into a temp dir, then zip it, then read the zip, then clean up
   const staging = mkdtempSync(join(tmpdir(), 'airlinkd-radar-'));
   const zipPath = join(tmpdir(), `airlinkd-radar-${id}-${Date.now()}.zip`);
@@ -122,14 +113,8 @@ export async function zipScanVolume(id: string, options: ZipOptions = {}): Promi
   try {
     for (const { diskPath, archivePath } of filesToZip) {
       const dest = join(staging, archivePath);
-      await Bun.spawn(['mkdir', '-p', join(staging, archivePath.split('/').slice(0, -1).join('/') || '.')], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      }).exited;
-      await Bun.spawn(['cp', diskPath, dest], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      }).exited;
+      await mkdir(join(staging, archivePath.split('/').slice(0, -1).join('/') || '.'), { recursive: true });
+      await copyFile(diskPath, dest);
     }
 
     const proc = Bun.spawn(['zip', '-r', '-6', zipPath, '.'], {
@@ -145,12 +130,10 @@ export async function zipScanVolume(id: string, options: ZipOptions = {}): Promi
       throw new Error(`zip failed (exit ${code}): ${err}`);
     }
 
-    // read into buffer and return — caller streams it in the response
-    const buffer = await Bun.file(zipPath).arrayBuffer();
-    return Buffer.from(buffer);
+    return Bun.file(zipPath).arrayBuffer();
   } finally {
     rmSync(staging, { recursive: true, force: true });
-    if (existsSync(zipPath)) rmSync(zipPath, { force: true });
+    rmSync(zipPath, { force: true });
   }
 }
 
@@ -164,9 +147,7 @@ async function walkForFiles(
 ): Promise<void> {
   let entries: Dirent[];
   try {
-    entries = (await readdir(dir, {
-      withFileTypes: true,
-    })) as unknown as Dirent[];
+    entries = await readdir(dir, { withFileTypes: true });
   } catch {
     return;
   }
