@@ -29,22 +29,27 @@ jobs:
             runner: ubuntu-latest
             platform: linux
             arch: x64
+            windows: false
           - target: bun-linux-arm64
             runner: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-          - target: bun-darwin-x64
-            runner: macos-13
-            platform: macos
-            arch: x64
+            windows: false
           - target: bun-darwin-arm64
             runner: macos-latest
             platform: macos
             arch: arm64
+            windows: false
           - target: bun-windows-x64
             runner: ubuntu-latest
             platform: windows
             arch: x64
+            windows: true
+          - target: bun-windows-arm64
+            runner: ubuntu-latest
+            platform: windows
+            arch: arm64
+            windows: true
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -57,10 +62,18 @@ jobs:
       - name: install deps
         run: bun install --frozen-lockfile
 
-      - name: build binary
+      - name: build binary (non-windows)
+        if: matrix.windows == false
         run: |
           mkdir -p dist
           bun build --compile --target ${{ matrix.target }} --outfile dist/airlinkd src/app.ts src/server.ts
+
+      - name: build binary (windows)
+        if: matrix.windows == true
+        run: |
+          mkdir -p dist
+          bun build --compile --target ${{ matrix.target }} --outfile dist/airlinkd src/app.ts src/server.ts
+          mv dist/airlinkd.exe dist/airlinkd
 
       - name: zip binary
         run: |
@@ -95,7 +108,25 @@ jobs:
         with:
           tag_name: ${{ github.event.inputs.version }}
           name: ${{ github.event.inputs.version }}
+          body: |
+            ## AirlinkD ${{ github.event.inputs.version }}
+
+            ### Installation
+            Download the binary for your platform and architecture below, extract the zip, and run `airlinkd`.
+
+            | Platform | Architecture | Download |
+            |----------|-------------|---------|
+            | Linux | x64 | `airlinkd-linux-x64-${{ github.event.inputs.version }}.zip` |
+            | Linux | arm64 | `airlinkd-linux-arm64-${{ github.event.inputs.version }}.zip` |
+            | macOS | arm64 (Apple Silicon) | `airlinkd-macos-arm64-${{ github.event.inputs.version }}.zip` |
+            | Windows | x64 | `airlinkd-windows-x64-${{ github.event.inputs.version }}.zip` |
+            | Windows | arm64 | `airlinkd-windows-arm64-${{ github.event.inputs.version }}.zip` |
+
+            ### Changelog
+            <!-- Add changelog notes here before publishing -->
+
+            ### Notes
+            <!-- Add any additional notes, breaking changes, or upgrade instructions here -->
           files: dist/*
-          generate_release_notes: true
           draft: ${{ github.event.inputs.draft }}
           prerelease: ${{ github.event.inputs.prerelease }}
