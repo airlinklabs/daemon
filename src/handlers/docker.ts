@@ -13,6 +13,65 @@ export const docker = runtime;
 const CONSOLE_FIFO_RELATIVE_PATH = join('.airlinkd', 'console.in');
 const CONSOLE_FIFO_WRITE_TIMEOUT_MS = 3_000;
 
+// ── Pure function: build init.sh wrapper ────────────────────────────────────
+// Generates a shell script that patches the container's identity (hostname,
+// PS1 prompt) and sets up the console FIFO before launching the original
+// entrypoint. This is a pure function with no I/O — easy to unit test.
+export function buildInitScript(originalEntrypoint: string[], originalCmd: string[]): string {
+  const quoted = (args: string[]) => args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
+
+  let startLine: string;
+  if (originalEntrypoint.length > 0) {
+    startLine = `${quoted(originalEntrypoint)}${originalCmd.length > 0 ? ` ${quoted(originalCmd)}` : ''}`;
+  } else if (originalCmd.length > 0) {
+    startLine = quoted(originalCmd);
+  } else {
+    startLine = '/bin/sh';
+  }
+
+  const lines = [
+    '#!/bin/sh',
+    '',
+    '# Patch hostname so kernel-level tools report "airlinkd"',
+    "echo 'airlinkd' > /etc/hostname 2>/dev/null || true",
+    'hostname airlinkd 2>/dev/null || true',
+    '',
+    '# Patch /etc/passwd so "whoami" and shell prompts show "airlinkd"',
+    'if [ -f /etc/passwd ]; then',
+    "  sed -i 's|^container:|airlinkd:|' /etc/passwd 2>/dev/null || true",
+    "  sed -i 's|^user:|airlinkd:|'      /etc/passwd 2>/dev/null || true",
+    "  sed -i 's|^app:|airlinkd:|'       /etc/passwd 2>/dev/null || true",
+    'fi',
+    '',
+    '# Patch shell RC files for bash, zsh, and fish',
+    'for _rc in /home/container/.bashrc /home/container/.zshrc /root/.bashrc /root/.zshrc /etc/bash.bashrc; do',
+    '  if [ -f "$_rc" ]; then',
+    "    sed -i 's/petrodactyl/airlinkd/g' \"$\\_rc\" 2>/dev/null || true",
+    "    grep -q 'PS1.*airlinkd' \"$\\_rc\" 2>/dev/null || echo 'export PS1=\"container@airlinkd \\\\w \\\\\\$ \"' >> \"$\\_rc\"",
+    '  fi',
+    'done',
+    '# Fish uses a different syntax for prompts',
+    'if [ -f /home/container/.config/fish/config.fish ]; then',
+    "  sed -i 's/petrodactyl/airlinkd/g' /home/container/.config/fish/config.fish 2>/dev/null || true",
+    'fi',
+    '',
+    'export PS1="container@airlinkd \\w \\$ "',
+    '',
+    '# Set up the console FIFO (named pipe) for command input',
+    'AIRLINKD_CONSOLE_FIFO=/home/container/.airlinkd/console.in',
+    'if [ ! -p "$AIRLINKD_CONSOLE_FIFO" ]; then',
+    '  rm -f "$AIRLINKD_CONSOLE_FIFO"',
+    '  mkfifo "$AIRLINKD_CONSOLE_FIFO"',
+    'fi',
+    '',
+    '# Pipe FIFO output into the original entrypoint — commands written to the',
+    '# FIFO by the daemon appear as stdin to the game server process',
+    `while true; do cat "$AIRLINKD_CONSOLE_FIFO"; done | ${startLine}`,
+  ];
+
+  return `${lines.join('\n')}\n`;
+}
+
 // check docker/podman is installed
 export async function checkDocker(): Promise<void> {
   const cmd = runtime.name === 'docker' ? 'docker' : 'podman';
@@ -43,6 +102,12 @@ export async function checkDockerRunning(): Promise<void> {
 
 // in-memory map: containerId → whether it's running
 // keyed by both full docker ID and by container name (which is the panel's UUID)
+// ── Container state cache ────────────────────────────────────────────────────
+// In-memory map of container ID/name → running state. Populated on startup
+// from docker.listContainers() and updated in real-time via Docker event
+// streaming. NOT persisted to disk — on daemon restart, the map is rebuilt
+// from Docker's state. Operators should be aware that this cache is
+// ephemeral and exists only in the daemon process memory.
 const stateMap = new Map<string, boolean>();
 
 export async function initContainerStateMap(): Promise<void> {
@@ -381,50 +446,11 @@ export async function startContainer(
   const originalEntrypoint: string[] = Array.isArray(rawEntrypoint) ? rawEntrypoint : [rawEntrypoint];
   const originalCmd: string[] = Array.isArray(rawCmd) ? rawCmd : [rawCmd];
 
-  const quoted = (args: string[]) => args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
-  let startLine: string;
-  if (originalEntrypoint.length > 0) {
-    startLine = `${quoted(originalEntrypoint)}${originalCmd.length > 0 ? ` ${quoted(originalCmd)}` : ''}`;
-  } else if (originalCmd.length > 0) {
-    startLine = quoted(originalCmd);
-  } else {
-    startLine = '/bin/sh';
-  }
-
   const airlinkdDir = join(volumePath, '.airlinkd');
   if (!existsSync(airlinkdDir)) mkdirSync(airlinkdDir, { recursive: true });
 
-  const wrapperLines = [
-    '#!/bin/sh',
-    '',
-    "echo 'airlinkd' > /etc/hostname 2>/dev/null || true",
-    'hostname airlinkd 2>/dev/null || true',
-    '',
-    'if [ -f /etc/passwd ]; then',
-    "  sed -i 's|^container:|airlinkd:|' /etc/passwd 2>/dev/null || true",
-    "  sed -i 's|^user:|airlinkd:|'      /etc/passwd 2>/dev/null || true",
-    "  sed -i 's|^app:|airlinkd:|'       /etc/passwd 2>/dev/null || true",
-    'fi',
-    '',
-    'for _rc in /home/container/.bashrc /root/.bashrc /etc/bash.bashrc; do',
-    '  if [ -f "$_rc" ]; then',
-    '    sed -i \'s/petrodactyl/airlinkd/g\' "$_rc" 2>/dev/null || true',
-    '    grep -q \'PS1.*airlinkd\' "$_rc" 2>/dev/null || echo \'export PS1="container@airlinkd \\w \\\\$ "\' >> "$_rc"',
-    '  fi',
-    'done',
-    '',
-    'export PS1="container@airlinkd \\w \\$ "',
-    '',
-    'AIRLINKD_CONSOLE_FIFO=/home/container/.airlinkd/console.in',
-    'if [ ! -p "$AIRLINKD_CONSOLE_FIFO" ]; then',
-    '  rm -f "$AIRLINKD_CONSOLE_FIFO"',
-    '  mkfifo "$AIRLINKD_CONSOLE_FIFO"',
-    'fi',
-    '',
-    `while true; do cat "$AIRLINKD_CONSOLE_FIFO"; done | ${startLine}`,
-  ];
-
-  writeFileSync(join(airlinkdDir, 'init.sh'), `${wrapperLines.join('\n')}\n`, {
+  const initScript = buildInitScript(originalEntrypoint, originalCmd);
+  writeFileSync(join(airlinkdDir, 'init.sh'), initScript, {
     mode: 0o755,
     encoding: 'utf8',
   });

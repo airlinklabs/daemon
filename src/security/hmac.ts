@@ -5,10 +5,16 @@ import logger from '../logger';
 const WINDOW_SECS = 30;
 const seenNonces = new Set<string>();
 
+// Must match HMAC_PAYLOAD_VERSION in the panel's daemonRequest.ts.
+// Increment both sides together when changing the signing format.
+const HMAC_PAYLOAD_VERSION = 1;
+
+// Why this format: ${ts}:${nonce}:${method}:${path}:${body}
+// - ts: timestamps the request, enables 30s expiry window
+// - nonce: random per-request, prevents replay within the window
+// - method+path+body: binds signature to a specific operation
 function sign(key: string, method: string, path: string, body: string, ts: number, nonce: string): string {
-  const payload = nonce
-    ? `${ts}:${nonce}:${method.toUpperCase()}:${path}:${body}`
-    : `${ts}:${method.toUpperCase()}:${path}:${body}`;
+  const payload = `${ts}:${nonce}:${method.toUpperCase()}:${path}:${body}`;
   return new Bun.CryptoHasher('sha256', key).update(payload).digest('hex');
 }
 
@@ -68,6 +74,16 @@ export async function verifyHmac(req: Request, key: string): Promise<Response | 
   const bodylessMethod = req.method === 'GET';
   const body = bodylessMethod ? '' : await req.clone().text();
 
+  // Nonce is required on all requests. The panel always sends one.
+  // This prevents replay attacks: an attacker who captures a valid signed
+  // request cannot resubmit it because the nonce is already recorded.
+  if (!nonceHeader) {
+    return new Response(JSON.stringify({ error: 'missing nonce header' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   const expected = sign(key, req.method, url.pathname, body, ts, nonceHeader);
   const expBuf = Buffer.from(expected, 'hex');
   let gotBuf: Buffer;
@@ -87,13 +103,9 @@ export async function verifyHmac(req: Request, key: string): Promise<Response | 
     });
   }
 
-  if (nonceHeader) {
-    const replayErr = rememberNonce(ts, nonceHeader);
-    if (replayErr) return replayErr;
-  } else if (req.method !== 'GET') {
-    const replayErr = rememberNonce(ts, sigHeader);
-    if (replayErr) return replayErr;
-  }
+  // Nonce deduplication: each nonce can only be used once within the window
+  const replayErr = rememberNonce(ts, nonceHeader);
+  if (replayErr) return replayErr;
 
   return null;
 }

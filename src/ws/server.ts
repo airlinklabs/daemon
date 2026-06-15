@@ -16,6 +16,12 @@ export type WsData = {
   _logCleanup?: () => void;
 };
 
+// Type guard: asserts that the WebSocket is authenticated.
+// Use before any non-auth handler to prevent accidental auth bypass.
+export function assertAuthed(data: WsData): asserts data is WsData & { authed: true } {
+  if (!data.authed) throw new Error('WebSocket not authenticated');
+}
+
 let openWsCount = 0;
 const MAX_WS = 500;
 const AUTH_TIMEOUT_MS = 10_000;
@@ -26,11 +32,6 @@ type IncomingCommand = {
   event?: string;
   args?: string[];
   command?: string;
-  data?: unknown;
-  value?: unknown;
-  payload?: unknown;
-  key?: unknown;
-  token?: unknown;
 };
 
 function extractCommand(msg: IncomingCommand): string | null {
@@ -38,16 +39,6 @@ function extractCommand(msg: IncomingCommand): string | null {
   if (typeof msg.command === 'string') {
     const trimmed = msg.command.replace(/\r\n?/g, '\n').trim();
     if (trimmed) return trimmed;
-  }
-
-  // fallback to other fields for compatibility
-  const candidates = [msg.data, msg.value, msg.payload];
-
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string') {
-      const trimmed = candidate.replace(/\r\n?/g, '\n').trim();
-      if (trimmed) return trimmed;
-    }
   }
 
   if (Array.isArray(msg.args) && msg.args.length > 0) {
@@ -62,9 +53,13 @@ function extractCommand(msg: IncomingCommand): string | null {
   return null;
 }
 
+// Panel sends { event: 'auth', args: [key] } exactly.
+// Removed: key, token, command field fallbacks were compatibility shims for
+// undocumented clients. Accepting auth keys in unexpected fields was a
+// security risk — an attacker could inject auth via any message field.
 function extractAuthKey(msg: IncomingCommand): string | null {
-  const candidates = [msg.args?.[0], msg.key, msg.token, msg.command];
-  for (const candidate of candidates) {
+  if (Array.isArray(msg.args) && msg.args.length > 0) {
+    const candidate = msg.args[0];
     if (typeof candidate === 'string') {
       const trimmed = candidate.trim();
       if (trimmed) return trimmed;

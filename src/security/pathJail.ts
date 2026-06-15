@@ -6,6 +6,13 @@ import { realpathSync } from 'node:fs';
 import { rename } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 
+export class BackupPathError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BackupPathError';
+  }
+}
+
 // throws if resolvedPath escapes base. returns the safe resolved path.
 export function jailPath(base: string, relative: string): string {
   const realBase = realpathSync(base);
@@ -52,4 +59,17 @@ export async function jailRename(base: string, oldRel: string, newRel: string): 
   }).exited;
 
   await rename(safeSrc, safeDest);
+}
+
+// Centralised backup path validation. Ensures the resolved path stays inside
+// the container's backup directory. Throws BackupPathError if not.
+export function resolveBackupPath(containerId: string, rawPath: string): string {
+  const allowedRoot = resolve(process.cwd(), 'backups', containerId);
+  const fullPath = resolve(process.cwd(), rawPath);
+
+  if (!fullPath.startsWith(`${allowedRoot}${sep}`) && fullPath !== allowedRoot) {
+    throw new BackupPathError('backup path escapes backup directory');
+  }
+
+  return fullPath;
 }
