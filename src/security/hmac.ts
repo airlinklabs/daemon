@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, createHmac } from 'node:crypto';
 import config from '../config';
 import logger from '../logger';
 
@@ -15,7 +15,7 @@ const HMAC_PAYLOAD_VERSION = 1;
 // - method+path+body: binds signature to a specific operation
 function sign(key: string, method: string, path: string, body: string, ts: number, nonce: string): string {
   const payload = `${ts}:${nonce}:${method.toUpperCase()}:${path}:${body}`;
-  return new Bun.CryptoHasher('sha256', key).update(payload).digest('hex');
+  return createHmac('sha256', key).update(payload).digest('hex');
 }
 
 function rememberNonce(ts: number, nonceValue: string): Response | null {
