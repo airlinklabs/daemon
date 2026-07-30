@@ -245,7 +245,7 @@ export async function handleFsUpload(req: Request): Promise<Response> {
     mkdirSync(dirname(filePath), { recursive: true });
 
     let content: Buffer;
-    if (typeof fileContent === 'string' && fileContent.includes('base64')) {
+    if (typeof fileContent === 'string' && fileContent.startsWith('data:')) {
       const match = fileContent.match(/^data:[^;]+;base64,(.+)$/);
       if (!match?.[1]) return json({ error: 'invalid base64 format' }, 400);
       content = Buffer.from(match[1], 'base64');
@@ -323,7 +323,7 @@ export async function handleFsAppend(req: Request): Promise<Response> {
     const targetPath = relativePath === '/' || !relativePath ? fileName : `${relativePath}/${fileName}`;
 
     let chunk: Buffer;
-    if (typeof fileContent === 'string' && fileContent.includes('base64')) {
+    if (typeof fileContent === 'string' && fileContent.startsWith('data:')) {
       const match = fileContent.match(/^data:[^;]+;base64,(.+)$/);
       if (!match?.[1]) return json({ error: 'invalid base64 format' }, 400);
       chunk = Buffer.from(match[1], 'base64');

@@ -555,8 +555,7 @@ export async function handleContainerBackupUpload(req: Request): Promise<Respons
     const backupFileName = `${backupUuid}.tar.gz`;
     const backupPath = join(backupsDir, backupFileName);
 
-    const buffer = await req.arrayBuffer();
-    await Bun.write(backupPath, buffer);
+    await Bun.write(backupPath, req.body);
 
     return json({
       success: true,
