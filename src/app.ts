@@ -28,7 +28,7 @@ Examples:
 export async function runDaemon(cliArgs: string[]): Promise<void> {
   const first = cliArgs[0];
 
-  if (first === 'help' || cliArgs.includes('--help') || cliArgs.includes('-h')) {
+  if (first === 'help' || cliArgs.includes('-help') || cliArgs.includes('--help') || cliArgs.includes('-h')) {
     if (first === 'configure') {
       const { printConfigureHelp } = await import('./configure');
       printConfigureHelp();
