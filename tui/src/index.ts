@@ -9,20 +9,33 @@ import {
 } from "@opentui/core";
 import { watch, openSync, readSync, closeSync, statSync, existsSync, readFileSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { collectHost, collectDocker, collectDaemon, resolveExternalDir, type DaemonCtx, type HostStats, type DockerStats, type DaemonInfo } from "./stats";
 
-const TUI_DIR = import.meta.dir;
+const IS_COMPILED = import.meta.dir.includes("$bunfs");
+const RUNTIME_DIR = dirname(process.execPath);
+const TUI_DIR = IS_COMPILED ? RUNTIME_DIR : import.meta.dir;
 const DAEMON_DIR = findDaemonDir();
 const DEFAULT_LOG_DIR = `${DAEMON_DIR}/logs`;
 const LOG_FILES = ["combined.log", "error.log"];
-const VERSION = "3.0.2";
+const VERSION = readVersion(DAEMON_DIR) || readVersion(resolve(TUI_DIR, "..")) || "unknown";
 
 function findDaemonDir(): string {
-  const candidates = [resolve(TUI_DIR, "../.."), resolve(TUI_DIR, ".."), TUI_DIR, "/etc/daemon"];
+  const os = process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
+  const arch = process.arch;
+  const ext = process.platform === "win32" ? ".exe" : "";
+  const candidates = [resolve(TUI_DIR, ".."), resolve(TUI_DIR, "../.."), TUI_DIR, RUNTIME_DIR, "/etc/daemon"];
   for (const dir of candidates) {
     try {
-      if (existsSync(`${dir}/src/app.ts`) || existsSync(`${dir}/airlinkd`) || existsSync(`${dir}/dist/airlinkd`)) return dir;
+      if (
+        existsSync(`${dir}/src/app.ts`) ||
+        existsSync(`${dir}/airlinkd`) ||
+        existsSync(`${dir}/airlinkd.exe`) ||
+        existsSync(`${dir}/dist/airlinkd`) ||
+        existsSync(`${dir}/dist/airlinkd.exe`) ||
+        existsSync(`${dir}/airlinkd-${os}-${arch}${ext}`) ||
+        existsSync(`${dir}/airlinkd-${os}-${arch}.exe`)
+      ) return dir;
     } catch {
       /* unreadable candidate */
     }
@@ -91,14 +104,17 @@ const DAEMON_PORT = Number(env.port || "3002");
 const RUNTIME = env.CONTAINER_RUNTIME || "docker";
 const REMOTE = env.remote || "localhost";
 const KEY = env.key || "";
-const REPO_VERSION = readVersion(DAEMON_DIR) || VERSION;
+const REPO_VERSION = VERSION;
 
 function readVersion(dir: string): string {
-  try {
-    const pkg = JSON.parse(readFileSync(`${dir}/package.json`, "utf8")) as { version?: string };
-    if (pkg?.version) return pkg.version;
-  } catch {
-    /* no package.json */
+  const roots = [dir, resolve(dir, "..")];
+  for (const root of roots) {
+    try {
+      const pkg = JSON.parse(readFileSync(`${root}/package.json`, "utf8")) as { version?: string };
+      if (pkg?.version) return pkg.version;
+    } catch {
+      /* no package.json */
+    }
   }
   try {
     const cfg = JSON.parse(readFileSync(`${dir}/storage/config.json`, "utf8")) as { meta?: { version?: string } };
@@ -109,17 +125,22 @@ function readVersion(dir: string): string {
   return "";
 }
 
-function findBin(): { bin: string; args: string[] } | null {
+function findBin(): { bin: string; args: string[]; cwd: string } | null {
   const os = process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
   const arch = process.arch;
+  const ext = process.platform === "win32" ? ".exe" : "";
   const candidates = [
-    `${DAEMON_DIR}/dist/airlinkd-${os}-${arch}${process.platform === "win32" ? ".exe" : ""}`,
-    `${DAEMON_DIR}/dist/airlinkd`,
-    `${DAEMON_DIR}/airlinkd`,
-    "/etc/daemon/airlinkd",
+    resolve(RUNTIME_DIR, `airlinkd-${os}-${arch}${ext}`),
+    resolve(RUNTIME_DIR, `airlinkd${ext}`),
+    resolve(RUNTIME_DIR, "dist", `airlinkd-${os}-${arch}${ext}`),
+    resolve(RUNTIME_DIR, "dist", `airlinkd${ext}`),
+    resolve(DAEMON_DIR, "dist", `airlinkd-${os}-${arch}${ext}`),
+    resolve(DAEMON_DIR, "dist", `airlinkd${ext}`),
+    resolve(DAEMON_DIR, `airlinkd${ext}`),
+    resolve("/etc/daemon", `airlinkd${ext}`),
   ];
   for (const c of candidates) {
-    if (existsSync(c)) return { bin: c, args: [] };
+    if (existsSync(c)) return { bin: c, args: ["start"], cwd: DAEMON_DIR };
   }
   return null;
 }
@@ -321,8 +342,8 @@ async function main() {
 
 function findBun(): string {
   const exe = process.execPath;
-  const base = exe.split("/").pop() ?? "";
-  if (base.includes("bun") || base.includes("Bun")) return exe;
+  const base = basename(exe).toLowerCase();
+  if (base.includes("bun")) return exe;
   return "bun";
 }
 
@@ -336,7 +357,7 @@ function startDaemon() {
   configError = "";
   const found = findBin();
   const child = found
-    ? spawn(found.bin, found.args, { cwd: DAEMON_DIR, env: daemonEnv, stdio: "ignore" })
+    ? spawn(found.bin, found.args, { cwd: found.cwd, env: daemonEnv, stdio: "ignore" })
     : spawn(findBun(), ["src/app.ts"], { cwd: DAEMON_DIR, env: daemonEnv, stdio: "ignore" });
     daemonChild = child;
     daemonStartedAt = Date.now();
@@ -649,6 +670,13 @@ function startDaemon() {
   }
   fillFromFile(currentFile);
   void refreshStats();
+}
+
+const cliArgs = process.argv.slice(2);
+if (cliArgs.length > 0) {
+  const { runDaemon } = await import("../../src/app");
+  await runDaemon(cliArgs);
+  await new Promise<void>(() => {});
 }
 
 void main();

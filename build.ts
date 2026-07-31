@@ -1,19 +1,29 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 
-const targets = [
-  { target: 'bun-linux-x64', out: 'dist/airlinkd-linux-x64' },
-  { target: 'bun-linux-x64-baseline', out: 'dist/airlinkd-linux-x64-baseline' },
-  { target: 'bun-linux-arm64', out: 'dist/airlinkd-linux-arm64' },
-  { target: 'bun-darwin-x64', out: 'dist/airlinkd-macos-x64' },
-  { target: 'bun-darwin-arm64', out: 'dist/airlinkd-macos-arm64' },
-  { target: 'bun-windows-x64', out: 'dist/airlinkd-windows-x64.exe' },
+const outDir = 'dist/daemon';
+
+const ALL_TARGETS = [
+  { platform: 'linux', arch: 'x64', target: 'bun-linux-x64', out: `${outDir}/airlinkd-linux-x64` },
+  { platform: 'linux', arch: 'x64', target: 'bun-linux-x64-baseline', out: `${outDir}/airlinkd-linux-x64-baseline` },
+  { platform: 'linux', arch: 'arm64', target: 'bun-linux-arm64', out: `${outDir}/airlinkd-linux-arm64` },
+  { platform: 'macos', arch: 'x64', target: 'bun-darwin-x64', out: `${outDir}/airlinkd-macos-x64` },
+  { platform: 'macos', arch: 'arm64', target: 'bun-darwin-arm64', out: `${outDir}/airlinkd-macos-arm64` },
+  { platform: 'windows', arch: 'x64', target: 'bun-windows-x64', out: `${outDir}/airlinkd-windows-x64.exe` },
   {
+    platform: 'windows',
+    arch: 'x64',
     target: 'bun-windows-x64-baseline',
-    out: 'dist/airlinkd-windows-x64-baseline.exe',
+    out: `${outDir}/airlinkd-windows-x64-baseline.exe`,
   },
 ];
 
-console.log('checking TypeScript...');
+const nativePlatform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
+const all = process.env.AIRLINK_DAEMON_ALL === '1';
+const targets = all
+  ? ALL_TARGETS
+  : ALL_TARGETS.filter((t) => t.platform === nativePlatform && (t.arch === process.arch || t.target.endsWith('baseline')));
+
+console.log(`checking TypeScript for ${nativePlatform}-${process.arch}${all ? ' (all targets)' : ''}...`);
 const tscProc = Bun.spawn(['bunx', 'tsc', '--noEmit'], {
   stdout: 'inherit',
   stderr: 'inherit',
@@ -25,8 +35,8 @@ if (tscCode !== 0) {
 }
 console.log('TypeScript check passed');
 
-await rm('dist', { recursive: true, force: true });
-await mkdir('dist', { recursive: true });
+await rm(outDir, { recursive: true, force: true });
+await mkdir(outDir, { recursive: true });
 
 // Stub native .node modules before building.
 // Bun standalone binaries crash on dlopen of .node files.
@@ -54,14 +64,13 @@ if (orig.includes("require('./crypto/build/Release/sshcrypto.node')")) {
 }
 
 // 3. Remove .node files so bun build --compile can't try to embed them
-import { unlinkSync } from 'node:fs';
-import { globSync } from 'node:fs';
-
-const { execSync } = await import('node:child_process');
 try {
+  const { execSync } = await import('node:child_process');
   execSync('find node_modules -name "*.node" -delete 2>/dev/null', { stdio: 'ignore' });
   console.log('removed .node files');
-} catch {}
+} catch {
+  /* ignore */
+}
 
 for (const { target, out } of targets) {
   console.log(`building ${out}...`);

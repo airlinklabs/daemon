@@ -1,5 +1,3 @@
-export {};
-
 const firstArg = process.argv[2];
 const args = process.argv.slice(2);
 
@@ -26,28 +24,36 @@ Examples:
   ${bin} configure -p http://localhost:3000 -k your-node-key`);
 }
 
-if (args.includes('--help') || args.includes('-h')) {
-  if (firstArg === 'configure') {
-    const { printConfigureHelp } = await import('./configure');
-    printConfigureHelp();
-  } else {
-    printHelp();
+export async function runDaemon(cliArgs: string[]): Promise<void> {
+  const first = cliArgs[0];
+
+  if (cliArgs.includes('--help') || cliArgs.includes('-h')) {
+    if (first === 'configure') {
+      const { printConfigureHelp } = await import('./configure');
+      printConfigureHelp();
+    } else {
+      printHelp();
+    }
+    process.exit(0);
   }
-  process.exit(0);
+
+  if (first === 'configure') {
+    const { runConfigure } = await import('./configure');
+    await runConfigure(cliArgs.slice(1));
+    process.exit(0);
+  }
+
+  if (first && first !== 'start') {
+    console.error(`Unknown command: ${first}`);
+    console.log('Run with --help to see the available commands.');
+    process.exit(1);
+  }
+
+  await import('./protobufLong');
+  await import('./bootstrap');
+  await import('./server');
 }
 
-if (firstArg === 'configure') {
-  const { runConfigure } = await import('./configure');
-  await runConfigure(process.argv.slice(3));
-  process.exit(0);
+if (import.meta.main) {
+  await runDaemon(process.argv.slice(2));
 }
-
-if (firstArg && firstArg !== 'start') {
-  console.error(`Unknown command: ${firstArg}`);
-  console.log('Run with --help to see the available commands.');
-  process.exit(1);
-}
-
-await import('./protobufLong');
-await import('./bootstrap');
-await import('./server');

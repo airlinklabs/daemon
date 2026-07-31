@@ -18,8 +18,8 @@ interface SystemStat {
 
 let statsLog: SystemStat[] = [];
 
-// os-utils doesn't exist in bun-land, so we do it the old fashioned way
-// sample cpu times, wait 100ms, sample again, compute delta
+// Sample CPU times, wait briefly, sample again, then compute the delta.
+// This works in Bun and on all supported desktop/server platforms.
 function getCpuPercent(): Promise<number> {
   const before = cpus();
   return new Promise((resolve) => {
@@ -37,6 +37,11 @@ function getCpuPercent(): Promise<number> {
           (Object.values(b) as number[]).reduce((s, v) => s + v, 0);
         totalIdle += dIdle;
         totalTick += dTick;
+      }
+
+      if (totalTick <= 0) {
+        resolve(0);
+        return;
       }
 
       const usage = 1 - totalIdle / totalTick;
@@ -75,7 +80,7 @@ export function saveStats(stats: SystemStat): void {
   statsLog.push(stats);
   cleanOldEntries();
 
-  // write to temp, then rename — same atomicity guarantee as before
+  // Write to a temporary file first, then rename into place.
   Bun.write(tempStoragePath, JSON.stringify(statsLog, null, 2))
     .then(() => rename(tempStoragePath, storagePath))
     .catch((err) => logger.error('failed to write stats file', err));
@@ -94,18 +99,17 @@ export function getTotalStats(): SystemStat[] {
   return [];
 }
 
-// called once on startup to load persisted stats and wire up the collection interval
+// called once on startup to load persisted stats
 export function initStatsCollection(): void {
-  // load existing stats from disk
   if (existsSync(storagePath)) {
     try {
       const data = readFileSync(storagePath, 'utf8').trim();
-      if (data) {
-        const parsed = JSON.parse(data);
-        if (Array.isArray(parsed)) {
-          statsLog = parsed.filter((e: SystemStat) => e?.timestamp);
-          cleanOldEntries();
-        }
+      if (!data) return;
+
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        statsLog = parsed.filter((e: SystemStat) => e?.timestamp);
+        cleanOldEntries();
       }
     } catch (err) {
       logger.error('error loading stats on startup', err);
