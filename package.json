@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun --hot src/app.ts",
-    "start": "bun src/app.ts",
+    "start": "bun tui/src/index.ts",
+    "start:daemon": "bun src/app.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "biome check .",
