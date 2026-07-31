@@ -6,13 +6,14 @@ function printHelp(): void {
   console.log(`Airlink daemon
 
 Usage:
-  ${bin} [start]
+  ${bin}              Run the supervised TUI (starts the daemon, shows logs)
+  ${bin} start        Run the daemon headless. This is the default command.
   ${bin} configure --panel <url> --key <key>
   ${bin} --help
 
 Commands:
-  start       Run the daemon. This is the default when no command is given.
-  configure  Write .env values for the panel host and daemon key.
+  start       Run the daemon. This is the default when a command is given.
+  configure   Write .env values for the panel host and daemon key.
 
 Options:
   -h, --help  Show this help.
@@ -27,7 +28,7 @@ Examples:
 export async function runDaemon(cliArgs: string[]): Promise<void> {
   const first = cliArgs[0];
 
-  if (cliArgs.includes('--help') || cliArgs.includes('-h')) {
+  if (first === 'help' || cliArgs.includes('--help') || cliArgs.includes('-h')) {
     if (first === 'configure') {
       const { printConfigureHelp } = await import('./configure');
       printConfigureHelp();
