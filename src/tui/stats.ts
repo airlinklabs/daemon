@@ -473,7 +473,10 @@ function findDaemonPid(): number | null {
     if (!/^\d+$/.test(entry)) continue;
     try {
       const cmdline = readFileSync(`/proc/${entry}/cmdline`, "utf8");
-      if (cmdline.includes("airlinkd") && !cmdline.includes("tui")) {
+      if (
+        cmdline.includes("airlinkd") &&
+        (cmdline.includes("start") || cmdline.includes("src/app.ts") || cmdline.includes("app.ts"))
+      ) {
         const ppid = pidStatField(Number(entry), 1);
         if (ppid !== 1 && existsSync(`/proc/${ppid}`)) continue;
         return Number(entry);

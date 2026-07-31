@@ -1,6 +1,6 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 
-const outDir = 'dist/daemon';
+const outDir = 'dist';
 
 const ALL_TARGETS = [
   { platform: 'linux', arch: 'x64', target: 'bun-linux-x64', out: `${outDir}/airlinkd-linux-x64` },
@@ -18,7 +18,7 @@ const ALL_TARGETS = [
 ];
 
 const nativePlatform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
-const all = process.env.AIRLINK_DAEMON_ALL === '1';
+const all = process.env.AIRLINK_ALL === '1';
 const targets = all
   ? ALL_TARGETS
   : ALL_TARGETS.filter((t) => t.platform === nativePlatform && (t.arch === process.arch || t.target.endsWith('baseline')));
@@ -35,8 +35,13 @@ if (tscCode !== 0) {
 }
 console.log('TypeScript check passed');
 
-await rm(outDir, { recursive: true, force: true });
 await mkdir(outDir, { recursive: true });
+try {
+  const { execSync } = await import('node:child_process');
+  execSync(`rm -f ${outDir}/airlinkd-* 2>/dev/null`, { stdio: 'ignore' });
+} catch {
+  /* nothing to clean */
+}
 
 // Stub native .node modules before building.
 // Bun standalone binaries crash on dlopen of .node files.

@@ -55,5 +55,11 @@ export async function runDaemon(cliArgs: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  await runDaemon(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  if (args.length === 0) {
+    const { runTui } = await import("./tui");
+    await runTui();
+  } else {
+    await runDaemon(args);
+  }
 }

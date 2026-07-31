@@ -4,13 +4,23 @@ import {
   Text,
   ScrollBoxRenderable,
   TextRenderable,
+  type CliRenderer,
   type KeyEvent,
   type Renderable,
 } from "@opentui/core";
 import { watch, openSync, readSync, closeSync, statSync, existsSync, readFileSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { basename, dirname, resolve } from "node:path";
-import { collectHost, collectDocker, collectDaemon, resolveExternalDir, type DaemonCtx, type HostStats, type DockerStats, type DaemonInfo } from "./stats";
+import {
+  collectHost,
+  collectDocker,
+  collectDaemon,
+  resolveExternalDir,
+  type DaemonCtx,
+  type HostStats,
+  type DockerStats,
+  type DaemonInfo,
+} from "./stats";
 
 const IS_COMPILED = import.meta.dir.includes("$bunfs");
 const RUNTIME_DIR = dirname(process.execPath);
@@ -24,7 +34,7 @@ function findDaemonDir(): string {
   const os = process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
   const arch = process.arch;
   const ext = process.platform === "win32" ? ".exe" : "";
-  const candidates = [resolve(TUI_DIR, ".."), resolve(TUI_DIR, "../.."), TUI_DIR, RUNTIME_DIR, "/etc/daemon"];
+  const candidates = [resolve(TUI_DIR, "../.."), resolve(TUI_DIR, ".."), TUI_DIR, RUNTIME_DIR, "/etc/daemon"];
   for (const dir of candidates) {
     try {
       if (
@@ -35,15 +45,18 @@ function findDaemonDir(): string {
         existsSync(`${dir}/dist/airlinkd.exe`) ||
         existsSync(`${dir}/airlinkd-${os}-${arch}${ext}`) ||
         existsSync(`${dir}/airlinkd-${os}-${arch}.exe`)
-      ) return dir;
+      ) {
+        return dir;
+      }
     } catch {
       /* unreadable candidate */
     }
   }
   return candidates[0];
 }
+
 const WIDE_MIN_WIDTH = 110;
-const BRAND_WIDTH = 58;
+const SHORT_MAX_HEIGHT = 27;
 const INITIAL_TAIL_LINES = 1000;
 const STATS_INTERVAL_MS = 5000;
 
@@ -188,7 +201,7 @@ function fmtDur(sec: number): string {
   const d = Math.floor(sec / 86400);
   const h = Math.floor((sec % 86400) / 3600);
   const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
+  const s = Math.floor(sec % 60);
   if (d > 0) return `${d}d ${h}h ${m}m`;
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m ${s}s`;
@@ -211,63 +224,47 @@ function severity(pct: number): string {
   return "#34D399";
 }
 
-function daemonLines(d: DaemonInfo, docker: DockerStats): { text: string; fg: string }[] {
-  const lines: { text: string; fg: string }[] = [];
-  const status = d.online ? "online" : d.mode === "none" ? "down" : "down";
-  lines.push({
-    text: `● Daemon ${status} · Airlinkd ${d.version || VERSION}`,
-    fg: d.online ? "#4ADE80" : "#FF6B6B",
-  });
+function daemonLines(d: DaemonInfo, short = false): { text: string; fg: string }[] {
   const mode = d.mode === "managed" ? "managed" : d.mode === "external" ? "external" : "no daemon";
-  lines.push({
-    text: `  ${RUNTIME} runtime · port ${d.port} · remote ${d.remote}`,
-    fg: "#9CA3AF",
-  });
-  lines.push({
-    text: `  ${mode}${d.pid ? ` · pid ${d.pid}` : ""}${d.uptimeSec != null ? ` · up ${fmtDur(d.uptimeSec)}` : ""}`,
-    fg: "#9CA3AF",
-  });
-  lines.push({ text: `  kernel ${d.kernel} · errors 24h ${d.errors24h}`, fg: "#9CA3AF" });
-  lines.push({
-    text: `  docker ${docker.online ? `online · containers ${docker.containers.filter((c) => c.state === "running").length}/${docker.containers.length}` : docker.error ? docker.error.slice(0, 30) : "offline"}`,
-    fg: docker.online ? "#9CA3AF" : "#FF6B6B",
-  });
+  const lines = [
+    {
+      text: `● Daemon ${d.online ? "online" : "down"} · Airlinkd ${d.version || VERSION}`,
+      fg: d.online ? "#4ADE80" : "#FF6B6B",
+    },
+    {
+      text: `${mode} · pid ${d.pid ?? "–"}${d.uptimeSec != null ? ` · up ${fmtDur(d.uptimeSec)}` : ""} · errors 24h ${d.errors24h}`,
+      fg: "#9CA3AF",
+    },
+  ];
+  if (!short) lines.push({ text: `${d.runtime} runtime · port ${d.port} · remote ${d.remote} · kernel ${d.kernel}`, fg: "#9CA3AF" });
   return lines;
 }
 
-function hostLines(h: HostStats): { text: string; fg: string }[] {
+function hostLines(h: HostStats, short = false): { text: string; fg: string }[] {
   const lines: { text: string; fg: string }[] = [];
-  lines.push({ text: `CPU  ${h.cpuPct.toFixed(1).padStart(5)}% ${bar(h.cpuPct, 18)}`, fg: severity(h.cpuPct) });
-  const cores = h.perCorePct.slice(0, 8);
-  for (let i = 0; i < cores.length; i += 4) {
-    const chunk = cores.slice(i, i + 4).map((p, j) => `c${i + j} ${Math.round(p).toString().padStart(2)}%`).join(" ");
-    lines.push({ text: `${i === 0 ? "CORE" : "    "} ${chunk}`, fg: "#9CA3AF" });
-  }
-  if (h.perCorePct.length > 8) {
-    lines.push({ text: `     +${h.perCorePct.length - 8} more cores`, fg: "#6B7280" });
-  }
+  const cores = h.perCorePct.slice(0, 4).map((p, i) => `c${i} ${Math.round(p)}%`).join(" ");
+  lines.push({ text: `CPU  ${h.cpuPct.toFixed(1).padStart(5)}% ${bar(h.cpuPct, 12)} ${cores}`, fg: severity(h.cpuPct) });
   const memPct = h.memTotalGb > 0 ? (h.memUsedGb / h.memTotalGb) * 100 : 0;
   lines.push({
-    text: `MEM  ${h.memUsedGb.toFixed(1)}/${h.memTotalGb.toFixed(1)} GB ${bar(memPct, 16)} cached ${h.memCachedGb.toFixed(1)}`,
+    text: `MEM  ${h.memUsedGb.toFixed(1)}/${h.memTotalGb.toFixed(1)} GB ${bar(memPct, 14)} cached ${h.memCachedGb.toFixed(1)}`,
     fg: severity(memPct),
   });
-  if (h.swapTotalGb > 0.1) {
-    const swapPct = (h.swapUsedGb / h.swapTotalGb) * 100;
-    lines.push({ text: `SWAP ${h.swapUsedGb.toFixed(2)}/${h.swapTotalGb.toFixed(1)} GB ${bar(swapPct, 16)}`, fg: severity(swapPct) });
-  } else {
-    lines.push({ text: "SWAP none", fg: "#6B7280" });
-  }
   lines.push({
     text: `LOAD ${h.load1.toFixed(2)} ${h.load5.toFixed(2)} ${h.load15.toFixed(2)} · UP ${fmtDur(h.sysUptimeSec)} · ${h.procs} procs`,
     fg: "#9CA3AF",
   });
-  for (const d of h.disks.slice(0, 3)) {
+  if (short) return lines;
+  if (h.swapTotalGb > 0.1) {
+    const swapPct = (h.swapUsedGb / h.swapTotalGb) * 100;
+    lines.push({ text: `SWAP ${h.swapUsedGb.toFixed(2)}/${h.swapTotalGb.toFixed(1)} GB ${bar(swapPct, 10)}`, fg: severity(swapPct) });
+  }
+  for (const d of h.disks.slice(0, 2)) {
     lines.push({
       text: `DISK ${d.mount.slice(0, 8).padEnd(8)} ${d.usedGb.toFixed(1)}/${d.totalGb.toFixed(1)} GB ${bar(d.pct, 10)} ${Math.round(d.pct)}%`,
       fg: severity(d.pct),
     });
   }
-  for (const n of h.nets) {
+  for (const n of h.nets.slice(0, 1)) {
     lines.push({
       text: `NET  ${n.iface.slice(0, 8).padEnd(8)} ↓ ${fmtBytes(n.rxBps)}/s ↑ ${fmtBytes(n.txBps)}/s`,
       fg: "#9CA3AF",
@@ -277,9 +274,44 @@ function hostLines(h: HostStats): { text: string; fg: string }[] {
     const hot = h.temps.some((t) => t > 70);
     lines.push({ text: `TEMP ${h.temps.map((t) => `${Math.round(t)}°C`).join(" ")}`, fg: hot ? "#F87171" : "#9CA3AF" });
   }
-  for (const p of h.topProcs) {
+  for (const p of h.topProcs.slice(0, 2)) {
     lines.push({
-      text: `TOP  ${p.name.slice(0, 16).padEnd(16)} ${p.cpuPct.toFixed(1).padStart(5)}% ${fmtBytes(p.rssMb * 1e6)}`,
+      text: `TOP  ${p.name.slice(0, 14).padEnd(14)} ${p.cpuPct.toFixed(1).padStart(5)}% ${fmtBytes(p.rssMb * 1e6)}`,
+      fg: "#9CA3AF",
+    });
+  }
+  return lines;
+}
+
+function containerLines(docker: DockerStats, short = false): { text: string; fg: string }[] {
+  if (!docker.online) {
+    return [{ text: `docker ${docker.error ?? "unreachable"}`, fg: "#FF6B6B" }];
+  }
+  if (docker.containers.length === 0) {
+    return [
+      { text: "no containers on this host", fg: "#6B7280" },
+      { text: `docker online · images ${docker.images} · nets ${docker.networks} · vols ${docker.volumes}`, fg: "#9CA3AF" },
+    ];
+  }
+  const running = docker.containers.filter((c) => c.state === "running");
+  const sumCpu = running.reduce((a, c) => a + c.cpuPct, 0);
+  const sumMemMb = running.reduce((a, c) => a + c.memUsedMb, 0);
+  const sumLimitMb = running.reduce((a, c) => a + c.memLimitMb, 0);
+  const memText = sumLimitMb > 0 ? `${fmtBytes(sumMemMb * 1e6)} / ${fmtBytes(sumLimitMb * 1e6)}` : fmtBytes(sumMemMb * 1e6);
+  const stateCounts = new Map<string, number>();
+  for (const c of docker.containers) stateCounts.set(c.state, (stateCounts.get(c.state) ?? 0) + 1);
+  const states = [...stateCounts.entries()].map(([s, n]) => `${s} ${n}`).join(" · ");
+  const lines = [
+    {
+      text: `● ${running.length} active / ${docker.containers.length} total`,
+      fg: running.length > 0 ? "#34D399" : "#6B7280",
+    },
+    { text: `Σ CPU ${sumCpu.toFixed(1)}% · Σ MEM ${memText}`, fg: "#9CA3AF" },
+  ];
+  if (!short) {
+    lines.push({ text: states, fg: "#9CA3AF" });
+    lines.push({
+      text: `docker online · images ${docker.images} · nets ${docker.networks} · vols ${docker.volumes} · disk ${docker.dockerDiskGb.toFixed(1)} GB`,
       fg: "#9CA3AF",
     });
   }
@@ -292,39 +324,19 @@ function clearChildren(container: Renderable) {
   }
 }
 
-function renderLines(container: Renderable, renderer: ReturnType<typeof createCliRenderer>, lines: { text: string; fg: string }[]) {
+function renderLines(container: Renderable, renderer: CliRenderer, lines: { text: string; fg: string }[]) {
   clearChildren(container);
-  for (const line of lines) {
-    container.add(new TextRenderable(renderer, { content: line.text, fg: line.fg, width: "100%" }));
-  }
+  if (lines.length === 0) return;
+  container.add(
+    new TextRenderable(renderer, {
+      content: lines.map((l) => l.text).join("\n"),
+      fg: lines[0].fg,
+      width: "100%",
+    })
+  );
 }
 
-function renderContainers(list: ScrollBoxRenderable, renderer: ReturnType<typeof createCliRenderer>, docker: DockerStats) {
-  clearChildren(list);
-  if (!docker.online) {
-    list.add(new TextRenderable(renderer, { content: `docker ${docker.error ?? "unreachable"}`, fg: "#FF6B6B", width: "100%" }));
-    return;
-  }
-  if (docker.containers.length === 0) {
-    list.add(new TextRenderable(renderer, { content: "no containers on this host", fg: "#6B7280", width: "100%" }));
-    return;
-  }
-  list.add(new TextRenderable(renderer, { content: `${"NAME".padEnd(22)} ${"STATE".padEnd(9)} ${"CPU".padStart(6)} ${"MEM".padStart(12)}`, fg: "#60A5FA", width: "100%" }));
-  for (const c of docker.containers) {
-    const running = c.state === "running";
-    const fg = running ? "#34D399" : c.state === "exited" ? "#6B7280" : c.state === "paused" ? "#FBBF24" : "#9CA3AF";
-    const cpu = running ? `${c.cpuPct.toFixed(1)}%` : "–";
-    const mem = running
-      ? c.memLimitMb > 0
-        ? `${fmtBytes(c.memUsedMb * 1e6)} / ${fmtBytes(c.memLimitMb * 1e6)}`.padStart(12)
-        : fmtBytes(c.memUsedMb * 1e6).padStart(12)
-      : "–".padStart(12);
-    const row = `${c.name.slice(0, 22).padEnd(22)} ${c.state.padEnd(9)} ${cpu.padStart(6)} ${mem}`;
-    list.add(new TextRenderable(renderer, { content: row, fg, width: "100%" }));
-  }
-}
-
-async function main() {
+export async function runTui(): Promise<void> {
   const renderer = await createCliRenderer({
     exitOnCtrlC: true,
     targetFps: 30,
@@ -337,28 +349,27 @@ async function main() {
   let shuttingDown = false;
   let extPid: number | null = null;
   let configError = "";
-
   const daemonEnv = { ...process.env, ...env, version: REPO_VERSION };
 
-function findBun(): string {
-  const exe = process.execPath;
-  const base = basename(exe).toLowerCase();
-  if (base.includes("bun")) return exe;
-  return "bun";
-}
-
-function startDaemon() {
-  if (daemonChild) return;
-  if (!KEY || KEY.length < 16) {
-    configError = "no daemon key — create daemon/.env with key= (16+ chars)";
-    return;
+  function findBun(): string {
+    const exe = process.execPath;
+    const base = basename(exe).toLowerCase();
+    if (base.includes("bun")) return exe;
+    return "bun";
   }
-  stopRequested = false;
-  configError = "";
-  const found = findBin();
-  const child = found
-    ? spawn(found.bin, found.args, { cwd: found.cwd, env: daemonEnv, stdio: "ignore" })
-    : spawn(findBun(), ["src/app.ts"], { cwd: DAEMON_DIR, env: daemonEnv, stdio: "ignore" });
+
+  function startDaemon() {
+    if (daemonChild) return;
+    if (!KEY || KEY.length < 16) {
+      configError = "no daemon key — create daemon/.env with key= (16+ chars)";
+      return;
+    }
+    stopRequested = false;
+    configError = "";
+    const found = findBin();
+    const child = found
+      ? spawn(found.bin, found.args, { cwd: found.cwd, env: daemonEnv, stdio: "ignore" })
+      : spawn(findBun(), ["src/app.ts"], { cwd: DAEMON_DIR, env: daemonEnv, stdio: "ignore" });
     daemonChild = child;
     daemonStartedAt = Date.now();
     child.on("error", (error) => {
@@ -414,15 +425,16 @@ function startDaemon() {
   }
 
   // ── Layout ───────────────────────────────────────────────────────────────
+  // Wide:  [brand + daemon status + resources + container summary] | [logs]
+  // Narrow: same panels stacked, logs at the bottom.
   const brand = Box(
     {
       id: "brand",
-      width: BRAND_WIDTH,
-      height: "100%",
+      width: "100%",
+      height: 10,
       flexDirection: "column",
+      gap: 0,
       paddingX: 1,
-      paddingY: 1,
-      gap: 1,
       borderStyle: "rounded",
       borderColor: "#374151",
       title: "Airlink Daemon",
@@ -432,23 +444,24 @@ function startDaemon() {
     Text({ content: `Airlinkd ${VERSION} · by AirlinkLabs · MIT`, fg: "#60A5FA" })
   );
 
-  const host = Box(
+  const status = Box(
     {
-      id: "host",
-      flexGrow: 1.2,
+      id: "status",
+      width: "100%",
+      height: 5,
       flexDirection: "column",
       gap: 0,
       borderStyle: "rounded",
       borderColor: "#374151",
-      title: "Host",
-      titleColor: "#60A5FA",
+      title: "Daemon",
+      titleColor: "#4ADE80",
       paddingX: 1,
-      paddingY: 1,
     },
-    Text({ content: "collecting…", fg: "#6B7280" })
+    Text({ content: "probing…", fg: "#6B7280" })
   );
-  const contList = new ScrollBoxRenderable(renderer, {
-    id: "cont-list",
+
+  const resList = new ScrollBoxRenderable(renderer, {
+    id: "res-list",
     width: "100%",
     height: "100%",
     viewportCulling: true,
@@ -456,10 +469,29 @@ function startDaemon() {
       trackOptions: { foregroundColor: "#4B5563", backgroundColor: "#1F2937" },
     },
   });
+  resList.verticalScrollBar.visible = false;
+  resList.horizontalScrollBar.visible = false;
+  const host = Box(
+    {
+      id: "host",
+      width: "100%",
+      flexGrow: 1,
+      flexDirection: "column",
+      gap: 0,
+      borderStyle: "rounded",
+      borderColor: "#374151",
+      title: "Resources",
+      titleColor: "#60A5FA",
+      paddingX: 1,
+    },
+    resList
+  );
+
   const cont = Box(
     {
       id: "cont",
-      flexGrow: 1,
+      width: "100%",
+      height: 6,
       flexDirection: "column",
       gap: 0,
       borderStyle: "rounded",
@@ -467,11 +499,17 @@ function startDaemon() {
       title: "Containers",
       titleColor: "#60A5FA",
       paddingX: 1,
-      paddingY: 1,
     },
-    contList
+    Text({ content: "collecting…", fg: "#6B7280" })
   );
-  const midRow = Box({ id: "midrow", flexGrow: 1, flexDirection: "row", gap: 1 }, host, cont);
+
+  const left = Box(
+    { id: "left", flexDirection: "column", gap: 1, flexGrow: 0, flexShrink: 0, width: 64 },
+    brand,
+    status,
+    host,
+    cont
+  );
 
   const logs = new ScrollBoxRenderable(renderer, {
     id: "logs",
@@ -481,46 +519,74 @@ function startDaemon() {
     stickyStart: "bottom",
     viewportCulling: true,
     scrollbarOptions: {
+      showArrows: false,
       trackOptions: { foregroundColor: "#4B5563", backgroundColor: "#1F2937" },
     },
   });
+  const logsWrap = Box({ id: "logs-wrap", flexGrow: 1, flexDirection: "column", gap: 1 }, logs);
+
   const hintBox = Box({ id: "hint-box", flexDirection: "column", gap: 0 }, Text({ content: "", fg: "#4B5563" }));
-  const logsWrap = Box({ id: "logs-wrap", flexGrow: 1, flexDirection: "column" }, logs, hintBox);
+  const mainRow = Box(
+    { id: "main-row", flexGrow: 1, flexDirection: "row", gap: 1 },
+    left,
+    logsWrap
+  );
   const outer = Box(
     { id: "outer", width: "100%", height: "100%", flexDirection: "column", gap: 1 },
-    Box(
-      { id: "toprow", flexDirection: "row", gap: 1 },
-      brand,
-      Box({ id: "status-box", flexGrow: 1, flexDirection: "column", gap: 0, justifyContent: "center", paddingLeft: 1 }, Text({ content: "probing…", fg: "#6B7280" }))
-    ),
-    midRow,
-    logsWrap
+    mainRow,
+    hintBox
   );
   renderer.root.add(outer);
 
   const realOuter = renderer.root.getRenderable("outer")!;
-  const realTopRow = realOuter.getRenderable("toprow")!;
-  const realBrand = realTopRow.getRenderable("brand")!;
-  const statusBox = realTopRow.getRenderable("status-box")!;
-  const realMidRow = realOuter.getRenderable("midrow")!;
-  const realHost = realMidRow.getRenderable("host")!;
-  const realCont = realMidRow.getRenderable("cont")!;
-  const realLogs = realOuter.getRenderable("logs-wrap")!.getRenderable("logs")! as ScrollBoxRenderable;
-  const realContList = realCont.getRenderable("cont-list")! as ScrollBoxRenderable;
+  const realMainRow = realOuter.getRenderable("main-row")!;
+  const realLeft = realMainRow.getRenderable("left")!;
+  const realBrand = realLeft.getRenderable("brand")!;
+  const realStatus = realLeft.getRenderable("status")!;
+  const realHost = realLeft.getRenderable("host")!;
+  const realResList = realHost.getRenderable("res-list")! as ScrollBoxRenderable;
+  const realCont = realLeft.getRenderable("cont")!;
+  const realLogs = realMainRow.getRenderable("logs-wrap")!.getRenderable("logs")! as ScrollBoxRenderable;
+  const realHint = realOuter.getRenderable("hint-box")!;
+  let currentArt: string[] | null = ART;
+  let shortMode = false;
 
   function applyLayout() {
     const wide = renderer.width >= WIDE_MIN_WIDTH;
-    realTopRow.flexDirection = wide ? "row" : "column";
-    realBrand.width = wide ? BRAND_WIDTH : "100%";
-    realBrand.height = wide ? "100%" : "auto";
-    realMidRow.flexDirection = wide ? "row" : "column";
-    realHost.width = wide ? "55%" : "100%";
-    realCont.width = wide ? "45%" : "100%";
+    const short = renderer.height <= SHORT_MAX_HEIGHT;
+    shortMode = short;
+    realMainRow.flexDirection = wide ? "row" : "column";
+    realLeft.width = wide ? 64 : "100%";
+    realLeft.height = wide ? "100%" : "auto";
+    if (wide) {
+      realHost.flexGrow = short ? 0 : 1;
+      realHost.height = short ? 5 : "auto";
+      realStatus.height = short ? 4 : 5;
+      realCont.height = short ? 4 : 6;
+    } else {
+      realHost.flexGrow = 0;
+      realHost.height = short ? 5 : 7;
+      realStatus.height = short ? 4 : 5;
+      realCont.height = short ? 4 : 5;
+    }
+    const artLines = wide ? (short ? ART.slice(0, 3) : ART) : null;
+    if (currentArt !== artLines) {
+      currentArt = artLines;
+      clearChildren(realBrand);
+      if (artLines) {
+        realBrand.height = artLines.length + 3;
+        realBrand.add(new TextRenderable(renderer, { content: artLines.join("\n"), fg: "#4ADE80", width: "100%" }));
+        realBrand.add(new TextRenderable(renderer, { content: `Airlinkd ${VERSION} · by AirlinkLabs · MIT`, fg: "#60A5FA", width: "100%" }));
+      } else {
+        realBrand.height = 3;
+        realBrand.add(new TextRenderable(renderer, { content: `Airlinkd ${VERSION} · by AirlinkLabs · MIT`, fg: "#60A5FA", width: "100%" }));
+      }
+    }
   }
 
   function renderHint() {
-    clearChildren(hintBox);
-    hintBox.add(
+    clearChildren(realHint);
+    realHint.add(
       new TextRenderable(renderer, {
         content: `[Tab] logs: ${currentFile} · [k] stop daemon · [r] start · [Ctrl+C] quit`,
         fg: "#4B5563",
@@ -598,10 +664,10 @@ function startDaemon() {
           daemon.version = ctx.version;
         }
       }
-      renderLines(statusBox, renderer, daemonLines(daemon, docker));
-      renderLines(realHost, renderer, hostLines(hostStats));
-      renderContainers(realContList, renderer, docker);
-    } catch (error) {
+      renderLines(realStatus, renderer, daemonLines(daemon, shortMode));
+      renderLines(realResList, renderer, hostLines(hostStats, shortMode));
+      renderLines(realCont, renderer, containerLines(docker, shortMode));
+    } catch {
       // keep previous stats if a collection fails
     }
   };
@@ -611,9 +677,11 @@ function startDaemon() {
   renderer.keyInput.on("keypress", (key: KeyEvent) => {
     if (key.name === "tab") switchFile();
     else if (key.name === "k") stopDaemon();
-    else if (key.name === "r") void probeDaemon().then((p) => {
-      if (!p.online) startDaemon();
-    });
+    else if (key.name === "r") {
+      void probeDaemon().then((p) => {
+        if (!p.online) startDaemon();
+      });
+    }
   });
 
   let watcher: ReturnType<typeof watch> | undefined;
@@ -663,7 +731,7 @@ function startDaemon() {
   }
   if (configError) {
     renderLines(
-      hintBox,
+      realHint,
       renderer,
       [{ text: configError, fg: "#F87171" }, { text: `[Tab] ${currentFile} · [k] stop daemon · [r] start · [Ctrl+C] quit`, fg: "#4B5563" }]
     );
@@ -671,12 +739,3 @@ function startDaemon() {
   fillFromFile(currentFile);
   void refreshStats();
 }
-
-const cliArgs = process.argv.slice(2);
-if (cliArgs.length > 0) {
-  const { runDaemon } = await import("../../src/app");
-  await runDaemon(cliArgs);
-  await new Promise<void>(() => {});
-}
-
-void main();
