@@ -16,10 +16,15 @@ on:
         required: true
         type: boolean
         default: false
+      buildDaemon:
+        description: 'Also build the airlinkd daemon binaries (TUI is built by default)'
+        required: true
+        type: boolean
+        default: false
 
 jobs:
   build:
-    name: build ${{ matrix.target }}
+    name: build ${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -30,6 +35,7 @@ jobs:
             platform: linux
             arch: x64
             windows: false
+            daemon: true
           - target: bun-linux-arm64
             runner: ubuntu-24.04-arm
             platform: linux
@@ -41,14 +47,9 @@ jobs:
             arch: arm64
             windows: false
           - target: bun-windows-x64
-            runner: ubuntu-latest
+            runner: windows-latest
             platform: windows
             arch: x64
-            windows: true
-          - target: bun-windows-arm64
-            runner: ubuntu-latest
-            platform: windows
-            arch: arm64
             windows: true
     steps:
       - name: checkout
@@ -62,29 +63,48 @@ jobs:
       - name: install deps
         run: bun install --frozen-lockfile
 
-      - name: build binary (non-windows)
+      - name: install tui deps
+        run: cd tui && bun install --frozen-lockfile
+
+      - name: build tui binaries
+        run: bun run build:tui
+
+      - name: build daemon binaries (optional)
+        if: matrix.daemon == true && github.event.inputs.buildDaemon == 'true'
+        run: bun run build:daemon
+
+      - name: zip tui binaries
         if: matrix.windows == false
         run: |
-          mkdir -p dist
-          bun build --compile --target ${{ matrix.target }} --outfile dist/airlinkd src/app.ts src/server.ts
+          cd tui/dist
+          zip airlinkd-tui-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}.zip *
 
-      - name: build binary (windows)
+      - name: zip tui binaries (windows)
         if: matrix.windows == true
+        shell: pwsh
         run: |
-          mkdir -p dist
-          bun build --compile --target ${{ matrix.target }} --outfile dist/airlinkd src/app.ts src/server.ts
-          mv dist/airlinkd.exe dist/airlinkd
+          cd tui/dist
+          Compress-Archive -Path * -DestinationPath airlinkd-tui-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}.zip
 
-      - name: zip binary
+      - name: zip daemon binaries (optional)
+        if: matrix.daemon == true && github.event.inputs.buildDaemon == 'true'
         run: |
           cd dist
-          zip airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}.zip airlinkd
+          zip airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}.zip airlinkd-*
 
-      - name: upload artifact
+      - name: upload tui artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: airlinkd-tui-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}
+          path: tui/dist/*.zip
+          if-no-files-found: error
+
+      - name: upload daemon artifact
+        if: matrix.daemon == true && github.event.inputs.buildDaemon == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}
-          path: dist/airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}.zip
+          path: dist/*.zip
           if-no-files-found: error
 
   release:
@@ -111,16 +131,22 @@ jobs:
           body: |
             ## AirlinkD ${{ github.event.inputs.version }}
 
-            ### Installation
-            Download the binary for your platform and architecture below, extract the zip, and run `airlinkd`.
+            ### TUI (default)
+            The TUI acts as the daemon supervisor — it starts or adopts the daemon, shows live host and container stats, and tails the daemon logs.
+
+            | Platform | Architecture | Download |
+            |----------|-------------|---------|
+            | Linux | x64 | `airlinkd-tui-linux-x64-${{ github.event.inputs.version }}.zip` |
+            | Linux | arm64 | `airlinkd-tui-linux-arm64-${{ github.event.inputs.version }}.zip` |
+            | macOS | arm64 (Apple Silicon) | `airlinkd-tui-macos-arm64-${{ github.event.inputs.version }}.zip` |
+            | Windows | x64 | `airlinkd-tui-windows-x64-${{ github.event.inputs.version }}.zip` |
+
+            ### Daemon (optional)
+            Built when the `buildDaemon` input is enabled.
 
             | Platform | Architecture | Download |
             |----------|-------------|---------|
             | Linux | x64 | `airlinkd-linux-x64-${{ github.event.inputs.version }}.zip` |
-            | Linux | arm64 | `airlinkd-linux-arm64-${{ github.event.inputs.version }}.zip` |
-            | macOS | arm64 (Apple Silicon) | `airlinkd-macos-arm64-${{ github.event.inputs.version }}.zip` |
-            | Windows | x64 | `airlinkd-windows-x64-${{ github.event.inputs.version }}.zip` |
-            | Windows | arm64 | `airlinkd-windows-arm64-${{ github.event.inputs.version }}.zip` |
 
             ### Changelog
             <!-- Add changelog notes here before publishing -->

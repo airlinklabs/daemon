@@ -12,8 +12,9 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "check": "bun run typecheck && bun run lint && bun test",
-    "build": "bun run build.ts",
+    "build": "bun tui/build.ts",
     "build:tui": "bun tui/build.ts",
+    "build:daemon": "bun run build.ts",
     "tui": "bun tui/src/index.ts",
     "configure": "bun src/configure.ts"
   },
