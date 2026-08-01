@@ -81,8 +81,7 @@ export async function checkDocker(): Promise<void> {
   });
   const code = await proc.exited;
   if (code !== 0) {
-    logger.error(`${cmd} is not installed or not in PATH, bailing`);
-    process.exit(1);
+    throw new Error(`${cmd} is not installed or not in PATH`);
   }
 }
 
@@ -95,8 +94,7 @@ export async function checkDockerRunning(): Promise<void> {
   });
   const code = await proc.exited;
   if (code !== 0) {
-    logger.error(`${cmd} is not running, start it and try again`);
-    process.exit(1);
+    throw new Error(`${cmd} is not running, start it and try again`);
   }
 }
 
