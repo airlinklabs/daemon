@@ -59,12 +59,25 @@ function attemptUpgrade(req: Request, server: ReturnType<typeof Bun.serve>): boo
   });
 }
 
+function isFatalServerStartError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /failed to start server|port \d+ in use|EADDRINUSE/i.test(message);
+}
+
 process.on('uncaughtException', (err) => {
   logger.error('uncaught exception', err);
+  if (isFatalServerStartError(err)) {
+    logger.error('fatal: HTTP server could not be started, exiting');
+    process.exit(1);
+  }
 });
 
 process.on('unhandledRejection', (reason) => {
   logger.error('unhandled rejection', reason as Error);
+  if (isFatalServerStartError(reason)) {
+    logger.error('fatal: HTTP server could not be started, exiting');
+    process.exit(1);
+  }
 });
 
 drawHeader(config.version, config.port);
@@ -90,34 +103,42 @@ if (config.tlsCertPath && !config.tlsKeyPath) {
   logger.warn('TLS certificate configured without TLS key; TLS disabled');
 }
 
-export const server = Bun.serve<WsData>({
-  port: config.port,
-  hostname: '0.0.0.0',
+export const server = (() => {
+  try {
+    return Bun.serve<WsData>({
+      port: config.port,
+      hostname: '0.0.0.0',
 
-  fetch(req, server) {
-    const upgradeResult = attemptUpgrade(req, server);
-    if (upgradeResult === true) return;
-    if (upgradeResult instanceof Response) return upgradeResult;
-    return handleHttpRequest(req, server);
-  },
+      fetch(req, server) {
+        const upgradeResult = attemptUpgrade(req, server);
+        if (upgradeResult === true) return;
+        if (upgradeResult instanceof Response) return upgradeResult;
+        return handleHttpRequest(req, server);
+      },
 
-  websocket: {
-    open(ws) {
-      wsOpen(ws);
-    },
-    message(ws, msg) {
-      wsMessage(ws, msg);
-    },
-    close(ws, code, why) {
-      wsClose(ws, code, why);
-    },
-    drain() {
-      /* bun requires this */
-    },
-  },
+      websocket: {
+        open(ws) {
+          wsOpen(ws);
+        },
+        message(ws, msg) {
+          wsMessage(ws, msg);
+        },
+        close(ws, code, why) {
+          wsClose(ws, code, why);
+        },
+        drain() {
+          /* bun requires this */
+        },
+      },
 
-  tls,
-});
+      tls,
+    });
+  } catch (err) {
+    logger.error(`failed to start HTTP server on port ${config.port}`, err);
+    logger.error('fatal: exiting');
+    process.exit(1);
+  }
+})();
 
 logger.ok(`ready on port ${config.port}`);
 
