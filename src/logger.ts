@@ -40,6 +40,18 @@ function write(level: Level, msg: string, extra?: unknown) {
         ? ` ${JSON.stringify(extra)}`
         : '';
 
+  if (Bun.env.AIRLINK_JSON_LOGS === '1') {
+    const json: Record<string, unknown> = {
+      ts: new Date().toISOString(),
+      level,
+      msg,
+    };
+    if (extra instanceof Error) json.error = { message: extra.message, stack: extra.stack };
+    else if (extra !== undefined) json.extra = extra;
+    process.stdout.write(`${JSON.stringify(json)}\n`);
+    return;
+  }
+
   const line = `${GRAY}${ts()}${RESET} ${color}${icon} ${bg}${BOLD}${label}${RESET} ${color}${msg}${extraStr}${RESET}`;
   process.stdout.write(`${line}\n`);
 

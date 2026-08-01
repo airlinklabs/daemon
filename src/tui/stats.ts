@@ -17,6 +17,7 @@ export interface HostStats {
   procs: number;
   disks: { mount: string; usedGb: number; totalGb: number; pct: number }[];
   nets: { iface: string; rxBps: number; txBps: number }[];
+  diskIo: { dev: string; rxBps: number; txBps: number }[];
   temps: number[];
   topProcs: { pid: number; name: string; cpuPct: number; rssMb: number }[];
 }
@@ -70,6 +71,7 @@ const CLK_TCK = 100;
 
 let prevCpu: { time: number; perCore: number[] } | null = null;
 let prevNet: { time: number; byIface: Map<string, { rx: number; tx: number }> } | null = null;
+let prevDiskIo: { time: number; byDev: Map<string, { rx: number; tx: number }> } | null = null;
 let prevProcs: Map<number, { ticks: number; at: number }> = new Map();
 
 const withTimeout = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
@@ -207,6 +209,38 @@ function readNets(now: number): { iface: string; rxBps: number; txBps: number }[
   return out.slice(0, 2);
 }
 
+function readDiskIo(now: number): { dev: string; rxBps: number; txBps: number }[] {
+  const data = readProc("/proc/diskstats");
+  const cur = new Map<string, { rx: number; tx: number }>();
+  for (const line of data.split("\n")) {
+    const parts = line.trim().split(/\s+/);
+    const name = parts[2];
+    if (!name) continue;
+    const physical = /^(sd|vd|hd|xvd)[a-z]+$/.test(name) || /^nvme\d+n\d+$/.test(name) || /^mmcblk\d+$/.test(name);
+    if (!physical) continue;
+    const sectorsRead = Number(parts[5] ?? 0);
+    const sectorsWrite = Number(parts[9] ?? 0);
+    cur.set(name, { rx: sectorsRead * 512, tx: sectorsWrite * 512 });
+  }
+  const names = [...cur.keys()];
+  if (!prevDiskIo || prevDiskIo.byDev.size === 0) {
+    prevDiskIo = { time: now, byDev: cur };
+    return names.map((dev) => ({ dev, rxBps: 0, txBps: 0 }));
+  }
+  const dt = (now - prevDiskIo.time) / 1000;
+  const out: { dev: string; rxBps: number; txBps: number }[] = [];
+  for (const [dev, v] of cur) {
+    const p = prevDiskIo.byDev.get(dev);
+    if (!p || dt <= 0) continue;
+    const rxBps = Math.max(0, (v.rx - p.rx) / dt);
+    const txBps = Math.max(0, (v.tx - p.tx) / dt);
+    out.push({ dev, rxBps, txBps });
+  }
+  prevDiskIo = { time: now, byDev: cur };
+  out.sort((a, b) => b.rxBps + b.txBps - (a.rxBps + a.txBps));
+  return out.slice(0, 3);
+}
+
 function readTemps(): number[] {
   const base = "/sys/class/thermal";
   const zones = readdirSync(base).filter((d) => d.startsWith("thermal_zone"));
@@ -270,6 +304,7 @@ export function collectHost(now: number): HostStats {
     procs: load.procs,
     disks: readDisks(),
     nets: readNets(now),
+    diskIo: readDiskIo(now),
     temps: readTemps(),
     topProcs: readTopProcs(now),
   };

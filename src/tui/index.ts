@@ -1,9 +1,11 @@
 import {
   createCliRenderer,
   Box,
+  BoxRenderable,
   Text,
   ScrollBoxRenderable,
   TextRenderable,
+  TextNodeRenderable,
   type CliRenderer,
   type KeyEvent,
   type Renderable,
@@ -59,6 +61,20 @@ const WIDE_MIN_WIDTH = 110;
 const SHORT_MAX_HEIGHT = 27;
 const INITIAL_TAIL_LINES = 1000;
 const STATS_INTERVAL_MS = 5000;
+const HISTORY_LEN = 30;
+const SPARK_BLOCKS = "▁▂▃▄▅▆▇█";
+
+const GREEN = "#4ADE80";
+const BLUE = "#60A5FA";
+const AMBER = "#FFD166";
+const RED = "#FF6B6B";
+const SPARK_GREEN = "#22C55E";
+const TEXT = "#E5E7EB";
+const SECONDARY = "#9CA3AF";
+const MUTED = "#4B5563";
+const DIM = "#6B7280";
+const BORDER = "#374151";
+const BORDER_FOCUS = "#4ADE80";
 
 const ART = [
   "  /$$$$$$ /$$         /$$/$$         /$$      ",
@@ -183,11 +199,11 @@ function readTail(name: string, from: number): { lines: string[]; nextOffset: nu
 }
 
 function colorForLine(line: string): string {
-  if (line.includes("ERROR")) return "#FF6B6B";
-  if (line.includes("WARN")) return "#FFD166";
-  if (line.includes("INFO")) return "#7CB7FF";
-  if (line.includes("OK")) return "#4ADE80";
-  return "#9CA3AF";
+  if (line.includes("ERROR")) return RED;
+  if (line.includes("WARN")) return AMBER;
+  if (line.includes("SUCCESS") || line.includes("READY") || line.includes("STARTED") || line.includes("OK")) return GREEN;
+  if (line.includes("INFO")) return BLUE;
+  return SECONDARY;
 }
 
 function fmtBytes(n: number): string {
@@ -208,114 +224,42 @@ function fmtDur(sec: number): string {
   return `${Math.floor(s)}s`;
 }
 
-function bar(pct: number, width = 14): string {
+function bar(pct: number, width = 10): string {
   const c = Math.max(0, Math.min(100, pct));
-  const full = Math.floor((c / 100) * width);
-  const frac = ((c / 100) * width - full) * 8;
-  let s = "█".repeat(full);
-  if (full < width) s += "▏▎▍▌▋▊▉█"[Math.floor(frac)];
-  s += "░".repeat(Math.max(0, width - full - 1));
-  return s;
+  const full = Math.round((c / 100) * width);
+  return "█".repeat(full) + "░".repeat(width - full);
 }
 
 function severity(pct: number): string {
-  if (pct >= 85) return "#F87171";
-  if (pct >= 65) return "#FBBF24";
-  return "#34D399";
+  if (pct >= 85) return RED;
+  if (pct >= 60) return AMBER;
+  return GREEN;
 }
 
-function daemonLines(d: DaemonInfo, short = false): { text: string; fg: string }[] {
-  const mode = d.mode === "managed" ? "managed" : d.mode === "external" ? "external" : "no daemon";
-  const lines = [
-    {
-      text: `● Daemon ${d.online ? "online" : "down"} · Airlinkd ${d.version || VERSION}`,
-      fg: d.online ? "#4ADE80" : "#FF6B6B",
-    },
-    {
-      text: `${mode} · pid ${d.pid ?? "–"}${d.uptimeSec != null ? ` · up ${fmtDur(d.uptimeSec)}` : ""} · errors 24h ${d.errors24h}`,
-      fg: "#9CA3AF",
-    },
-  ];
-  if (!short) lines.push({ text: `${d.runtime} runtime · port ${d.port} · remote ${d.remote} · kernel ${d.kernel}`, fg: "#9CA3AF" });
-  return lines;
+function sparkline(values: number[], width: number): string {
+  if (values.length === 0) return "";
+  const win = values.slice(-width);
+  const min = Math.min(...win);
+  const max = Math.max(...win);
+  const range = max - min;
+  if (range === 0) return SPARK_BLOCKS[3]!.repeat(win.length);
+  let out = "";
+  for (const v of win) {
+    const idx = Math.min(7, Math.max(0, Math.floor(((v - min) / range) * 8)));
+    out += SPARK_BLOCKS[idx]!;
+  }
+  return out;
 }
 
-function hostLines(h: HostStats, short = false): { text: string; fg: string }[] {
-  const lines: { text: string; fg: string }[] = [];
-  const cores = h.perCorePct.slice(0, 4).map((p, i) => `c${i} ${Math.round(p)}%`).join(" ");
-  lines.push({ text: `CPU  ${h.cpuPct.toFixed(1).padStart(5)}% ${bar(h.cpuPct, 12)} ${cores}`, fg: severity(h.cpuPct) });
-  const memPct = h.memTotalGb > 0 ? (h.memUsedGb / h.memTotalGb) * 100 : 0;
-  lines.push({
-    text: `MEM  ${h.memUsedGb.toFixed(1)}/${h.memTotalGb.toFixed(1)} GB ${bar(memPct, 14)} cached ${h.memCachedGb.toFixed(1)}`,
-    fg: severity(memPct),
-  });
-  lines.push({
-    text: `LOAD ${h.load1.toFixed(2)} ${h.load5.toFixed(2)} ${h.load15.toFixed(2)} · UP ${fmtDur(h.sysUptimeSec)} · ${h.procs} procs`,
-    fg: "#9CA3AF",
-  });
-  if (short) return lines;
-  if (h.swapTotalGb > 0.1) {
-    const swapPct = (h.swapUsedGb / h.swapTotalGb) * 100;
-    lines.push({ text: `SWAP ${h.swapUsedGb.toFixed(2)}/${h.swapTotalGb.toFixed(1)} GB ${bar(swapPct, 10)}`, fg: severity(swapPct) });
-  }
-  for (const d of h.disks.slice(0, 2)) {
-    lines.push({
-      text: `DISK ${d.mount.slice(0, 8).padEnd(8)} ${d.usedGb.toFixed(1)}/${d.totalGb.toFixed(1)} GB ${bar(d.pct, 10)} ${Math.round(d.pct)}%`,
-      fg: severity(d.pct),
-    });
-  }
-  for (const n of h.nets.slice(0, 1)) {
-    lines.push({
-      text: `NET  ${n.iface.slice(0, 8).padEnd(8)} ↓ ${fmtBytes(n.rxBps)}/s ↑ ${fmtBytes(n.txBps)}/s`,
-      fg: "#9CA3AF",
-    });
-  }
-  if (h.temps.length > 0) {
-    const hot = h.temps.some((t) => t > 70);
-    lines.push({ text: `TEMP ${h.temps.map((t) => `${Math.round(t)}°C`).join(" ")}`, fg: hot ? "#F87171" : "#9CA3AF" });
-  }
-  for (const p of h.topProcs.slice(0, 2)) {
-    lines.push({
-      text: `TOP  ${p.name.slice(0, 14).padEnd(14)} ${p.cpuPct.toFixed(1).padStart(5)}% ${fmtBytes(p.rssMb * 1e6)}`,
-      fg: "#9CA3AF",
-    });
-  }
-  return lines;
+function pushCapped(arr: number[], value: number) {
+  arr.push(value);
+  if (arr.length > HISTORY_LEN) arr.splice(0, arr.length - HISTORY_LEN);
 }
 
-function containerLines(docker: DockerStats, short = false): { text: string; fg: string }[] {
-  if (!docker.online) {
-    return [{ text: `docker ${docker.error ?? "unreachable"}`, fg: "#FF6B6B" }];
-  }
-  if (docker.containers.length === 0) {
-    return [
-      { text: "no containers on this host", fg: "#6B7280" },
-      { text: `docker online · images ${docker.images} · nets ${docker.networks} · vols ${docker.volumes}`, fg: "#9CA3AF" },
-    ];
-  }
-  const running = docker.containers.filter((c) => c.state === "running");
-  const sumCpu = running.reduce((a, c) => a + c.cpuPct, 0);
-  const sumMemMb = running.reduce((a, c) => a + c.memUsedMb, 0);
-  const sumLimitMb = running.reduce((a, c) => a + c.memLimitMb, 0);
-  const memText = sumLimitMb > 0 ? `${fmtBytes(sumMemMb * 1e6)} / ${fmtBytes(sumLimitMb * 1e6)}` : fmtBytes(sumMemMb * 1e6);
-  const stateCounts = new Map<string, number>();
-  for (const c of docker.containers) stateCounts.set(c.state, (stateCounts.get(c.state) ?? 0) + 1);
-  const states = [...stateCounts.entries()].map(([s, n]) => `${s} ${n}`).join(" · ");
-  const lines = [
-    {
-      text: `● ${running.length} active / ${docker.containers.length} total`,
-      fg: running.length > 0 ? "#34D399" : "#6B7280",
-    },
-    { text: `Σ CPU ${sumCpu.toFixed(1)}% · Σ MEM ${memText}`, fg: "#9CA3AF" },
-  ];
-  if (!short) {
-    lines.push({ text: states, fg: "#9CA3AF" });
-    lines.push({
-      text: `docker online · images ${docker.images} · nets ${docker.networks} · vols ${docker.volumes} · disk ${docker.dockerDiskGb.toFixed(1)} GB`,
-      fg: "#9CA3AF",
-    });
-  }
-  return lines;
+function seg(text: string, fg: string): TextNodeRenderable {
+  const node = new TextNodeRenderable({ fg });
+  node.add(text);
+  return node;
 }
 
 function clearChildren(container: Renderable) {
@@ -324,16 +268,22 @@ function clearChildren(container: Renderable) {
   }
 }
 
-function renderLines(container: Renderable, renderer: CliRenderer, lines: { text: string; fg: string }[]) {
+function renderInto(container: Renderable, renderer: CliRenderer, lines: { text: string; fg: string }[]) {
   clearChildren(container);
-  if (lines.length === 0) return;
-  container.add(
-    new TextRenderable(renderer, {
-      content: lines.map((l) => l.text).join("\n"),
-      fg: lines[0].fg,
-      width: "100%",
-    })
-  );
+  for (const line of lines) {
+    container.add(new TextRenderable(renderer, { content: line.text, fg: line.fg, width: "100%" }));
+  }
+}
+
+function brandMetaLines(d: DaemonInfo | null): { text: string; fg: string }[] {
+  const mode = d ? (d.mode === "managed" ? "managed" : d.mode === "external" ? "external" : "no daemon") : "…";
+  const pid = d?.pid ? String(d.pid) : "–";
+  const up = d?.uptimeSec != null ? ` · up ${fmtDur(d.uptimeSec)}` : "";
+  return [
+    { text: `Airlinkd v${VERSION} · AirlinkLabs · MIT`, fg: BLUE },
+    { text: `Mode: ${mode} · PID: ${pid}${up}`, fg: BLUE },
+    { text: `Port: ${DAEMON_PORT} · Panel: ${REMOTE}`, fg: BLUE },
+  ];
 }
 
 export async function runTui(): Promise<void> {
@@ -424,91 +374,132 @@ export async function runTui(): Promise<void> {
     return { online: false, pid: null };
   }
 
-  // ── Layout ───────────────────────────────────────────────────────────────
-  // Wide:  [brand + daemon status + resources + container summary] | [logs]
-  // Narrow: same panels stacked, logs at the bottom.
   const brand = Box(
     {
       id: "brand",
       width: "100%",
-      height: 10,
       flexDirection: "column",
-      gap: 0,
+      gap: 1,
       paddingX: 1,
+      paddingY: 1,
       borderStyle: "rounded",
-      borderColor: "#374151",
+      borderColor: BORDER,
       title: "Airlink Daemon",
-      titleColor: "#4ADE80",
+      titleColor: GREEN,
     },
-    Text({ content: ART.join("\n"), fg: "#4ADE80" }),
-    Text({ content: `Airlinkd ${VERSION} · by AirlinkLabs · MIT`, fg: "#60A5FA" })
+    Box({ id: "art-box", flexDirection: "column" }, Text({ content: ART.join("\n"), fg: GREEN })),
+    Box({ id: "meta-box", flexDirection: "column", gap: 0 }, Text({ content: "Collecting…", fg: MUTED }))
   );
 
   const status = Box(
     {
       id: "status",
       width: "100%",
-      height: 5,
+      height: 6,
       flexDirection: "column",
       gap: 0,
+      paddingX: 1,
       borderStyle: "rounded",
-      borderColor: "#374151",
+      borderColor: BORDER,
       title: "Daemon",
-      titleColor: "#4ADE80",
-      paddingX: 1,
+      titleColor: SECONDARY,
     },
-    Text({ content: "probing…", fg: "#6B7280" })
-  );
-
-  const resList = new ScrollBoxRenderable(renderer, {
-    id: "res-list",
-    width: "100%",
-    height: "100%",
-    viewportCulling: true,
-    scrollbarOptions: {
-      trackOptions: { foregroundColor: "#4B5563", backgroundColor: "#1F2937" },
-    },
-  });
-  resList.verticalScrollBar.visible = false;
-  resList.horizontalScrollBar.visible = false;
-  const host = Box(
-    {
-      id: "host",
-      width: "100%",
-      flexGrow: 1,
-      flexDirection: "column",
-      gap: 0,
-      borderStyle: "rounded",
-      borderColor: "#374151",
-      title: "Resources",
-      titleColor: "#60A5FA",
-      paddingX: 1,
-    },
-    resList
+    Text({ content: "Collecting…", fg: MUTED })
   );
 
   const cont = Box(
     {
       id: "cont",
       width: "100%",
-      height: 6,
+      flexGrow: 1,
       flexDirection: "column",
       gap: 0,
-      borderStyle: "rounded",
-      borderColor: "#374151",
-      title: "Containers",
-      titleColor: "#60A5FA",
       paddingX: 1,
+      borderStyle: "rounded",
+      borderColor: BORDER,
+      title: "Containers",
+      titleColor: SECONDARY,
     },
-    Text({ content: "collecting…", fg: "#6B7280" })
+    Text({ content: "Collecting…", fg: MUTED })
   );
 
   const left = Box(
-    { id: "left", flexDirection: "column", gap: 1, flexGrow: 0, flexShrink: 0, width: 64 },
+    { id: "left", flexDirection: "column", gap: 1, flexGrow: 0, flexShrink: 0, width: 52 },
     brand,
     status,
-    host,
     cont
+  );
+
+  const host = Box(
+    {
+      id: "host",
+      width: "100%",
+      height: 12,
+      flexDirection: "column",
+      gap: 0,
+      paddingX: 1,
+      borderStyle: "rounded",
+      borderColor: BORDER,
+      title: "Host",
+      titleColor: SECONDARY,
+    },
+    Text({ content: "Collecting…", fg: MUTED })
+  );
+
+  const net = Box(
+    {
+      id: "net",
+      width: "100%",
+      height: 8,
+      flexDirection: "column",
+      gap: 0,
+      paddingX: 1,
+      borderStyle: "rounded",
+      borderColor: BORDER,
+      title: "Network I/O",
+      titleColor: SECONDARY,
+    },
+    Text({ content: "Collecting…", fg: MUTED })
+  );
+
+  const diskio = Box(
+    {
+      id: "diskio",
+      width: "100%",
+      height: 5,
+      flexDirection: "column",
+      gap: 0,
+      paddingX: 1,
+      borderStyle: "rounded",
+      borderColor: BORDER,
+      title: "Disk I/O",
+      titleColor: SECONDARY,
+    },
+    Text({ content: "Collecting…", fg: MUTED })
+  );
+
+  const sys = Box(
+    {
+      id: "sys",
+      width: "100%",
+      height: 4,
+      flexDirection: "column",
+      gap: 0,
+      paddingX: 1,
+      borderStyle: "rounded",
+      borderColor: BORDER,
+      title: "System",
+      titleColor: SECONDARY,
+    },
+    Text({ content: "Collecting…", fg: MUTED })
+  );
+
+  const center = Box(
+    { id: "center", flexDirection: "column", gap: 1, flexGrow: 0, flexShrink: 0, width: 36 },
+    host,
+    net,
+    diskio,
+    sys
   );
 
   const logs = new ScrollBoxRenderable(renderer, {
@@ -519,18 +510,13 @@ export async function runTui(): Promise<void> {
     stickyStart: "bottom",
     viewportCulling: true,
     scrollbarOptions: {
-      showArrows: false,
       trackOptions: { foregroundColor: "#4B5563", backgroundColor: "#1F2937" },
     },
   });
-  const logsWrap = Box({ id: "logs-wrap", flexGrow: 1, flexDirection: "column", gap: 1 }, logs);
 
-  const hintBox = Box({ id: "hint-box", flexDirection: "column", gap: 0 }, Text({ content: "", fg: "#4B5563" }));
-  const mainRow = Box(
-    { id: "main-row", flexGrow: 1, flexDirection: "row", gap: 1 },
-    left,
-    logsWrap
-  );
+  const right = Box({ id: "right", flexGrow: 1, flexDirection: "column" }, logs);
+  const mainRow = Box({ id: "main-row", flexGrow: 1, flexDirection: "row", gap: 1 }, left, center, right);
+  const hintBox = Box({ id: "hint-box", width: "100%", height: 1, paddingX: 1 });
   const outer = Box(
     { id: "outer", width: "100%", height: "100%", flexDirection: "column", gap: 1 },
     mainRow,
@@ -539,73 +525,125 @@ export async function runTui(): Promise<void> {
   renderer.root.add(outer);
 
   const realOuter = renderer.root.getRenderable("outer")!;
-  const realMainRow = realOuter.getRenderable("main-row")!;
-  const realLeft = realMainRow.getRenderable("left")!;
-  const realBrand = realLeft.getRenderable("brand")!;
-  const realStatus = realLeft.getRenderable("status")!;
-  const realHost = realLeft.getRenderable("host")!;
-  const realResList = realHost.getRenderable("res-list")! as ScrollBoxRenderable;
-  const realCont = realLeft.getRenderable("cont")!;
-  const realLogs = realMainRow.getRenderable("logs-wrap")!.getRenderable("logs")! as ScrollBoxRenderable;
-  const realHint = realOuter.getRenderable("hint-box")!;
+  const realMainRow = realOuter.getRenderable("main-row")! as unknown as BoxRenderable;
+  const realLeft = realMainRow.getRenderable("left")! as unknown as BoxRenderable;
+  const realCenter = realMainRow.getRenderable("center")! as unknown as BoxRenderable;
+  const realBrand = realLeft.getRenderable("brand")! as unknown as BoxRenderable;
+  const artBox = realBrand.getRenderable("art-box")! as unknown as BoxRenderable;
+  const metaBox = realBrand.getRenderable("meta-box")! as unknown as BoxRenderable;
+  const realStatus = realLeft.getRenderable("status")! as unknown as BoxRenderable;
+  const realCont = realLeft.getRenderable("cont")! as unknown as BoxRenderable;
+  const realHost = realCenter.getRenderable("host")! as unknown as BoxRenderable;
+  const realNet = realCenter.getRenderable("net")! as unknown as BoxRenderable;
+  const realDiskIo = realCenter.getRenderable("diskio")! as unknown as BoxRenderable;
+  const realSys = realCenter.getRenderable("sys")! as unknown as BoxRenderable;
+  const realLogs = realMainRow.getRenderable("right")!.getRenderable("logs")! as ScrollBoxRenderable;
+  const realHint = realOuter.getRenderable("hint-box")! as unknown as BoxRenderable;
   let currentArt: string[] | null = ART;
   let shortMode = false;
+  let hostDetail = false;
+  let focus: "left" | "center" | "logs" = "left";
+  let lastDaemon: DaemonInfo | null = null;
+  let lastHost: HostStats | null = null;
+  let pulseUntil = 0;
+  const cpuHistory: number[] = [];
+  const memHistory: number[] = [];
+  const netRxHistory: number[] = [];
+  const netTxHistory: number[] = [];
+  const diskRxHistory: number[] = [];
+  const diskTxHistory: number[] = [];
 
   function applyLayout() {
     const wide = renderer.width >= WIDE_MIN_WIDTH;
     const short = renderer.height <= SHORT_MAX_HEIGHT;
     shortMode = short;
     realMainRow.flexDirection = wide ? "row" : "column";
-    realLeft.width = wide ? 64 : "100%";
+    realLeft.width = wide ? 52 : "100%";
     realLeft.height = wide ? "100%" : "auto";
-    if (wide) {
-      realHost.flexGrow = short ? 0 : 1;
-      realHost.height = short ? 5 : "auto";
-      realStatus.height = short ? 4 : 5;
-      realCont.height = short ? 4 : 6;
-    } else {
-      realHost.flexGrow = 0;
-      realHost.height = short ? 5 : 7;
-      realStatus.height = short ? 4 : 5;
-      realCont.height = short ? 4 : 5;
-    }
-    const artLines = wide ? (short ? ART.slice(0, 3) : ART) : null;
+    realCenter.width = wide ? 36 : "100%";
+    realCenter.height = wide ? "100%" : "auto";
+    realHost.height = short ? 7 : 12;
+    realNet.height = short ? 5 : 8;
+    realDiskIo.height = short ? 4 : 5;
+    realSys.height = short ? 3 : 4;
+    realStatus.height = short ? 5 : 6;
+    realBrand.gap = wide && !short ? 1 : 0;
+    realBrand.paddingY = wide && !short ? 1 : 0;
+    artBox.height = wide ? "auto" : 0;
+    const artLines = wide ? (short ? null : ART) : null;
     if (currentArt !== artLines) {
       currentArt = artLines;
-      clearChildren(realBrand);
+      clearChildren(artBox);
       if (artLines) {
-        realBrand.height = artLines.length + 3;
-        realBrand.add(new TextRenderable(renderer, { content: artLines.join("\n"), fg: "#4ADE80", width: "100%" }));
-        realBrand.add(new TextRenderable(renderer, { content: `Airlinkd ${VERSION} · by AirlinkLabs · MIT`, fg: "#60A5FA", width: "100%" }));
-      } else {
-        realBrand.height = 3;
-        realBrand.add(new TextRenderable(renderer, { content: `Airlinkd ${VERSION} · by AirlinkLabs · MIT`, fg: "#60A5FA", width: "100%" }));
+        artBox.add(new TextRenderable(renderer, { content: artLines.join("\n"), fg: GREEN, width: "100%" }));
       }
     }
+    renderHint();
   }
 
   function renderHint() {
     clearChildren(realHint);
-    realHint.add(
-      new TextRenderable(renderer, {
-        content: `[Tab] logs: ${currentFile} · [k] stop daemon · [r] start · [Ctrl+C] quit`,
-        fg: "#4B5563",
-        width: "100%",
-      })
-    );
+    const hint = new TextRenderable(renderer, { width: "100%" });
+    const wide = renderer.width >= WIDE_MIN_WIDTH;
+    const parts: [string, string][] = wide
+      ? [
+          ["[", GREEN], ["Tab", TEXT], ["] logs", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["1", TEXT], ["] left", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["2", TEXT], ["] center", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["3", TEXT], ["] logs", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["n", TEXT], ["] logs", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["↑/↓", TEXT], ["] scroll", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["f", TEXT], ["] follow", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["c", TEXT], ["] clear", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["h", TEXT], ["] host detail", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["s", TEXT], ["] refresh", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["p", TEXT], ["] start", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["m", TEXT], ["] stop", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["Ctrl+C", TEXT], ["] quit", MUTED],
+        ]
+      : [
+          ["[", GREEN], ["Tab", TEXT], ["] logs", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["n", TEXT], ["] focus", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["↑/↓", TEXT], ["] scroll", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["f", TEXT], ["] follow", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["c", TEXT], ["] clear", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["h", TEXT], ["] host", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["s", TEXT], ["] refresh", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["p", TEXT], ["] start", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["m", TEXT], ["] stop", MUTED], [" · ", BORDER],
+          ["[", GREEN], ["Ctrl+C", TEXT], ["] quit", MUTED],
+        ];
+    for (const [text, fg] of parts) {
+      hint.add(seg(text, fg));
+    }
+    realHint.add(hint);
   }
 
-  // ── Logs ─────────────────────────────────────────────────────────────────
+  function setFocus(next: "left" | "center" | "logs") {
+    focus = next;
+    for (const box of [realBrand, realStatus, realCont]) {
+      box.borderColor = focus === "left" ? BORDER_FOCUS : BORDER;
+    }
+    for (const box of [realHost, realNet, realDiskIo, realSys]) {
+      box.borderColor = focus === "center" ? BORDER_FOCUS : BORDER;
+    }
+    realLogs.borderColor = focus === "logs" ? BORDER_FOCUS : BORDER;
+  }
+
   let currentFile = LOG_FILES[0];
   let offsets: Record<string, number> = {};
 
-  function fillFromFile(name: string) {
+  function clearLogs() {
     clearChildren(realLogs);
+  }
+
+  function fillFromFile(name: string) {
+    clearLogs();
     if (!existsSync(logPath(name))) {
       realLogs.add(
         new TextRenderable(renderer, {
           content: `(no ${name} yet — waiting for daemon logs)`,
-          fg: "#6B7280",
+          fg: DIM,
           width: "100%",
         })
       );
@@ -630,15 +668,152 @@ export async function runTui(): Promise<void> {
 
   function switchFile() {
     const idx = LOG_FILES.indexOf(currentFile);
-    currentFile = LOG_FILES[(idx + 1) % LOG_FILES.length];
+    currentFile = LOG_FILES[(idx + 1) % LOG_FILES.length] ?? currentFile;
     fillFromFile(currentFile);
-    renderHint();
+    updateLogsTitle();
   }
 
-  applyLayout();
-  renderHint();
+  function updateLogsTitle() {
+    realLogs.title = `Logs — ${currentFile}${realLogs.stickyScroll ? "" : " (paused)"}`;
+    realLogs.titleColor = realLogs.stickyScroll ? SECONDARY : AMBER;
+  }
 
-  // ── Refresh ──────────────────────────────────────────────────────────────
+  function dot(online: boolean): string {
+    if (!online) return "○";
+    if (Date.now() < pulseUntil && Math.floor(Date.now() / 1000) % 2 === 0) return "○";
+    return "●";
+  }
+
+  function renderBrandMeta(d: DaemonInfo | null) {
+    renderInto(metaBox, renderer, brandMetaLines(d));
+  }
+
+  function renderStatus(d: DaemonInfo) {
+    const lines: { text: string; fg: string }[] = [];
+    const mode = d.mode === "managed" ? "managed" : d.mode === "external" ? "external" : "no daemon";
+    lines.push({ text: `${dot(d.online)} Daemon  ${d.online ? "online" : "offline"} · ${mode}`, fg: d.online ? GREEN : RED });
+    lines.push({ text: d.pid ? `PID ${d.pid} · up ${fmtDur(d.uptimeSec ?? 0)}` : "not running", fg: SECONDARY });
+    if (!shortMode) lines.push({ text: `Port ${d.port} · Kernel ${d.kernel}`, fg: SECONDARY });
+    lines.push({ text: `Remote ${d.remote} · Errors 24h ${d.errors24h}`, fg: SECONDARY });
+    renderInto(realStatus, renderer, lines);
+  }
+
+  function renderHost(h: HostStats) {
+    const lines: { text: string; fg: string }[] = [];
+    const cpuBar = `${bar(h.cpuPct, 10)} ${String(Math.round(h.cpuPct)).padStart(3)}%`;
+    lines.push({ text: `CPU  ${cpuBar}`, fg: severity(h.cpuPct) });
+    if (hostDetail && !shortMode && cpuHistory.length > 0) {
+      lines.push({ text: `     ${sparkline(cpuHistory, 14)}`, fg: SPARK_GREEN });
+    }
+    const memPct = h.memTotalGb > 0 ? (h.memUsedGb / h.memTotalGb) * 100 : 0;
+    lines.push({
+      text: `RAM  ${bar(memPct, 10)} ${String(Math.round(memPct)).padStart(3)}% ${h.memUsedGb.toFixed(1)}/${h.memTotalGb.toFixed(1)} GB`,
+      fg: severity(memPct),
+    });
+    if (hostDetail && !shortMode && memHistory.length > 0) {
+      lines.push({ text: `     ${sparkline(memHistory, 14)}`, fg: SPARK_GREEN });
+    }
+    if (!shortMode && h.swapTotalGb > 0.1) {
+      const swapPct = (h.swapUsedGb / h.swapTotalGb) * 100;
+      lines.push({ text: `Swap ${bar(swapPct, 10)} ${String(Math.round(swapPct)).padStart(3)}% ${h.swapUsedGb.toFixed(1)}/${h.swapTotalGb.toFixed(1)} GB`, fg: severity(swapPct) });
+    }
+    lines.push({ text: "─".repeat(16), fg: BORDER });
+    if (hostDetail && !shortMode) {
+      const cores = h.perCorePct.slice(0, 8);
+      for (let i = 0; i < cores.length; i += 4) {
+        const row = cores
+          .slice(i, i + 4)
+          .map((p, j) => `c${i + j} ${String(Math.round(p)).padStart(2)}%`)
+          .join(" ");
+        lines.push({ text: row, fg: SECONDARY });
+      }
+      if (cores.length === 0) lines.push({ text: "no per-core data", fg: SECONDARY });
+    } else {
+      lines.push({ text: `Cores ${h.perCorePct.length} · Load ${h.load1.toFixed(2)} ${h.load5.toFixed(2)} ${h.load15.toFixed(2)}`, fg: SECONDARY });
+      lines.push({ text: `Up ${fmtDur(h.sysUptimeSec)} · Procs ${h.procs}`, fg: SECONDARY });
+    }
+    if (!shortMode) {
+      lines.push({ text: "─".repeat(16), fg: BORDER });
+      for (const d of h.disks.slice(0, 2)) {
+        lines.push({
+          text: `${(d.mount.length > 7 ? d.mount.slice(0, 6) + "…" : d.mount).padEnd(7)} ${bar(d.pct, 8)} ${String(Math.round(d.pct)).padStart(3)}% ${d.usedGb.toFixed(1)}/${d.totalGb.toFixed(1)} GB`,
+          fg: severity(d.pct),
+        });
+      }
+    }
+    renderInto(realHost, renderer, lines);
+  }
+
+  function renderNet(h: HostStats, docker: DockerStats) {
+    clearChildren(realNet);
+    const add = (text: string, fg: string) =>
+      realNet.add(new TextRenderable(renderer, { content: text, fg, width: "100%" }));
+    const ifaces = h.nets.slice(0, 2);
+    if (ifaces.length === 0) {
+      add("no network traffic", DIM);
+    }
+    for (const n of ifaces) {
+      add(`${n.iface.slice(0, 8).padEnd(8)} ↓ ${fmtBytes(n.rxBps)}/s  ↑ ${fmtBytes(n.txBps)}/s`, SECONDARY);
+      const sparkRow = new TextRenderable(renderer, { width: "100%" });
+      const label = seg("       ↓ ", SECONDARY);
+      const rx = seg(sparkline(netRxHistory, 10), BLUE);
+      const sep = seg("  ↑ ", SECONDARY);
+      const tx = seg(sparkline(netTxHistory, 10), GREEN);
+      sparkRow.add(label);
+      sparkRow.add(rx);
+      sparkRow.add(sep);
+      sparkRow.add(tx);
+      realNet.add(sparkRow);
+    }
+    if (!shortMode) {
+      if (docker.online) {
+        add(`docker nets ${docker.networks} · vols ${docker.volumes} · images ${docker.images}`, SECONDARY);
+        add(`docker disk ${docker.dockerDiskGb.toFixed(1)} GB`, SECONDARY);
+      } else {
+        add(`docker ${docker.error ?? "unreachable"}`, RED);
+      }
+    }
+  }
+
+  function renderDiskIo(h: HostStats) {
+    clearChildren(realDiskIo);
+    const add = (text: string, fg: string) =>
+      realDiskIo.add(new TextRenderable(renderer, { content: text, fg, width: "100%" }));
+    if (h.diskIo.length === 0) {
+      add("no block devices", DIM);
+    } else {
+      const d = h.diskIo[0]!;
+      add(`${d.dev.padEnd(7)} R ${fmtBytes(d.rxBps)}/s  W ${fmtBytes(d.txBps)}/s`, SECONDARY);
+      const sparkRow = new TextRenderable(renderer, { width: "100%" });
+      const label = seg("        R ", SECONDARY);
+      const rx = seg(sparkline(diskRxHistory, 9), BLUE);
+      const sep = seg("  W ", SECONDARY);
+      const tx = seg(sparkline(diskTxHistory, 9), GREEN);
+      sparkRow.add(label);
+      sparkRow.add(rx);
+      sparkRow.add(sep);
+      sparkRow.add(tx);
+      realDiskIo.add(sparkRow);
+    }
+    if (h.temps.length > 0 && !shortMode) {
+      const hot = h.temps.some((t) => t > 70);
+      add(`Temp ${h.temps.map((t) => `${Math.round(t)}°C`).join(" · ")}`, hot ? RED : SECONDARY);
+    }
+  }
+
+  function renderSys(h: HostStats) {
+    const lines: { text: string; fg: string }[] = [];
+    lines.push({ text: `Load ${h.load1.toFixed(2)} ${h.load5.toFixed(2)} ${h.load15.toFixed(2)} · ${h.procs} procs`, fg: SECONDARY });
+    if (!shortMode) {
+      const top = h.topProcs
+        .slice(0, 2)
+        .map((p) => `${p.name.length > 10 ? p.name.slice(0, 9) + "…" : p.name} ${Math.round(p.cpuPct)}%`)
+        .join(" · ");
+      if (top) lines.push({ text: top, fg: SECONDARY });
+    }
+    renderInto(realSys, renderer, lines);
+  }
+
   const refreshStats = async () => {
     const now = Date.now();
     const ctx: DaemonCtx = {
@@ -664,23 +839,129 @@ export async function runTui(): Promise<void> {
           daemon.version = ctx.version;
         }
       }
-      renderLines(realStatus, renderer, daemonLines(daemon, shortMode));
-      renderLines(realResList, renderer, hostLines(hostStats, shortMode));
-      renderLines(realCont, renderer, containerLines(docker, shortMode));
+      if (lastDaemon) {
+        const changed =
+          daemon.online !== lastDaemon.online || daemon.mode !== lastDaemon.mode || daemon.pid !== lastDaemon.pid;
+        if (changed) pulseUntil = Date.now() + 3000;
+      }
+      lastDaemon = daemon;
+      lastHost = hostStats;
+      pushCapped(cpuHistory, hostStats.cpuPct);
+      if (hostStats.memTotalGb > 0) pushCapped(memHistory, (hostStats.memUsedGb / hostStats.memTotalGb) * 100);
+      if (hostStats.nets.length > 0) {
+        const topNet = hostStats.nets[0]!;
+        pushCapped(netRxHistory, topNet.rxBps);
+        pushCapped(netTxHistory, topNet.txBps);
+      }
+      if (hostStats.diskIo.length > 0) {
+        const topDisk = hostStats.diskIo[0]!;
+        pushCapped(diskRxHistory, topDisk.rxBps);
+        pushCapped(diskTxHistory, topDisk.txBps);
+      }
+      renderBrandMeta(daemon);
+      renderStatus(daemon);
+      renderCont(docker);
+      renderHost(hostStats);
+      renderNet(hostStats, docker);
+      renderDiskIo(hostStats);
+      renderSys(hostStats);
     } catch {
-      // keep previous stats if a collection fails
+      /* keep previous stats if a collection fails */
     }
   };
+
+  function renderCont(docker: DockerStats) {
+    const lines: { text: string; fg: string }[] = [];
+    if (!docker.online) {
+      renderInto(realCont, renderer, [{ text: `docker ${docker.error ?? "unreachable"}`, fg: RED }]);
+      return;
+    }
+    const running = docker.containers.filter((c) => c.state === "running");
+    const sumCpu = running.reduce((a, c) => a + c.cpuPct, 0);
+    const sumMemMb = running.reduce((a, c) => a + c.memUsedMb, 0);
+    const sumLimitMb = running.reduce((a, c) => a + c.memLimitMb, 0);
+    const memText = sumLimitMb > 0 ? `${sumMemMb.toFixed(1)}/${sumLimitMb.toFixed(1)} GB` : `${sumMemMb.toFixed(1)} GB`;
+    if (docker.containers.length === 0) {
+      lines.push({ text: "no containers on this host", fg: DIM });
+      lines.push({ text: `docker online · images ${docker.images} · nets ${docker.networks} · vols ${docker.volumes}`, fg: SECONDARY });
+      renderInto(realCont, renderer, lines);
+      return;
+    }
+    lines.push({ text: `● ${running.length} active / ${docker.containers.length} total`, fg: running.length > 0 ? GREEN : DIM });
+    lines.push({ text: `Σ CPU ${sumCpu.toFixed(1)}% · Σ MEM ${memText}`, fg: SECONDARY });
+    const maxRows = shortMode ? 3 : 6;
+    for (const c of docker.containers.slice(0, maxRows)) {
+      const name = c.name.length > 12 ? c.name.slice(0, 11) + "…" : c.name;
+      if (c.state === "running") {
+        const ramText = c.memLimitMb > 0 ? `${c.memUsedMb.toFixed(1)}/${c.memLimitMb.toFixed(1)} GB` : `${c.memUsedMb.toFixed(1)} GB`;
+        lines.push({
+          text: `● ${name.padEnd(12)} CPU ${bar(c.cpuPct, 8)} ${String(Math.round(c.cpuPct)).padStart(3)}%  RAM ${ramText}`,
+          fg: severity(c.cpuPct),
+        });
+      } else {
+        lines.push({ text: `○ ${name.padEnd(12)} ${c.state}`, fg: DIM });
+      }
+    }
+    if (docker.containers.length > maxRows) {
+      lines.push({ text: `+ ${docker.containers.length - maxRows} more`, fg: DIM });
+    }
+    renderInto(realCont, renderer, lines);
+  }
+
   void refreshStats();
   const statsTimer = setInterval(() => void refreshStats(), STATS_INTERVAL_MS);
 
   renderer.keyInput.on("keypress", (key: KeyEvent) => {
-    if (key.name === "tab") switchFile();
-    else if (key.name === "k") stopDaemon();
-    else if (key.name === "r") {
-      void probeDaemon().then((p) => {
-        if (!p.online) startDaemon();
-      });
+    switch (key.name) {
+      case "tab":
+        switchFile();
+        break;
+      case "1":
+        setFocus("left");
+        break;
+      case "2":
+        setFocus("center");
+        break;
+      case "3":
+        setFocus("logs");
+        break;
+      case "n":
+        setFocus("logs");
+        break;
+      case "up":
+        realLogs.stickyScroll = false;
+        updateLogsTitle();
+        realLogs.scrollBy(-3);
+        break;
+      case "down":
+        realLogs.stickyScroll = false;
+        updateLogsTitle();
+        realLogs.scrollBy(3);
+        break;
+      case "f":
+        realLogs.stickyScroll = !realLogs.stickyScroll;
+        updateLogsTitle();
+        break;
+      case "c":
+        clearLogs();
+        break;
+      case "s":
+        void refreshStats();
+        break;
+      case "h":
+        hostDetail = !hostDetail;
+        if (lastHost) renderHost(lastHost);
+        break;
+      case "p":
+      case "r":
+        void probeDaemon().then((p) => {
+          if (!p.online) startDaemon();
+        });
+        break;
+      case "m":
+      case "k":
+        stopDaemon();
+        break;
     }
   });
 
@@ -705,7 +986,6 @@ export async function runTui(): Promise<void> {
     setTimeout(() => process.exit(0), 2000);
   });
 
-  // ── Startup probe: adopt running daemon or start one ────────────────────
   const probe = await probeDaemon();
   if (probe.online) {
     extPid = null;
@@ -729,12 +1009,14 @@ export async function runTui(): Promise<void> {
   } else {
     configError = "no daemon key — create daemon/.env with key= (16+ chars)";
   }
+  applyLayout();
+  setFocus("left");
+  updateLogsTitle();
+  renderBrandMeta(null);
   if (configError) {
-    renderLines(
-      realHint,
-      renderer,
-      [{ text: configError, fg: "#F87171" }, { text: `[Tab] ${currentFile} · [k] stop daemon · [r] start · [Ctrl+C] quit`, fg: "#4B5563" }]
-    );
+    clearChildren(realHint);
+    realHint.add(new TextRenderable(renderer, { content: configError, fg: RED, width: "100%" }));
+    realHint.add(new TextRenderable(renderer, { content: "[Tab] logs · [p] start · [m] stop · [Ctrl+C] quit", fg: MUTED, width: "100%" }));
   }
   fillFromFile(currentFile);
   void refreshStats();
