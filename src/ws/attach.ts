@@ -1,7 +1,7 @@
 import type { ServerWebSocket } from 'bun';
 import { docker } from '../handlers/docker';
 import logger from '../logger';
-import type { WsData } from './server';
+import { appendRawLogChunk, type WsData } from './server';
 
 export async function attachToContainer(id: string, ws: ServerWebSocket<WsData>): Promise<void> {
   try {
@@ -17,6 +17,7 @@ export async function attachToContainer(id: string, ws: ServerWebSocket<WsData>)
     });
 
     logStream.on('data', (chunk: Buffer) => {
+      appendRawLogChunk(id, chunk);
       if (ws.readyState === 1) ws.send(chunk);
     });
 

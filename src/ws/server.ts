@@ -28,6 +28,39 @@ const AUTH_TIMEOUT_MS = 10_000;
 
 export const openConnections = new Set<ServerWebSocket<WsData>>();
 
+// Per-container console log ring buffer (last LOG_BUFFER_SIZE lines).
+export const LOG_BUFFER_SIZE = 150;
+const logBuffers = new Map<string, string[]>();
+const pendingLines = new Map<string, string>();
+
+export function appendLog(containerId: string, line: string): void {
+  if (!logBuffers.has(containerId)) logBuffers.set(containerId, []);
+  const buf = logBuffers.get(containerId)!;
+  buf.push(line);
+  if (buf.length > LOG_BUFFER_SIZE) buf.shift();
+}
+
+export function getLogBuffer(containerId: string): string[] {
+  return logBuffers.get(containerId) ?? [];
+}
+
+export function clearLogBuffer(containerId: string): void {
+  logBuffers.delete(containerId);
+  pendingLines.delete(containerId);
+}
+
+// Splits raw docker log chunks into lines, buffering partial lines until the
+// next chunk completes them. Call this wherever container output is received.
+export function appendRawLogChunk(containerId: string, chunk: Buffer): void {
+  const pending = (pendingLines.get(containerId) ?? '') + chunk.toString('utf8');
+  const lines = pending.split('\n');
+  pendingLines.set(containerId, lines.pop() ?? '');
+  for (const line of lines) {
+    const trimmed = line.replace(/\r$/, '');
+    if (trimmed) appendLog(containerId, trimmed);
+  }
+}
+
 type IncomingCommand = {
   event?: string;
   args?: string[];

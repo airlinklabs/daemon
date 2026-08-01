@@ -27,6 +27,7 @@ import {
   handleContainerInstaller,
   handleContainerInstallStatus,
   handleContainerKill,
+  handleContainerLogs,
   handleContainerRestore,
   handleContainerStart,
   handleContainerStats,
@@ -85,6 +86,12 @@ const dynamicRoutes: [RegExp, string[], string, Handler][] = [
     ['id'],
     'GET',
     (req, params) => handleContainerInstallStatus(req, params),
+  ],
+  [
+    /^\/container\/logs\/([a-zA-Z0-9_-]+)$/,
+    ['id'],
+    'GET',
+    (req, params) => handleContainerLogs(req, params),
   ],
 ];
 

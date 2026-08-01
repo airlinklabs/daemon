@@ -16,6 +16,7 @@ import {
 } from '../handlers/docker';
 import { copyIntoVolume, downloadToVolume } from '../handlers/fs';
 import { getServerState, setServerState } from '../handlers/installState';
+import { clearLogBuffer, getLogBuffer } from '../ws/server';
 import logger from '../logger';
 import { validateContainerId } from '../validation';
 
@@ -241,6 +242,7 @@ export async function handleContainerStart(req: Request): Promise<Response> {
   }
 
   try {
+    clearLogBuffer(id);
     await startContainer(id, image, envVars, ports ?? '', Memory ?? 512, Cpu ?? 100);
     return json({ message: `container ${id} started successfully` });
   } catch (error) {
@@ -337,6 +339,13 @@ export async function handleContainerDelete(req: Request): Promise<Response> {
     logger.error('error deleting container', err);
     return json({ error: `failed to delete container ${body.id}` }, 500);
   }
+}
+
+export async function handleContainerLogs(_req: Request, params: Record<string, string>): Promise<Response> {
+  const { id } = params;
+  if (!id) return json({ error: 'container ID is required' }, 400);
+  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  return json({ lines: getLogBuffer(id) });
 }
 
 export async function handleContainerStatus(req: Request): Promise<Response> {
