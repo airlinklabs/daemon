@@ -168,9 +168,8 @@ export async function handleFsPull(req: Request): Promise<Response> {
     return json({ error: 'private network URLs are not allowed' }, 400);
   }
 
-  const targetDir = body.path && typeof body.path === 'string' && body.path.trim() !== ''
-    ? body.path.trim().replace(/^\/+/, '')
-    : '';
+  const targetDir =
+    body.path && typeof body.path === 'string' && body.path.trim() !== '' ? body.path.trim().replace(/^\/+/, '') : '';
   const resolvedDir = targetDir === '' ? '/' : targetDir;
   if (!validatePath(resolvedDir)) {
     return json({ error: 'invalid target path' }, 400);
@@ -213,7 +212,9 @@ export async function handleFsPull(req: Request): Promise<Response> {
         }
         await handle.end();
       } catch {
-        try { await handle.end(); } catch {}
+        try {
+          await handle.end();
+        } catch {}
         throw new Error('download interrupted');
       }
     } catch (err) {

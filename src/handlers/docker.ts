@@ -26,7 +26,11 @@ async function applyNetworkThrottle(id: string, mbps: number): Promise<void> {
   try {
     const container = docker.getContainer(id);
     const exec = await container.exec({
-      Cmd: ['/bin/sh', '-c', `command -v tc >/dev/null 2>&1 && tc qdisc add dev eth0 root handle 1: tbf rate ${mbps}mbit burst 64kb latency 50ms || true`],
+      Cmd: [
+        '/bin/sh',
+        '-c',
+        `command -v tc >/dev/null 2>&1 && tc qdisc add dev eth0 root handle 1: tbf rate ${mbps}mbit burst 64kb latency 50ms || true`,
+      ],
       AttachStdout: true,
       AttachStderr: true,
     });
@@ -102,8 +106,8 @@ export function buildInitScript(originalEntrypoint: string[], originalCmd: strin
     '# Patch shell RC files for bash, zsh, and fish',
     'for _rc in /home/container/.bashrc /home/container/.zshrc /root/.bashrc /root/.zshrc /etc/bash.bashrc; do',
     '  if [ -f "$_rc" ]; then',
-    "    sed -i 's/petrodactyl/airlinkd/g' \"$\\_rc\" 2>/dev/null || true",
-    "    grep -q 'PS1.*airlinkd' \"$\\_rc\" 2>/dev/null || echo 'export PS1=\"container@airlinkd \\\\w \\\\\\$ \"' >> \"$\\_rc\"",
+    '    sed -i \'s/petrodactyl/airlinkd/g\' "$\\_rc" 2>/dev/null || true',
+    '    grep -q \'PS1.*airlinkd\' "$\\_rc" 2>/dev/null || echo \'export PS1="container@airlinkd \\\\w \\\\\\$ "\' >> "$\\_rc"',
     '  fi',
     'done',
     '# Fish uses a different syntax for prompts',
@@ -755,7 +759,9 @@ export async function deleteContainerAndVolume(id: string): Promise<void> {
 async function writeCommandToConsoleFifo(id: string, command: string): Promise<void> {
   const fifoPath = resolve(process.cwd(), 'volumes', id, CONSOLE_FIFO_RELATIVE_PATH);
   if (!existsSync(fifoPath) || !statSync(fifoPath).isFIFO()) {
-    throw new Error(`console command FIFO is not ready for container ${id}; restart the container with the current daemon`);
+    throw new Error(
+      `console command FIFO is not ready for container ${id}; restart the container with the current daemon`,
+    );
   }
 
   const proc = Bun.spawn(['sh', '-c', 'printf "%s\\n" "$1" > "$2"', 'airlinkd-console-command', command, fifoPath], {

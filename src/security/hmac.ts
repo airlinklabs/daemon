@@ -1,4 +1,4 @@
-import { timingSafeEqual, createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import config from '../config';
 import logger from '../logger';
 
@@ -7,7 +7,7 @@ const seenNonces = new Set<string>();
 
 // Must match HMAC_PAYLOAD_VERSION in the panel's daemonRequest.ts.
 // Increment both sides together when changing the signing format.
-const HMAC_PAYLOAD_VERSION = 1;
+const _HMAC_PAYLOAD_VERSION = 1;
 
 // Why this format: ${ts}:${nonce}:${method}:${path}:${body}
 // - ts: timestamps the request, enables 30s expiry window

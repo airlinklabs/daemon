@@ -1,5 +1,4 @@
-import { readFileSync, readdirSync, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
-import { statfsSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statfsSync, statSync } from 'node:fs';
 
 export interface HostStats {
   cpuPct: number;
@@ -46,7 +45,7 @@ export interface DockerStats {
 export interface DaemonInfo {
   online: boolean;
   pid: number | null;
-  mode: "managed" | "external" | "none";
+  mode: 'managed' | 'external' | 'none';
   version: string;
   runtime: string;
   port: number;
@@ -79,25 +78,25 @@ const withTimeout = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
 
 function readProc(path: string): string {
   try {
-    return readFileSync(path, "utf8");
+    return readFileSync(path, 'utf8');
   } catch {
-    return "";
+    return '';
   }
 }
 
 function readCpu(): { time: number; perCore: number[] } {
-  const data = readProc("/proc/stat");
+  const data = readProc('/proc/stat');
   const perCore: number[] = [];
   let total = 0;
-  for (const line of data.split("\n")) {
+  for (const line of data.split('\n')) {
     const parts = line.split(/\s+/);
     const name = parts[0];
-    if (!name?.startsWith("cpu")) continue;
+    if (!name?.startsWith('cpu')) continue;
     const nums = parts.slice(1).map(Number);
     if (nums.length < 5) continue;
     const idle = nums[3] + (nums[4] ?? 0);
     const sum = nums.reduce((a, b) => a + b, 0);
-    if (name === "cpu") total = sum - idle;
+    if (name === 'cpu') total = sum - idle;
     else perCore.push(sum - idle);
   }
   return { time: total, perCore };
@@ -113,7 +112,7 @@ export function cpuPct(now: number): { total: number; perCore: number[] } {
   const total = Math.max(0, Math.min(100, dt * 100));
   const perCore = cur.perCore.map((v, i) => {
     const p = prevCpu?.perCore[i] ?? v;
-    const d = (v - p) / (now - prevCpu!.time);
+    const d = (v - p) / (now - prevCpu?.time);
     return Math.max(0, Math.min(100, d * 100));
   });
   prevCpu = { time: now, perCore: cur.perCore.slice() };
@@ -121,27 +120,27 @@ export function cpuPct(now: number): { total: number; perCore: number[] } {
 }
 
 function readMem(): { total: number; available: number; cached: number; swapTotal: number; swapFree: number } {
-  const data = readProc("/proc/meminfo");
+  const data = readProc('/proc/meminfo');
   const get = (k: string): number => {
-    const m = data.match(new RegExp(`^${k}:\\s+(\\d+) kB`, "m"));
+    const m = data.match(new RegExp(`^${k}:\\s+(\\d+) kB`, 'm'));
     return m ? Number(m[1]) * 1024 : 0;
   };
   return {
-    total: get("MemTotal"),
-    available: get("MemAvailable"),
-    cached: get("Cached"),
-    swapTotal: get("SwapTotal"),
-    swapFree: get("SwapFree"),
+    total: get('MemTotal'),
+    available: get('MemAvailable'),
+    cached: get('Cached'),
+    swapTotal: get('SwapTotal'),
+    swapFree: get('SwapFree'),
   };
 }
 
 function readLoad(): { load: [number, number, number]; procs: number; uptime: number } {
-  const load = readProc("/proc/loadavg");
+  const load = readProc('/proc/loadavg');
   const parts = load.split(/\s+/);
-  const uptime = Number(readProc("/proc/uptime").split(/\s+/)[0] ?? 0);
+  const uptime = Number(readProc('/proc/uptime').split(/\s+/)[0] ?? 0);
   return {
     load: [Number(parts[0] ?? 0), Number(parts[1] ?? 0), Number(parts[2] ?? 0)],
-    procs: Number(parts[3]?.split("/")[1] ?? 0),
+    procs: Number(parts[3]?.split('/')[1] ?? 0),
     uptime,
   };
 }
@@ -149,12 +148,12 @@ function readLoad(): { load: [number, number, number]; procs: number; uptime: nu
 function readDisks(): { mount: string; usedGb: number; totalGb: number; pct: number }[] {
   const out: { mount: string; usedGb: number; totalGb: number; pct: number }[] = [];
   try {
-    const mounts = readProc("/proc/mounts")
-      .split("\n")
+    const mounts = readProc('/proc/mounts')
+      .split('\n')
       .map((l) => l.split(/\s+/))
       .filter((p) => {
-        const fstype = p[2] ?? "";
-        return ["ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "vfat", "exfat", "ntfs"].includes(fstype);
+        const fstype = p[2] ?? '';
+        return ['ext2', 'ext3', 'ext4', 'xfs', 'btrfs', 'zfs', 'f2fs', 'vfat', 'exfat', 'ntfs'].includes(fstype);
       });
     const seen = new Set<string>();
     for (const [dev, mount] of mounts) {
@@ -167,7 +166,7 @@ function readDisks(): { mount: string; usedGb: number; totalGb: number; pct: num
         const used = total - avail;
         if (total === 0) continue;
         out.push({
-          mount: mount === "/" ? "/" : mount,
+          mount: mount === '/' ? '/' : mount,
           usedGb: used / 1e9,
           totalGb: total / 1e9,
           pct: (used / total) * 100,
@@ -184,12 +183,12 @@ function readDisks(): { mount: string; usedGb: number; totalGb: number; pct: num
 }
 
 function readNets(now: number): { iface: string; rxBps: number; txBps: number }[] {
-  const data = readProc("/proc/net/dev");
+  const data = readProc('/proc/net/dev');
   const cur = new Map<string, { rx: number; tx: number }>();
-  for (const line of data.split("\n").slice(2)) {
-    const [head, rest] = line.split(":");
+  for (const line of data.split('\n').slice(2)) {
+    const [head, rest] = line.split(':');
     const iface = head?.trim();
-    if (!iface || iface === "lo") continue;
+    if (!iface || iface === 'lo') continue;
     const nums = rest?.trim().split(/\s+/).map(Number) ?? [];
     cur.set(iface, { rx: nums[0] ?? 0, tx: nums[8] ?? 0 });
   }
@@ -210,9 +209,9 @@ function readNets(now: number): { iface: string; rxBps: number; txBps: number }[
 }
 
 function readDiskIo(now: number): { dev: string; rxBps: number; txBps: number }[] {
-  const data = readProc("/proc/diskstats");
+  const data = readProc('/proc/diskstats');
   const cur = new Map<string, { rx: number; tx: number }>();
-  for (const line of data.split("\n")) {
+  for (const line of data.split('\n')) {
     const parts = line.trim().split(/\s+/);
     const name = parts[2];
     if (!name) continue;
@@ -242,12 +241,12 @@ function readDiskIo(now: number): { dev: string; rxBps: number; txBps: number }[
 }
 
 function readTemps(): number[] {
-  const base = "/sys/class/thermal";
-  const zones = readdirSync(base).filter((d) => d.startsWith("thermal_zone"));
+  const base = '/sys/class/thermal';
+  const zones = readdirSync(base).filter((d) => d.startsWith('thermal_zone'));
   const out: number[] = [];
   for (const zone of zones.slice(0, 4)) {
     try {
-      const t = Number(readFileSync(`${base}/${zone}/temp`, "utf8").trim());
+      const t = Number(readFileSync(`${base}/${zone}/temp`, 'utf8').trim());
       if (t > 1000 && t < 130000) out.push(t / 1000);
     } catch {
       /* skip */
@@ -258,14 +257,14 @@ function readTemps(): number[] {
 
 function readTopProcs(now: number): { pid: number; name: string; cpuPct: number; rssMb: number }[] {
   const out: { pid: number; name: string; cpuPct: number; rssMb: number }[] = [];
-  for (const entry of readdirSync("/proc")) {
+  for (const entry of readdirSync('/proc')) {
     if (!/^\d+$/.test(entry)) continue;
     try {
-      const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
-      const close = stat.lastIndexOf(")");
-      const name = stat.slice(stat.indexOf("(") + 1, close);
-      if (name.startsWith("[")) continue;
-      const rest = stat.slice(close + 2).split(" ");
+      const stat = readFileSync(`/proc/${entry}/stat`, 'utf8');
+      const close = stat.lastIndexOf(')');
+      const name = stat.slice(stat.indexOf('(') + 1, close);
+      if (name.startsWith('[')) continue;
+      const rest = stat.slice(close + 2).split(' ');
       const utime = Number(rest[11] ?? 0);
       const stime = Number(rest[12] ?? 0);
       const rssPages = Number(rest[21] ?? 0);
@@ -317,10 +316,10 @@ interface DockerResponse {
 }
 
 function decodeChunked(text: string): string {
-  let out = "";
+  let out = '';
   let rest = text;
   while (rest.length > 0) {
-    const nl = rest.indexOf("\r\n");
+    const nl = rest.indexOf('\r\n');
     if (nl < 0) break;
     const size = parseInt(rest.slice(0, nl), 16);
     if (Number.isNaN(size) || size < 0) break;
@@ -335,18 +334,18 @@ function decodeChunked(text: string): string {
 function dockerFetch(path: string, socket: string, timeoutMs = 3000): Promise<DockerResponse> {
   return new Promise((resolve, reject) => {
     const req = `GET ${path} HTTP/1.1\r\nHost: docker\r\nConnection: close\r\n\r\n`;
-    let buf = "";
+    let buf = '';
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      reject(new Error("timeout"));
+      reject(new Error('timeout'));
     }, timeoutMs);
     Bun.connect({
       unix: socket,
       socket: {
-        data(socket, data) {
-          buf += data.toString("utf8");
+        data(_socket, data) {
+          buf += data.toString('utf8');
         },
         open(socket) {
           socket.write(req);
@@ -355,10 +354,10 @@ function dockerFetch(path: string, socket: string, timeoutMs = 3000): Promise<Do
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          const sep = buf.indexOf("\r\n\r\n");
+          const sep = buf.indexOf('\r\n\r\n');
           const head = sep >= 0 ? buf.slice(0, sep) : buf;
-          let body = sep >= 0 ? buf.slice(sep + 4) : "";
-          const status = Number(head.split(" ")[1] ?? 0);
+          let body = sep >= 0 ? buf.slice(sep + 4) : '';
+          const status = Number(head.split(' ')[1] ?? 0);
           if (/transfer-encoding:\s*chunked/i.test(head)) body = decodeChunked(body);
           let json: any = null;
           try {
@@ -382,7 +381,7 @@ let dockerSocket: string | null | undefined;
 
 function getDockerSocket(): string | null {
   if (dockerSocket !== undefined) return dockerSocket;
-  const candidates = [process.env.AIRLINK_DOCKER_SOCKET, "/var/run/docker.sock", "/run/podman/podman.sock"].filter(
+  const candidates = [process.env.AIRLINK_DOCKER_SOCKET, '/var/run/docker.sock', '/run/podman/podman.sock'].filter(
     (p): p is string => !!p,
   );
   for (const socket of candidates) {
@@ -411,36 +410,48 @@ function containerStatCpu(stats: any): number {
 }
 
 export async function collectDocker(): Promise<DockerStats> {
-  const empty: DockerStats = { online: false, error: null, containers: [], images: 0, networks: 0, volumes: 0, dockerDiskGb: 0 };
+  const empty: DockerStats = {
+    online: false,
+    error: null,
+    containers: [],
+    images: 0,
+    networks: 0,
+    volumes: 0,
+    dockerDiskGb: 0,
+  };
   const socket = getDockerSocket();
-  if (!socket) return { ...empty, error: "no docker socket found" };
+  if (!socket) return { ...empty, error: 'no docker socket found' };
   const results = await Promise.allSettled([
-    withTimeout(dockerFetch("/v1.41/containers/json?all=1", socket), 4000, null as unknown as DockerResponse),
-    withTimeout(dockerFetch("/v1.41/images/json", socket), 4000, null as unknown as DockerResponse),
-    withTimeout(dockerFetch("/v1.41/networks", socket), 4000, null as unknown as DockerResponse),
-    withTimeout(dockerFetch("/v1.41/volumes", socket), 4000, null as unknown as DockerResponse),
-    withTimeout(dockerFetch("/v1.41/system/df", socket), 4000, null as unknown as DockerResponse),
+    withTimeout(dockerFetch('/v1.41/containers/json?all=1', socket), 4000, null as unknown as DockerResponse),
+    withTimeout(dockerFetch('/v1.41/images/json', socket), 4000, null as unknown as DockerResponse),
+    withTimeout(dockerFetch('/v1.41/networks', socket), 4000, null as unknown as DockerResponse),
+    withTimeout(dockerFetch('/v1.41/volumes', socket), 4000, null as unknown as DockerResponse),
+    withTimeout(dockerFetch('/v1.41/system/df', socket), 4000, null as unknown as DockerResponse),
   ]);
-  const firstError = results.find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
-  const infos = (results[0].status === "fulfilled" ? results[0].value?.json : null) as any[] | null;
+  const firstError = results.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
+  const infos = (results[0].status === 'fulfilled' ? results[0].value?.json : null) as any[] | null;
   if (firstError && !infos) {
     const msg = String(firstError.reason?.message ?? firstError.reason);
-    if (msg.includes("EACCES") || msg.includes("permission")) {
-      return { ...empty, error: "permission denied (run as root)" };
+    if (msg.includes('EACCES') || msg.includes('permission')) {
+      return { ...empty, error: 'permission denied (run as root)' };
     }
     return { ...empty, error: msg.slice(0, 40) };
   }
-  if (!Array.isArray(infos)) return { ...empty, error: "docker API unreachable" };
-  const running = infos.filter((c: any) => c.State === "running").slice(0, 8);
+  if (!Array.isArray(infos)) return { ...empty, error: 'docker API unreachable' };
+  const running = infos.filter((c: any) => c.State === 'running').slice(0, 8);
   const stats = await Promise.allSettled(
     running.map((c: any) =>
-      withTimeout(dockerFetch(`/v1.41/containers/${c.Id}/stats?stream=false`, socket, 3000), 3500, null as unknown as DockerResponse),
+      withTimeout(
+        dockerFetch(`/v1.41/containers/${c.Id}/stats?stream=false`, socket, 3000),
+        3500,
+        null as unknown as DockerResponse,
+      ),
     ),
   );
   const perId = new Map<string, { cpu: number; memUsed: number; memLimit: number }>();
   running.forEach((c: any, i: number) => {
     const s = stats[i];
-    if (s.status !== "fulfilled" || !s.value?.json) return;
+    if (s.status !== 'fulfilled' || !s.value?.json) return;
     const v = s.value.json;
     const cpu = containerStatCpu(v);
     const memUsed = v.memory_stats?.usage ?? 0;
@@ -451,52 +462,52 @@ export async function collectDocker(): Promise<DockerStats> {
     const m = perId.get(c.Id);
     return {
       id: c.Id.slice(0, 12),
-      name: (c.Names?.[0] ?? "?").replace(/^\//, ""),
-      image: c.Image ?? "?",
-      state: c.State ?? "?",
-      status: c.Status ?? "",
+      name: (c.Names?.[0] ?? '?').replace(/^\//, ''),
+      image: c.Image ?? '?',
+      state: c.State ?? '?',
+      status: c.Status ?? '',
       cpuPct: m?.cpu ?? 0,
       memUsedMb: m ? m.memUsed / 1e6 : 0,
       memLimitMb: m && m.memLimit > 0 ? m.memLimit / 1e6 : 0,
     };
   });
   containersOut.sort((a, b) => {
-    if (a.state === "running" && b.state !== "running") return -1;
-    if (a.state !== "running" && b.state === "running") return 1;
+    if (a.state === 'running' && b.state !== 'running') return -1;
+    if (a.state !== 'running' && b.state === 'running') return 1;
     return b.cpuPct - a.cpuPct;
   });
   return {
     online: true,
     error: null,
     containers: containersOut,
-    images: results[1].status === "fulfilled" ? (results[1].value?.json?.length ?? 0) : 0,
-    networks: results[2].status === "fulfilled" ? (results[2].value?.json?.length ?? 0) : 0,
-    volumes: results[3].status === "fulfilled" ? (results[3].value?.json?.Volumes?.length ?? 0) : 0,
-    dockerDiskGb: results[4].status === "fulfilled" ? (results[4].value?.json?.LayersSize ?? 0) / 1e9 : 0,
+    images: results[1].status === 'fulfilled' ? (results[1].value?.json?.length ?? 0) : 0,
+    networks: results[2].status === 'fulfilled' ? (results[2].value?.json?.length ?? 0) : 0,
+    volumes: results[3].status === 'fulfilled' ? (results[3].value?.json?.Volumes?.length ?? 0) : 0,
+    dockerDiskGb: results[4].status === 'fulfilled' ? (results[4].value?.json?.LayersSize ?? 0) / 1e9 : 0,
   };
 }
 
 function readKernel(): string {
-  const v = readProc("/proc/version").split(" ");
-  return v[2] || "unknown";
+  const v = readProc('/proc/version').split(' ');
+  return v[2] || 'unknown';
 }
 
 export function resolveExternalDir(pid: number): string {
   try {
-    const real = readFileSync(`/proc/${pid}/cwd`, "utf8").replace(/\0/g, "");
+    const real = readFileSync(`/proc/${pid}/cwd`, 'utf8').replace(/\0/g, '');
     if (real) return real;
   } catch {
     /* no cwd access (not root) */
   }
-  if (existsSync("/etc/daemon/storage/config.json")) return "/etc/daemon";
-  return "";
+  if (existsSync('/etc/daemon/storage/config.json')) return '/etc/daemon';
+  return '';
 }
 
 function pidStatField(pid: number, index: number): number {
   try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const close = stat.lastIndexOf(")");
-    const rest = stat.slice(close + 2).split(" ");
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const close = stat.lastIndexOf(')');
+    const rest = stat.slice(close + 2).split(' ');
     return Number(rest[index] ?? 0);
   } catch {
     return 0;
@@ -504,13 +515,13 @@ function pidStatField(pid: number, index: number): number {
 }
 
 function findDaemonPid(): number | null {
-  for (const entry of readdirSync("/proc")) {
+  for (const entry of readdirSync('/proc')) {
     if (!/^\d+$/.test(entry)) continue;
     try {
-      const cmdline = readFileSync(`/proc/${entry}/cmdline`, "utf8");
+      const cmdline = readFileSync(`/proc/${entry}/cmdline`, 'utf8');
       if (
-        cmdline.includes("airlinkd") &&
-        (cmdline.includes("start") || cmdline.includes("src/app.ts") || cmdline.includes("app.ts"))
+        cmdline.includes('airlinkd') &&
+        (cmdline.includes('start') || cmdline.includes('src/app.ts') || cmdline.includes('app.ts'))
       ) {
         const ppid = pidStatField(Number(entry), 1);
         if (ppid !== 1 && existsSync(`/proc/${ppid}`)) continue;
@@ -526,7 +537,7 @@ function findDaemonPid(): number | null {
 function processUptime(pid: number): number | null {
   try {
     const startTicks = pidStatField(pid, 19);
-    const up = Number(readProc("/proc/uptime").split(" ")[0] ?? 0);
+    const up = Number(readProc('/proc/uptime').split(' ')[0] ?? 0);
     return Math.max(0, up - startTicks / CLK_TCK);
   } catch {
     return null;
@@ -540,13 +551,13 @@ function countErrors24h(logsDir: string): number {
   try {
     const size = statSync(file).size;
     const take = Math.min(size, 4 * 1024 * 1024);
-    const fd = openSync(file, "r");
+    const fd = openSync(file, 'r');
     const buf = Buffer.alloc(take);
     readSync(fd, buf, 0, take, size - take);
     closeSync(fd);
-    const text = buf.toString("utf8");
+    const text = buf.toString('utf8');
     const cutoff = Date.now() - 24 * 3600 * 1000;
-    for (const line of text.split("\n")) {
+    for (const line of text.split('\n')) {
       const m = line.match(/^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})/);
       if (!m) continue;
       if (Date.parse(`${m[1]}T${m[2]}Z`) >= cutoff) count++;
@@ -570,13 +581,13 @@ export async function collectDaemon(ctx: DaemonCtx): Promise<DaemonInfo> {
     online = false;
   }
   let pid: number | null = ctx.managedPid;
-  let mode: DaemonInfo["mode"] = ctx.managedPid ? "managed" : "none";
+  let mode: DaemonInfo['mode'] = ctx.managedPid ? 'managed' : 'none';
   if (!pid) {
     pid = findDaemonPid();
-    if (pid) mode = "external";
-    else if (online) mode = "external";
+    if (pid) mode = 'external';
+    else if (online) mode = 'external';
   } else {
-    mode = "managed";
+    mode = 'managed';
   }
   let uptimeSec: number | null = null;
   if (ctx.managedPid && ctx.managedSince) uptimeSec = (Date.now() - ctx.managedSince) / 1000;

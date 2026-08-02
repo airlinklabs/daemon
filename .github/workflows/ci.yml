@@ -27,7 +27,7 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
-      - run: bun run lint
+      - run: bunx biome check --diagnostic-level=error .
 
   test:
     name: Test

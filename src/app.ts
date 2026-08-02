@@ -2,9 +2,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { collectDaemon, collectHost, type DaemonCtx } from './tui/stats';
 
-const firstArg = process.argv[2];
-const args = process.argv.slice(2);
-
 function printHelp(): void {
   const bin = process.argv[1]?.split('/').pop() || 'airlinkd';
   console.log(`Airlink daemon

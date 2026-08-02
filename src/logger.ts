@@ -63,7 +63,7 @@ function write(level: Level, msg: string, extra?: unknown) {
   }
 }
 
-export function drawHeader(version: string, port: number) {
+export function drawHeader(_version: string, _port: number) {
   const lines = [
     '',
     '                                              ',

@@ -89,12 +89,7 @@ const dynamicRoutes: [RegExp, string[], string, Handler][] = [
     'GET',
     (req, params) => handleContainerInstallStatus(req, params),
   ],
-  [
-    /^\/container\/logs\/([a-zA-Z0-9_-]+)$/,
-    ['id'],
-    'GET',
-    (req, params) => handleContainerLogs(req, params),
-  ],
+  [/^\/container\/logs\/([a-zA-Z0-9_-]+)$/, ['id'], 'GET', (req, params) => handleContainerLogs(req, params)],
 ];
 
 export function isPrivateIp(ip: string): boolean {

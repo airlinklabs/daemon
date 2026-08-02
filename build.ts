@@ -21,7 +21,9 @@ const nativePlatform = process.platform === 'win32' ? 'windows' : process.platfo
 const all = process.env.AIRLINK_ALL === '1';
 const targets = all
   ? ALL_TARGETS
-  : ALL_TARGETS.filter((t) => t.platform === nativePlatform && (t.arch === process.arch || t.target.endsWith('baseline')));
+  : ALL_TARGETS.filter(
+      (t) => t.platform === nativePlatform && (t.arch === process.arch || t.target.endsWith('baseline')),
+    );
 
 console.log(`checking TypeScript for ${nativePlatform}-${process.arch}${all ? ' (all targets)' : ''}...`);
 const tscProc = Bun.spawn(['bunx', 'tsc', '--noEmit'], {

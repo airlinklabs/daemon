@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { create as tarCreate, extract as tarExtract } from 'tar';
@@ -18,9 +18,9 @@ import {
 } from '../handlers/docker';
 import { copyIntoVolume, downloadToVolume } from '../handlers/fs';
 import { getServerState, setServerState } from '../handlers/installState';
-import { clearLogBuffer, getLogBuffer } from '../ws/server';
 import logger from '../logger';
 import { validateContainerId } from '../validation';
+import { clearLogBuffer, getLogBuffer } from '../ws/server';
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
