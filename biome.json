@@ -9,10 +9,17 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "preset": "recommended",
-      "suspicious": { "noExplicitAny": "warn", "noNonNullAssertedOptionalChain": "off" },
-      "style": { "noNonNullAssertion": "warn" },
-      "complexity": { "noStaticOnlyClass": "off" }
+      "recommended": true,
+      "suspicious": {
+        "noExplicitAny": "warn",
+        "noNonNullAssertedOptionalChain": "off"
+      },
+      "style": {
+        "noNonNullAssertion": "warn"
+      },
+      "complexity": {
+        "noStaticOnlyClass": "off"
+      }
     }
   },
   "javascript": { "formatter": { "quoteStyle": "single" } },

@@ -1,0 +1,52 @@
+rules:
+  # OWASP Top 10
+  - p/owasp-top-ten
+
+  # TypeScript best practices
+  - p/typescript
+
+  # Node.js security
+  - p/node
+
+  # Security audit (r2c)
+  - p/security-audit
+
+  # Secrets detection
+  - p/secrets
+
+  # Default recommended
+  - p/default
+
+  # Custom: Ban dangerous patterns
+  - id: no-eval
+    pattern: eval(...)
+    message: "eval() is dangerous and should never be used"
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+
+  - id: no-new-function
+    pattern: new Function(...)
+    message: "new Function() is equivalent to eval() and should not be used"
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+
+  - id: no-child-process-exec
+    patterns:
+      - pattern: require('child_process').exec(...)
+    message: "Use execFile or spawn instead of exec for better security"
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+
+  - id: no-process-exit
+    pattern: process.exit(...)
+    message: "Avoid process.exit() in library code; throw an error instead"
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-703: Improper Check or Handling of Exceptional Conditions"
