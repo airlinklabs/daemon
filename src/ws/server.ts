@@ -201,6 +201,14 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
     }
     sendCommandToContainer(ws.data.containerId, command).catch((err) => {
       logger.error(`command send failed for ${ws.data.containerId}`, err);
+      if (ws.readyState === 1) {
+        ws.send(
+          JSON.stringify({
+            event: 'error',
+            data: { message: `command not sent: ${(err as Error)?.message ?? 'unknown error'}` },
+          }),
+        );
+      }
     });
     return;
   }
