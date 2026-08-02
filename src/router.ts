@@ -29,6 +29,7 @@ import {
   handleContainerInstallStatus,
   handleContainerKill,
   handleContainerLogs,
+  handleContainerReinstall,
   handleContainerRestore,
   handleContainerStart,
   handleContainerStats,
@@ -37,7 +38,7 @@ import {
 } from './routes/instances';
 import { handleMinecraftPlayers } from './routes/minecraft';
 import { handleRadarScan, handleRadarZip } from './routes/radar';
-import { handleSftpCreate, handleSftpRevoke, handleSftpStatus } from './routes/sftp';
+import { handleSftpActivity, handleSftpCreate, handleSftpRevoke, handleSftpStatus } from './routes/sftp';
 import { checkBasicAuth, getAllowedIpCheck, verifyHmac, withSecurityHeaders } from './security/hmac';
 import { checkRateLimit } from './security/rateLimit';
 
@@ -48,6 +49,7 @@ const exactRoutes = new Map<string, Handler>([
   ['GET /stats', handleStats],
   ['POST /container/installer', handleContainerInstaller],
   ['POST /container/install', handleContainerInstall],
+  ['POST /container/reinstall', handleContainerReinstall],
   ['POST /container/start', handleContainerStart],
   ['POST /container/stop', handleContainerStop],
   ['DELETE /container/kill', handleContainerKill],
@@ -77,6 +79,7 @@ const exactRoutes = new Map<string, Handler>([
   ['POST /sftp/credentials', handleSftpCreate],
   ['DELETE /sftp/credentials', handleSftpRevoke],
   ['GET /sftp/status', handleSftpStatus],
+  ['GET /sftp/activity', handleSftpActivity],
   ['GET /minecraft/players', handleMinecraftPlayers],
   ['POST /radar/scan', handleRadarScan],
   ['POST /radar/zip', handleRadarZip],

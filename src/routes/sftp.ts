@@ -1,4 +1,9 @@
-import { generateCredential, getActiveSessionCount, revokeCredentialForContainer } from '../handlers/sftp';
+import {
+  generateCredential,
+  getActiveSessionCount,
+  getSftpActivity,
+  revokeCredentialForContainer,
+} from '../handlers/sftp';
 import logger from '../logger';
 import { validateContainerId } from '../validation';
 
@@ -59,4 +64,15 @@ export function handleSftpStatus(_req: Request): Response {
   return new Response(JSON.stringify({ activeSessions: getActiveSessionCount() }), {
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+export function handleSftpActivity(req: Request): Response {
+  const url = new URL(req.url);
+  const id = url.searchParams.get('server');
+  if (!id || !validateContainerId(id)) {
+    return json({ error: 'valid container ID is required' }, 400);
+  }
+
+  const events = getSftpActivity(id);
+  return json({ events });
 }

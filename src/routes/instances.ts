@@ -29,6 +29,63 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+function globToRegExp(glob: string): RegExp {
+  let pattern = '^';
+  const norm = glob
+    .replace(/\\/g, '/')
+    .replace(/^\.?\//, '')
+    .replace(/\/$/, '');
+  const segments = norm.split('/');
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (seg === '**') {
+      pattern += i === segments.length - 1 ? '(?:(?:^|/)[^/]*)*/?' : '(?:[^/]*/)*';
+      continue;
+    }
+    let out = '';
+    for (let j = 0; j < seg.length; j++) {
+      const c = seg[j];
+      if (c === '*') out += '[^/]*';
+      else if (c === '?') out += '[^/]';
+      else if (
+        c === '.' ||
+        c === '+' ||
+        c === '(' ||
+        c === ')' ||
+        c === '[' ||
+        c === ']' ||
+        c === '{' ||
+        c === '}' ||
+        c === '^' ||
+        c === '$' ||
+        c === '|'
+      )
+        out += '\\' + c;
+      else out += c;
+    }
+    pattern += out + '/?';
+  }
+  return new RegExp(`^(?:${pattern}|(?:.*/)?${pattern})$`);
+}
+
+function buildIgnoreMatchers(patterns: string[]): Array<{ isDir: boolean; re: RegExp; raw: string }> {
+  const matchers: { isDir: boolean; re: RegExp; raw: string }[] = [];
+  for (const raw of patterns) {
+    const p = raw.trim();
+    if (!p) continue;
+    const isDir = p.endsWith('/');
+    matchers.push({ isDir, re: globToRegExp(p), raw: p });
+  }
+  return matchers;
+}
+
+function isPathIgnored(normalized: string, matchers: { isDir: boolean; re: RegExp }[]): boolean {
+  for (const m of matchers) {
+    if (m.re.test(normalized)) return true;
+  }
+  return false;
+}
+
 async function loadJson(filePath: string): Promise<unknown[]> {
   try {
     const file = Bun.file(filePath);
@@ -101,89 +158,7 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
   // fire-and-forget — response returned immediately, panel polls /container/status/:id
   (async () => {
     try {
-      await initContainer(id);
-
-      if (image && typeof image === 'string') {
-        let imageExists = false;
-        try {
-          await docker.getImage(image).inspect();
-          imageExists = true;
-        } catch {
-          imageExists = false;
-        }
-        if (!imageExists) {
-          await pullImageWithProgress(image, id);
-        }
-      }
-
-      if (scripts && Array.isArray(scripts)) {
-        const alcPath = join(process.cwd(), 'storage/alc.json');
-        const locationsPath = join(process.cwd(), 'storage/alc/locations.json');
-        const filesDir = join(process.cwd(), 'storage/alc/files');
-
-        const alc = (await loadJson(alcPath)) as {
-          Name: string;
-          lasts: number;
-        }[];
-        const locations = (await loadJson(locationsPath)) as {
-          Name: string;
-          url: string;
-          id: string;
-        }[];
-
-        if (!existsSync(filesDir)) mkdirSync(filesDir, { recursive: true });
-
-        for (const script of scripts) {
-          const s = script as {
-            url?: string;
-            fileName?: string;
-            ALVKT?: boolean;
-          };
-          const { url, fileName } = s;
-
-          if (!url || !fileName) {
-            continue;
-          }
-
-          // resolve $ALVKT(VAR) in the URL itself before downloading
-          const resolvedUrl = url.replace(/\$ALVKT\((\w+)\)/g, (_, v: string) => envVars[v] ?? '');
-          if (!resolvedUrl) {
-            continue;
-          }
-
-          const alcEntry = alc.find((e) => e.Name === fileName);
-          const cachedFileId = `${fileName.replace(/\W+/g, '_')}_${alcEntry?.lasts ?? 0}_${Math.floor(Math.random() * 100000) + 1}`;
-          const existingLoc = locations.find((l) => l.Name === fileName && l.url === resolvedUrl);
-          const cachedFilePath = existingLoc?.id ? join(filesDir, existingLoc.id) : '';
-
-          try {
-            if (alcEntry && existingLoc && existsSync(cachedFilePath)) {
-              // use cached copy — avoids re-downloading the same file on reinstall
-              await copyIntoVolume(id, cachedFilePath, fileName);
-            } else {
-              // download with optional ALVKT substitution inside the file content
-              await downloadToVolume(id, resolvedUrl, fileName, s.ALVKT === true ? envVars : undefined);
-
-              if (alcEntry) {
-                // cache it for next time
-                const tempPath = resolve(process.cwd(), `volumes/${id}/${fileName}`);
-                await Bun.spawn(['cp', tempPath, join(filesDir, cachedFileId)], { stdout: 'pipe', stderr: 'pipe' })
-                  .exited;
-                locations.push({
-                  Name: fileName,
-                  url: resolvedUrl,
-                  id: cachedFileId,
-                });
-                await saveJson(locationsPath, locations);
-              }
-            }
-          } catch (err) {
-            logger.error(`error downloading file "${fileName}"`, err);
-            throw new Error(`failed to download ${fileName}`);
-          }
-        }
-      }
-
+      await performInstall(id, image, scripts, envVars);
       await setServerState(id, 'installed');
     } catch (err) {
       logger.error('error during async install', err);
@@ -192,6 +167,132 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
   })();
 
   return json({ message: 'install started' });
+}
+
+export async function handleContainerReinstall(req: Request): Promise<Response> {
+  let body: {
+    id?: string;
+    image?: string;
+    scripts?: unknown[];
+    env?: Record<string, string>;
+  };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
+
+  const { id, image, scripts, env } = body;
+  if (!id) return json({ error: 'container ID is required' }, 400);
+  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+
+  const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
+
+  await setServerState(id, 'reinstalling');
+
+  // fire-and-forget — response returned immediately, panel polls /container/status/:id
+  (async () => {
+    try {
+      // Atomic: remove the running container and wipe its volume, then rebuild.
+      await deleteContainerAndVolume(id);
+      await performInstall(id, image, scripts, envVars);
+      await setServerState(id, 'installed');
+    } catch (err) {
+      logger.error('error during async reinstall', err);
+      await setServerState(id, 'failed');
+    }
+  })();
+
+  return json({ message: 'reinstall started' });
+}
+
+async function performInstall(
+  id: string,
+  image?: string,
+  scripts?: unknown[],
+  envVars: Record<string, string> = {},
+): Promise<void> {
+  await initContainer(id);
+
+  if (image && typeof image === 'string') {
+    let imageExists = false;
+    try {
+      await docker.getImage(image).inspect();
+      imageExists = true;
+    } catch {
+      imageExists = false;
+    }
+    if (!imageExists) {
+      await pullImageWithProgress(image, id);
+    }
+  }
+
+  if (scripts && Array.isArray(scripts)) {
+    const alcPath = join(process.cwd(), 'storage/alc.json');
+    const locationsPath = join(process.cwd(), 'storage/alc/locations.json');
+    const filesDir = join(process.cwd(), 'storage/alc/files');
+
+    const alc = (await loadJson(alcPath)) as {
+      Name: string;
+      lasts: number;
+    }[];
+    const locations = (await loadJson(locationsPath)) as {
+      Name: string;
+      url: string;
+      id: string;
+    }[];
+
+    if (!existsSync(filesDir)) mkdirSync(filesDir, { recursive: true });
+
+    for (const script of scripts) {
+      const s = script as {
+        url?: string;
+        fileName?: string;
+        ALVKT?: boolean;
+      };
+      const { url, fileName } = s;
+
+      if (!url || !fileName) {
+        continue;
+      }
+
+      // resolve $ALVKT(VAR) in the URL itself before downloading
+      const resolvedUrl = url.replace(/\$ALVKT\((\w+)\)/g, (_, v: string) => envVars[v] ?? '');
+      if (!resolvedUrl) {
+        continue;
+      }
+
+      const alcEntry = alc.find((e) => e.Name === fileName);
+      const cachedFileId = `${fileName.replace(/\W+/g, '_')}_${alcEntry?.lasts ?? 0}_${Math.floor(Math.random() * 100000) + 1}`;
+      const existingLoc = locations.find((l) => l.Name === fileName && l.url === resolvedUrl);
+      const cachedFilePath = existingLoc?.id ? join(filesDir, existingLoc.id) : '';
+
+      try {
+        if (alcEntry && existingLoc && existsSync(cachedFilePath)) {
+          // use cached copy — avoids re-downloading the same file on reinstall
+          await copyIntoVolume(id, cachedFilePath, fileName);
+        } else {
+          // download with optional ALVKT substitution inside the file content
+          await downloadToVolume(id, resolvedUrl, fileName, s.ALVKT === true ? envVars : undefined);
+
+          if (alcEntry) {
+            // cache it for next time
+            const tempPath = resolve(process.cwd(), `volumes/${id}/${fileName}`);
+            await Bun.spawn(['cp', tempPath, join(filesDir, cachedFileId)], { stdout: 'pipe', stderr: 'pipe' }).exited;
+            locations.push({
+              Name: fileName,
+              url: resolvedUrl,
+              id: cachedFileId,
+            });
+            await saveJson(locationsPath, locations);
+          }
+        }
+      } catch (err) {
+        logger.error(`error downloading file "${fileName}"`, err);
+        throw new Error(`failed to download ${fileName}`);
+      }
+    }
+  }
 }
 
 export async function handleContainerInstallStatus(_req: Request, params: Record<string, string>): Promise<Response> {
@@ -215,6 +316,7 @@ export async function handleContainerStart(req: Request): Promise<Response> {
     Storage?: number;
     Swap?: number;
     StartCommand?: string;
+    mounts?: { source: string; target: string; readOnly?: boolean }[];
   };
   try {
     body = (await req.json()) as typeof body;
@@ -222,7 +324,7 @@ export async function handleContainerStart(req: Request): Promise<Response> {
     return json({ error: 'invalid json body' }, 400);
   }
 
-  const { id, image, ports, env, Memory, Cpu, Storage, Swap, StartCommand } = body;
+  const { id, image, ports, env, Memory, Cpu, Storage, Swap, StartCommand, mounts } = body;
   if (!id || !image) return json({ error: 'container ID and image are required' }, 400);
   if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
 
@@ -247,7 +349,17 @@ export async function handleContainerStart(req: Request): Promise<Response> {
 
   try {
     clearLogBuffer(id);
-    await startContainer(id, image, envVars, ports ?? '', Memory ?? 512, Cpu ?? 100, Storage ?? 0, Swap ?? 0);
+    await startContainer(
+      id,
+      image,
+      envVars,
+      ports ?? '',
+      Memory ?? 512,
+      Cpu ?? 100,
+      Storage ?? 0,
+      Swap ?? 0,
+      mounts ?? [],
+    );
     return json({ message: `container ${id} started successfully` });
   } catch (error) {
     logger.error('error starting container', error);
@@ -399,7 +511,7 @@ export async function handleContainerStats(req: Request): Promise<Response> {
 }
 
 export async function handleContainerBackup(req: Request): Promise<Response> {
-  let body: { id?: string; name?: string };
+  let body: { id?: string; name?: string; ignore?: string[] };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -420,6 +532,8 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
     const backupFileName = `${backupUuid}.tar.gz`;
     const backupPath = join(backupsDir, backupFileName);
 
+    const ignoreMatchers = buildIgnoreMatchers(body.ignore ?? []);
+
     await tarCreate(
       {
         gzip: true,
@@ -427,7 +541,9 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
         cwd: volumePath,
         filter: (p) => {
           const norm = p.replace(/\\/g, '/').replace(/^\.\//, '');
-          return !(norm === 'node_modules' || norm.endsWith('/node_modules') || norm.includes('/node_modules/'));
+          if (norm === 'node_modules' || norm.endsWith('/node_modules') || norm.includes('/node_modules/'))
+            return false;
+          return !isPathIgnored(norm, ignoreMatchers);
         },
       },
       ['.'],

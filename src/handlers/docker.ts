@@ -446,6 +446,7 @@ export async function startContainer(
   Cpu: number,
   Storage = 0,
   Swap = 0,
+  mounts: { source: string; target: string; readOnly?: boolean }[] = [],
 ): Promise<void> {
   logger.info('starting container', { containerId: id, image });
   emit(id, { type: 'pulling', message: `cleaning up any old ${id} container first` });
@@ -520,7 +521,7 @@ export async function startContainer(
   modifiedEnv.prompt = 'container@airlinkd \\w \\$ ';
 
   const hostConfig: Record<string, unknown> = {
-    Binds: [`${volumePath}:/home/container`],
+    Binds: [`${volumePath}:/home/container`, ...mounts.map((m) => `${m.source}:${m.target}${m.readOnly ? ':ro' : ''}`)],
     PortBindings: portBindings,
     Memory: Memory * 1024 * 1024, // panel sends MB, dockerode wants bytes
     MemorySwap: Swap === -1 ? -1 : (Memory + Math.max(0, Swap)) * 1024 * 1024,
