@@ -10,7 +10,7 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
-      "suspicious": { "noExplicitAny": "warn" },
+      "suspicious": { "noExplicitAny": "warn", "noNonNullAssertedOptionalChain": "off" },
       "style": { "noNonNullAssertion": "warn" },
       "complexity": { "noStaticOnlyClass": "off" }
     }
