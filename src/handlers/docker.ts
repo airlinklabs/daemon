@@ -16,6 +16,31 @@ const CONSOLE_FIFO_WRITE_TIMEOUT_MS = 10_000;
 // per-container disk quota in MB, enforced by background polling (soft cap —
 // works on every storage driver, unlike Docker's overlay2-only StorageOpt)
 const storageLimits = new Map<string, number>();
+
+// Best-effort network rate limit. tc is applied inside the container netns
+// (eth0) via exec — needs NET_ADMIN, which we only grant when NETWORK_RATE_MBPS
+// is configured. Fails silently whenever tc isn't available in the image, so
+// unthrottled containers and Podman hosts are never hard-blocked.
+async function applyNetworkThrottle(id: string, mbps: number): Promise<void> {
+  if (!(mbps > 0)) return;
+  try {
+    const container = docker.getContainer(id);
+    const exec = await container.exec({
+      Cmd: ['/bin/sh', '-c', `command -v tc >/dev/null 2>&1 && tc qdisc add dev eth0 root handle 1: tbf rate ${mbps}mbit burst 64kb latency 50ms || true`],
+      AttachStdout: true,
+      AttachStderr: true,
+    });
+    const stream = await exec.start({ hijack: false, stdin: false });
+    if (stream && typeof (stream as NodeJS.ReadableStream).on === 'function') {
+      const readable = stream as NodeJS.ReadableStream;
+      readable.resume();
+      readable.on('error', () => {});
+    }
+    logger.info(`applied network throttle: ${id} @ ${mbps} mbps`);
+  } catch (err) {
+    logger.warn(`network throttle skipped for ${id}: ${(err as Error)?.message}`);
+  }
+}
 let storageEnforcementRunning = false;
 
 function enforceStorageLimits(): void {
@@ -502,6 +527,11 @@ export async function startContainer(
     RestartPolicy: { Name: 'unless-stopped' },
   };
 
+  // tc inside the container netns needs NET_ADMIN; only grant it when throttling.
+  if (config.networkRateMbps > 0 && runtime.name === 'docker') {
+    hostConfig.CapAdd = ['NET_ADMIN'];
+  }
+
   // StorageOpt is overlay2-only (Docker). Podman rejects it — skip it there
   // and rely on the soft polling enforcer below.
   if (Storage > 0 && runtime.name === 'docker') {
@@ -526,6 +556,7 @@ export async function startContainer(
 
   emit(id, { type: 'starting', message: `starting ${id}` });
   await container.start();
+  if (config.networkRateMbps > 0) await applyNetworkThrottle(id, config.networkRateMbps);
   if (Storage > 0) storageLimits.set(id, Storage);
   emit(id, { type: 'started', message: 'server started' });
 }
