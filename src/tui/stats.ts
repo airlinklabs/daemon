@@ -112,7 +112,7 @@ export function cpuPct(now: number): { total: number; perCore: number[] } {
   const total = Math.max(0, Math.min(100, dt * 100));
   const perCore = cur.perCore.map((v, i) => {
     const p = prevCpu?.perCore[i] ?? v;
-    const d = (v - p) / (now - prevCpu?.time);
+    const d = (v - p) / (now - (prevCpu?.time ?? now));
     return Math.max(0, Math.min(100, d * 100));
   });
   prevCpu = { time: now, perCore: cur.perCore.slice() };
