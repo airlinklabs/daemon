@@ -32,6 +32,11 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    env:
+      key: test-secret-key-at-least-16-chars
+      port: "3002"
+      remote: localhost
+      version: "3.0.0"
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2

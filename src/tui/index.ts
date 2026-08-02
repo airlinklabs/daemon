@@ -534,7 +534,7 @@ export async function runTui(): Promise<void> {
   const realNet = realCenter.getRenderable('net')! as unknown as BoxRenderable;
   const realDiskIo = realCenter.getRenderable('diskio')! as unknown as BoxRenderable;
   const realSys = realCenter.getRenderable('sys')! as unknown as BoxRenderable;
-  const realLogs = realMainRow.getRenderable('right')?.getRenderable('logs') as ScrollBoxRenderable | undefined;
+  const realLogs = realMainRow.getRenderable('right')?.getRenderable('logs')! as ScrollBoxRenderable;
   const realHint = realOuter.getRenderable('hint-box')! as unknown as BoxRenderable;
   let currentArt: string[] | null = ART;
   let shortMode = false;
