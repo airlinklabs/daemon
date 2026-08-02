@@ -1,4 +1,6 @@
 import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { create as tarCreate, extract as tarExtract } from 'tar';
 import {
@@ -432,6 +434,17 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
     );
 
     const size = statSync(backupPath).size;
+
+    const hash = createHash('sha256');
+    const fh = await fs.open(backupPath, 'r');
+    try {
+      const stream = fh.createReadStream();
+      for await (const chunk of stream) hash.update(chunk);
+    } finally {
+      await fh.close();
+    }
+    const checksum = hash.digest('hex');
+
     return json({
       success: true,
       message: 'Backup created successfully',
@@ -440,6 +453,7 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
         name: body.name,
         filePath: `backups/${body.id}/${backupFileName}`,
         size,
+        checksum,
         createdAt: new Date().toISOString(),
       },
     });
@@ -455,7 +469,7 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
 }
 
 export async function handleContainerRestore(req: Request): Promise<Response> {
-  let body: { id?: string; backupPath?: string };
+  let body: { id?: string; backupPath?: string; checksum?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -470,6 +484,27 @@ export async function handleContainerRestore(req: Request): Promise<Response> {
   const fullPath = resolve(process.cwd(), body.backupPath);
   if (!fullPath.startsWith(`${allowedBackupsDir}/`)) return json({ error: 'invalid backup path' }, 400);
   if (!existsSync(fullPath)) return json({ error: 'backup file not found' }, 404);
+
+  // verify integrity before touching the volume
+  if (typeof body.checksum === 'string' && body.checksum.length > 0) {
+    try {
+      const hash = createHash('sha256');
+      const fh = await fs.open(fullPath, 'r');
+      try {
+        const stream = fh.createReadStream();
+        for await (const chunk of stream) hash.update(chunk);
+      } finally {
+        await fh.close();
+      }
+      const actual = hash.digest('hex');
+      if (actual !== body.checksum) {
+        return json({ error: 'backup checksum mismatch, refusing to restore' }, 422);
+      }
+    } catch (err) {
+      logger.error(`error verifying checksum for ${fullPath}`, err);
+      return json({ error: 'failed to verify backup checksum' }, 500);
+    }
+  }
 
   try {
     const volumePath = resolve(process.cwd(), `volumes/${body.id}`);
