@@ -210,6 +210,8 @@ export async function handleContainerStart(req: Request): Promise<Response> {
     env?: Record<string, string>;
     Memory?: number;
     Cpu?: number;
+    Storage?: number;
+    Swap?: number;
     StartCommand?: string;
   };
   try {
@@ -218,7 +220,7 @@ export async function handleContainerStart(req: Request): Promise<Response> {
     return json({ error: 'invalid json body' }, 400);
   }
 
-  const { id, image, ports, env, Memory, Cpu, StartCommand } = body;
+  const { id, image, ports, env, Memory, Cpu, Storage, Swap, StartCommand } = body;
   if (!id || !image) return json({ error: 'container ID and image are required' }, 400);
   if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
 
@@ -243,7 +245,7 @@ export async function handleContainerStart(req: Request): Promise<Response> {
 
   try {
     clearLogBuffer(id);
-    await startContainer(id, image, envVars, ports ?? '', Memory ?? 512, Cpu ?? 100);
+    await startContainer(id, image, envVars, ports ?? '', Memory ?? 512, Cpu ?? 100, Storage ?? 0, Swap ?? 0);
     return json({ message: `container ${id} started successfully` });
   } catch (error) {
     logger.error('error starting container', error);

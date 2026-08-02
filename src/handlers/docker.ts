@@ -11,7 +11,39 @@ import { createRuntime } from './containerRuntime';
 const runtime = createRuntime(config.containerRuntime);
 export const docker = runtime;
 const CONSOLE_FIFO_RELATIVE_PATH = join('.airlinkd', 'console.in');
-const CONSOLE_FIFO_WRITE_TIMEOUT_MS = 3_000;
+const CONSOLE_FIFO_WRITE_TIMEOUT_MS = 10_000;
+
+// per-container disk quota in MB, enforced by background polling (soft cap —
+// works on every storage driver, unlike Docker's overlay2-only StorageOpt)
+const storageLimits = new Map<string, number>();
+let storageEnforcementRunning = false;
+
+function enforceStorageLimits(): void {
+  if (storageEnforcementRunning) return;
+  storageEnforcementRunning = true;
+  try {
+    for (const [id, limitMb] of storageLimits) {
+      if (limitMb <= 0) continue;
+      const usageMb = getStorageUsageMb(id);
+      if (usageMb <= limitMb) continue;
+      const running = isContainerRunning(id);
+      if (running === false) {
+        storageLimits.delete(id);
+        continue;
+      }
+      logger.warn(`container ${id} exceeded storage limit (${usageMb.toFixed(0)} MB > ${limitMb} MB), stopping`);
+      emit(id, {
+        type: 'error',
+        message: `storage limit exceeded (${usageMb.toFixed(0)} MB of ${limitMb} MB), server stopped`,
+      });
+      stopContainer(id).catch(() => {});
+    }
+  } finally {
+    storageEnforcementRunning = false;
+  }
+}
+
+setInterval(enforceStorageLimits, 30_000).unref?.();
 
 // ── Pure function: build init.sh wrapper ────────────────────────────────────
 // Generates a shell script that patches the container's identity (hostname,
@@ -384,6 +416,8 @@ export async function startContainer(
   ports = '',
   Memory: number,
   Cpu: number,
+  Storage = 0,
+  Swap = 0,
 ): Promise<void> {
   logger.info('starting container', { containerId: id, image });
   emit(id, { type: 'pulling', message: `cleaning up any old ${id} container first` });
@@ -457,6 +491,24 @@ export async function startContainer(
   modifiedEnv.PROMPT = 'container@airlinkd \\w \\$ ';
   modifiedEnv.prompt = 'container@airlinkd \\w \\$ ';
 
+  const hostConfig: Record<string, unknown> = {
+    Binds: [`${volumePath}:/home/container`],
+    PortBindings: portBindings,
+    Memory: Memory * 1024 * 1024, // panel sends MB, dockerode wants bytes
+    MemorySwap: Swap === -1 ? -1 : (Memory + Math.max(0, Swap)) * 1024 * 1024,
+    OomKillDisable: false,
+    PidsLimit: 256,
+    BlkioWeight: 500,
+    NanoCpus: Math.floor((Cpu / 100) * 1e9), // panel sends 0-100%, dockerode wants NanoCPUs
+    RestartPolicy: { Name: 'unless-stopped' },
+  };
+
+  // StorageOpt is overlay2-only (Docker). Podman rejects it — skip it there
+  // and rely on the soft polling enforcer below.
+  if (Storage > 0 && runtime.name === 'docker') {
+    hostConfig.StorageOpt = { size: `${Storage}M` };
+  }
+
   const container = await docker.createContainer({
     name: id,
     Image: image,
@@ -464,13 +516,7 @@ export async function startContainer(
     Env: Object.entries(modifiedEnv).map(([k, v]) => `${k}=${v}`),
     Entrypoint: ['/bin/sh', '/home/container/.airlinkd/init.sh'],
     WorkingDir: '/home/container',
-    HostConfig: {
-      Binds: [`${volumePath}:/home/container`],
-      PortBindings: portBindings,
-      Memory: Memory * 1024 * 1024, // panel sends MB, dockerode wants bytes
-      NanoCpus: Math.floor((Cpu / 100) * 1e9), // panel sends 0-100%, dockerode wants NanoCPUs
-      RestartPolicy: { Name: 'unless-stopped' },
-    },
+    HostConfig: hostConfig,
     ExposedPorts: exposedPorts,
     AttachStdout: true,
     AttachStderr: true,
@@ -481,6 +527,7 @@ export async function startContainer(
 
   emit(id, { type: 'starting', message: `starting ${id}` });
   await container.start();
+  if (Storage > 0) storageLimits.set(id, Storage);
   emit(id, { type: 'started', message: 'server started' });
 }
 
@@ -645,6 +692,7 @@ export async function stopContainer(id: string, stopCmd?: string): Promise<void>
 }
 
 export async function killContainer(id: string): Promise<void> {
+  storageLimits.delete(id);
   try {
     await docker.getContainer(id).remove({ force: true });
   } catch (err: unknown) {
@@ -666,6 +714,7 @@ export async function deleteContainer(id: string): Promise<void> {
 }
 
 export async function deleteContainerAndVolume(id: string): Promise<void> {
+  storageLimits.delete(id);
   await deleteContainer(id);
   const volumePath = resolve(process.cwd(), 'volumes', id);
   if (existsSync(volumePath)) {

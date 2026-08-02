@@ -25,8 +25,10 @@ interface ActiveSession {
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const SFTP_IMAGE = 'atmoz/sftp';
 const SFTP_USER_PREFIX = 'alsftp_';
-const PORT_RANGE_START = 3003;
-const PORT_RANGE_END = 4000;
+// default start at 3004: the panel's own SFTP server holds 3003 on shared
+// installs. Override via SFTP_PORT_RANGE_START/END in the daemon .env.
+const PORT_RANGE_START = Math.max(1, config.sftpPortRangeStart);
+const PORT_RANGE_END = Math.max(PORT_RANGE_START, config.sftpPortRangeEnd);
 
 const BLOCKED_PORTS = new Set([3000, 3001, 3002, 3003, 3306, 3389, 4000, 5432, 5900, 6379, 8080, 8443, 8888]);
 

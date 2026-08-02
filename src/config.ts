@@ -32,6 +32,8 @@ const config = {
       .filter(Boolean) ?? [],
   tlsCertPath: Bun.env.TLS_CERT ?? null,
   tlsKeyPath: Bun.env.TLS_KEY ?? null,
+  sftpPortRangeStart: parseInt(Bun.env.SFTP_PORT_RANGE_START ?? '3004', 10),
+  sftpPortRangeEnd: parseInt(Bun.env.SFTP_PORT_RANGE_END ?? '4000', 10),
 } as const;
 
 export default config;
