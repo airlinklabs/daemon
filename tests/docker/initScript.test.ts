@@ -7,7 +7,7 @@ describe('buildInitScript', () => {
 
     expect(script).toContain('#!/bin/sh');
     expect(script).toContain('hostname airlinkd');
-    expect(script).toContain('/etc/passwd');
+    expect(script).toContain('export USER');
     expect(script).toContain('PS1');
     expect(script).toContain('airlinkd');
     expect(script).toContain('mkfifo');
@@ -60,12 +60,13 @@ describe('buildInitScript', () => {
     expect(script).toContain("echo 'airlinkd' > /etc/hostname");
   });
 
-  test('patches /etc/passwd entries', () => {
+  test('sets USER/HOME without mutating /etc/passwd', () => {
     const script = buildInitScript(['node', 'index.js'], []);
 
-    expect(script).toContain("sed -i 's|^container:|airlinkd:|' /etc/passwd");
-    expect(script).toContain("sed -i 's|^user:|airlinkd:|'");
-    expect(script).toContain("sed -i 's|^app:|airlinkd:|'");
+    expect(script).not.toContain("sed -i 's|^container:|airlinkd:|'");
+    expect(script).toContain('export USER');
+    expect(script).toContain('export LOGNAME');
+    expect(script).toContain('export HOME="${HOME:-/home/container}"');
   });
 
   test('handles single quotes in entrypoint arguments', () => {
