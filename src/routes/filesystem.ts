@@ -13,6 +13,7 @@ import {
   zipPaths,
 } from '../handlers/fs';
 import logger from '../logger';
+import { isPrivateIp } from '../router';
 import { jailPath } from '../security/pathJail';
 import { validateContainerId, validateFileName, validatePath } from '../validation';
 
@@ -137,6 +138,101 @@ export function handleFsDownload(req: Request): Response {
     });
   } catch (err) {
     return json({ error: err instanceof Error ? err.message : 'file not found' }, 404);
+  }
+}
+
+export async function handleFsPull(req: Request): Promise<Response> {
+  let body: { id?: string; url?: string; path?: string };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
+  if (!body.id) return json({ error: 'container ID is required' }, 400);
+  if (!body.url || typeof body.url !== 'string') return json({ error: 'URL is required' }, 400);
+  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+
+  let parsed: URL;
+  try {
+    parsed = new URL(body.url);
+  } catch {
+    return json({ error: 'invalid URL' }, 400);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return json({ error: 'only http(s) URLs are allowed' }, 400);
+  }
+  if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+    return json({ error: 'local URLs are not allowed' }, 400);
+  }
+  if (isPrivateIp(parsed.hostname)) {
+    return json({ error: 'private network URLs are not allowed' }, 400);
+  }
+
+  const targetDir = body.path && typeof body.path === 'string' && body.path.trim() !== ''
+    ? body.path.trim().replace(/^\/+/, '')
+    : '';
+  const resolvedDir = targetDir === '' ? '/' : targetDir;
+  if (!validatePath(resolvedDir)) {
+    return json({ error: 'invalid target path' }, 400);
+  }
+
+  try {
+    const volumePath = resolve(process.cwd(), `volumes/${body.id}`);
+    const resolvedTarget = resolvedDir === '/' ? volumePath : jailPath(volumePath, resolvedDir);
+    mkdirSync(resolvedTarget, { recursive: true });
+
+    const fileName = basename(parsed.pathname) || 'download';
+    const targetFile = resolve(resolvedTarget, fileName);
+    if (!targetFile.startsWith(`${volumePath}/`)) {
+      return json({ error: 'path escapes container volume' }, 400);
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60_000);
+    const MAX_PULL_BYTES = 512 * 1024 * 1024; // 512MB
+    let total = 0;
+
+    try {
+      const response = await fetch(body.url, { signal: controller.signal });
+      if (!response.ok || !response.body) {
+        return json({ error: `remote returned ${response.status}` }, 502);
+      }
+      const contentLength = Number(response.headers.get('content-length') ?? '0');
+      if (contentLength > MAX_PULL_BYTES) {
+        return json({ error: 'remote file exceeds the 512MB pull limit' }, 413);
+      }
+
+      const handle = await Bun.file(targetFile).writer();
+      try {
+        for await (const chunk of response.body) {
+          total += chunk.length;
+          if (total > MAX_PULL_BYTES) {
+            return json({ error: 'remote file exceeds the 512MB pull limit' }, 413);
+          }
+          handle.write(chunk);
+        }
+        await handle.end();
+      } catch {
+        try { await handle.end(); } catch {}
+        throw new Error('download interrupted');
+      }
+    } catch (err) {
+      logger.error(`failed to pull ${body.url}`, err);
+      return json({ error: 'failed to download file from URL' }, 502);
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    return json({
+      success: true,
+      message: 'File pulled successfully',
+      file: fileName,
+      path: resolvedDir === '/' ? `/${fileName}` : `${resolvedDir}/${fileName}`,
+      size: total,
+    });
+  } catch (err) {
+    logger.error(`error pulling file for container ${body.id}`, err);
+    return json({ error: 'failed to pull file into container volume' }, 500);
   }
 }
 

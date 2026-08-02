@@ -9,6 +9,7 @@ import {
   handleFsFileWrite,
   handleFsInfo,
   handleFsList,
+  handleFsPull,
   handleFsRename,
   handleFsRm,
   handleFsSize,
@@ -66,6 +67,7 @@ const exactRoutes = new Map<string, Handler>([
   ['POST /fs/file/content', handleFsFileWrite],
   ['GET /fs/download', handleFsDownload],
   ['DELETE /fs/rm', handleFsRm],
+  ['POST /fs/pull', handleFsPull],
   ['POST /fs/zip', handleFsZip],
   ['POST /fs/unzip', handleFsUnzip],
   ['POST /fs/rename', handleFsRename],
@@ -95,7 +97,7 @@ const dynamicRoutes: [RegExp, string[], string, Handler][] = [
   ],
 ];
 
-function isPrivateIp(ip: string): boolean {
+export function isPrivateIp(ip: string): boolean {
   return (
     ip === '127.0.0.1' ||
     ip === '::1' ||
