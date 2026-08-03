@@ -17,7 +17,7 @@ import {
   stopContainer,
 } from '../handlers/docker';
 import { copyIntoVolume, downloadToVolume } from '../handlers/fs';
-import { getServerState, setServerState } from '../handlers/installState';
+import { getInstallStatus, setServerState } from '../handlers/installState';
 import logger from '../logger';
 import { validateContainerId } from '../validation';
 import { clearLogBuffer, getLogBuffer } from '../ws/server';
@@ -176,7 +176,7 @@ export async function handleContainerInstaller(req: Request): Promise<Response> 
     return json({ message: `container ${id} installed successfully` });
   } catch (error) {
     logger.error('error installing container', error);
-    await setServerState(id, 'failed');
+    await setServerState(id, 'failed', error instanceof Error ? error.message : String(error));
     return json({ error: `failed to install container ${id}` }, 500);
   }
 }
@@ -209,7 +209,7 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
       await setServerState(id, 'installed');
     } catch (err) {
       logger.error('error during async install', err);
-      await setServerState(id, 'failed');
+      await setServerState(id, 'failed', err instanceof Error ? err.message : String(err));
     }
   })();
 
@@ -246,7 +246,7 @@ export async function handleContainerReinstall(req: Request): Promise<Response> 
       await setServerState(id, 'installed');
     } catch (err) {
       logger.error('error during async reinstall', err);
-      await setServerState(id, 'failed');
+      await setServerState(id, 'failed', err instanceof Error ? err.message : String(err));
     }
   })();
 
@@ -347,9 +347,9 @@ export async function handleContainerInstallStatus(_req: Request, params: Record
   if (!id) return json({ error: 'container ID is required' }, 400);
   if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
 
-  const state = await getServerState(id);
-  if (!state) return json({ message: `no install state found for container ${id}` }, 404);
-  return json({ containerId: id, state });
+  const status = await getInstallStatus(id);
+  if (!status) return json({ message: `no install state found for container ${id}` }, 404);
+  return json({ containerId: id, state: status.state, error: status.error });
 }
 
 export async function handleContainerStart(req: Request): Promise<Response> {
