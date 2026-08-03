@@ -330,17 +330,21 @@ export async function getContainerStats(id: string): Promise<ContainerStats | nu
 }
 
 // inspect-only state check — never times out waiting for stats collection
-export async function getContainerState(id: string): Promise<{ running: boolean; startedAt: string | null }> {
+export async function getContainerState(
+  id: string,
+): Promise<{ running: boolean; startedAt: string | null; exitCode: number | null; status: string | null }> {
   try {
     const container = docker.getContainer(id);
     const info = await container.inspect().catch(() => null);
-    if (!info) return { running: false, startedAt: null };
+    if (!info) return { running: false, startedAt: null, exitCode: null, status: null };
     return {
       running: info.State.Running === true,
       startedAt: info.State.StartedAt || null,
+      exitCode: typeof info.State.ExitCode === 'number' ? info.State.ExitCode : null,
+      status: info.State.Status || null,
     };
   } catch {
-    return { running: false, startedAt: null };
+    return { running: false, startedAt: null, exitCode: null, status: null };
   }
 }
 

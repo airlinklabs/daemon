@@ -22,6 +22,53 @@ import logger from '../logger';
 import { validateContainerId } from '../validation';
 import { clearLogBuffer, getLogBuffer } from '../ws/server';
 
+// ── Last-used start config cache ─────────────────────────────────────────────
+// Persisted per container so `restart` can replay the exact payload that
+// launched it (image, env, ports, limits, mounts) without the panel resending
+// anything. Written on every successful start, read on restart.
+export type CachedStartConfig = {
+  id: string;
+  image: string;
+  ports?: string;
+  env?: Record<string, string>;
+  Memory?: number;
+  Cpu?: number;
+  Storage?: number;
+  Swap?: number;
+  StartCommand?: string;
+  mounts?: { source: string; target: string; readOnly?: boolean }[];
+  savedAt: string;
+};
+
+function configCachePath(id: string): string {
+  return resolve(process.cwd(), 'storage/containerConfigs', `${id}.json`);
+}
+
+export async function saveStartConfig(config: CachedStartConfig): Promise<void> {
+  try {
+    const dir = resolve(process.cwd(), 'storage/containerConfigs');
+    mkdirSync(dir, { recursive: true });
+    await Bun.write(configCachePath(config.id), JSON.stringify(config, null, 2));
+  } catch (err) {
+    logger.error(`could not persist start config for ${config.id}`, err);
+  }
+}
+
+export async function loadStartConfig(id: string): Promise<CachedStartConfig | null> {
+  try {
+    const path = configCachePath(id);
+    if (!existsSync(path)) return null;
+    const file = Bun.file(path);
+    if (file.size === 0) return null;
+    const parsed = JSON.parse(await file.text()) as CachedStartConfig;
+    if (!parsed || parsed.id !== id || !parsed.image) return null;
+    return parsed;
+  } catch (err) {
+    logger.error(`could not read start config for ${id}`, err);
+    return null;
+  }
+}
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -360,10 +407,59 @@ export async function handleContainerStart(req: Request): Promise<Response> {
       Swap ?? 0,
       mounts ?? [],
     );
+    await saveStartConfig({
+      id,
+      image,
+      ports,
+      env: envVars,
+      Memory,
+      Cpu,
+      Storage,
+      Swap,
+      StartCommand,
+      mounts,
+      savedAt: new Date().toISOString(),
+    });
     return json({ message: `container ${id} started successfully` });
   } catch (error) {
     logger.error('error starting container', error);
     return json({ error: `failed to start container ${id}` }, 500);
+  }
+}
+
+export async function handleContainerRestart(req: Request): Promise<Response> {
+  let body: { id?: string; stopCmd?: string };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
+  if (!body.id) return json({ error: 'container ID is required' }, 400);
+  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+
+  const cached = await loadStartConfig(body.id);
+  if (!cached) {
+    return json({ error: `no cached start config for container ${body.id}, start it first` }, 404);
+  }
+
+  try {
+    clearLogBuffer(body.id);
+    await stopContainer(body.id, body.stopCmd);
+    await startContainer(
+      body.id,
+      cached.image,
+      cached.env ?? {},
+      cached.ports ?? '',
+      cached.Memory ?? 512,
+      cached.Cpu ?? 100,
+      cached.Storage ?? 0,
+      cached.Swap ?? 0,
+      cached.mounts ?? [],
+    );
+    return json({ message: `container ${body.id} restarted successfully` });
+  } catch (error) {
+    logger.error('error restarting container', error);
+    return json({ error: `failed to restart container ${body.id}` }, 500);
   }
 }
 
@@ -485,6 +581,7 @@ export async function handleContainerStatus(req: Request): Promise<Response> {
       running: info.State.Running,
       exists: true,
       status: info.State.Status,
+      exitCode: typeof info.State.ExitCode === 'number' ? info.State.ExitCode : null,
       startedAt: info.State.StartedAt,
       finishedAt: info.State.FinishedAt,
       source: 'inspect',

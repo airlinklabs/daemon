@@ -364,6 +364,36 @@ export async function handleFsUpload(req: Request): Promise<Response> {
   }
 }
 
+export async function handleFsMkdir(req: Request): Promise<Response> {
+  let body: { id?: string; path?: string; folderName?: string };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return json({ error: 'invalid json body' }, 400);
+  }
+  const { id, path: relativePath, folderName } = body;
+  if (!id) return json({ error: 'container ID is required' }, 400);
+  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+
+  const name = folderName ?? relativePath ?? '';
+  if (!name) return json({ error: 'folder name is required' }, 400);
+  if (!validatePath(name)) return json({ error: 'invalid folder path' }, 400);
+
+  try {
+    const baseDir = resolve(process.cwd(), `volumes/${id}`);
+    const targetPath =
+      relativePath && relativePath !== '/'
+        ? `${relativePath.replace(/\/+$/, '')}/${name.replace(/^\/+/, '')}`
+        : name.replace(/^\/+/, '');
+    const dirPath = jailPath(baseDir, targetPath);
+    mkdirSync(dirPath, { recursive: true });
+    return json({ message: 'directory successfully created', path: targetPath });
+  } catch (err) {
+    logger.error('error creating directory', err);
+    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+  }
+}
+
 export async function handleFsCreateEmpty(req: Request): Promise<Response> {
   let body: { id?: string; path?: string; fileName?: string };
   try {
@@ -430,7 +460,7 @@ export async function handleFsAppend(req: Request): Promise<Response> {
       return json({ error: 'unsupported content type' }, 400);
     }
 
-    await appendChunk(id, targetPath, chunk);
+    await appendChunk(id, targetPath, chunk, { chunkIndex, totalChunks });
     return json({
       message: 'chunk successfully appended',
       fileName,

@@ -25,12 +25,14 @@ export function startStatusPolling(containerId: string, ws: ServerWebSocket<WsDa
 async function sendState(containerId: string, ws: ServerWebSocket<WsData>): Promise<void> {
   if (ws.readyState !== 1) return;
   const knownRunning = isContainerRunning(containerId);
-  if (knownRunning !== null) {
-    ws.send(JSON.stringify({ event: 'state', data: { running: knownRunning } }));
-  } else {
-    const state = await getContainerState(containerId);
-    if (ws.readyState === 1) ws.send(JSON.stringify({ event: 'state', data: state }));
+  if (knownRunning === true) {
+    ws.send(JSON.stringify({ event: 'state', data: { running: true } }));
+    return;
   }
+  // stopped / unknown — inspect for the real reason (exit code distinguishes
+  // a crash from a deliberate stop)
+  const state = await getContainerState(containerId);
+  if (ws.readyState === 1) ws.send(JSON.stringify({ event: 'state', data: state }));
 }
 
 async function sendStats(containerId: string, ws: ServerWebSocket<WsData>): Promise<void> {

@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { appendFile, copyFile, lstat, mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { jailPath, jailRename } from '../security/pathJail';
@@ -315,8 +315,98 @@ export async function unzipPath(id: string, relativePath: string, zipname: strin
   }
 }
 
-export async function appendChunk(id: string, relativePath: string, chunk: Buffer): Promise<void> {
-  const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
-  const filePath = jailPath(baseDirectory, relativePath);
-  await appendFile(filePath, chunk);
+// ── Chunked upload sequencing ────────────────────────────────────────────────
+// appendChunk used to raw-appendFile each chunk as it arrived. Concurrent
+// uploads of the same file raced — chunks interleaved and corrupted the file.
+// Now chunks are buffered per upload session (keyed by container + target
+// path), assembled in index order once every chunk is present, written to a
+// temp file, then renamed over the target. A per-key mutex keeps sessions
+// from interleaving; a stale timeout prevents leaked buffers.
+
+interface ChunkSession {
+  chunks: Buffer[];
+  received: Set<number>;
+  total: number;
+  timer: ReturnType<typeof setTimeout>;
+  chain: Promise<void>;
+}
+
+const chunkSessions = new Map<string, ChunkSession>();
+
+function sessionKey(id: string, relativePath: string): string {
+  return `${id}\u0000${relativePath}`;
+}
+
+function cleanupSession(key: string): void {
+  const session = chunkSessions.get(key);
+  if (session) clearTimeout(session.timer);
+  chunkSessions.delete(key);
+}
+
+export async function appendChunk(
+  id: string,
+  relativePath: string,
+  chunk: Buffer,
+  options?: { chunkIndex?: number; totalChunks?: number },
+): Promise<void> {
+  const chunkIndex = options?.chunkIndex ?? 0;
+  const totalChunks = options?.totalChunks ?? 1;
+
+  // Single-chunk upload — write directly, no session bookkeeping.
+  if (totalChunks <= 1) {
+    const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+    const filePath = jailPath(baseDirectory, relativePath);
+    await writeFile(filePath, chunk);
+    return;
+  }
+
+  const key = sessionKey(id, relativePath);
+  let session = chunkSessions.get(key);
+
+  if (!session) {
+    let resolveFirst: () => void;
+    const firstChain = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const timer = setTimeout(() => cleanupSession(key), 60_000);
+    timer.unref?.();
+    session = {
+      chunks: [],
+      received: new Set(),
+      total: totalChunks,
+      timer,
+      chain: firstChain,
+    };
+    chunkSessions.set(key, session);
+    resolveFirst!();
+  } else {
+    clearTimeout(session.timer);
+    session.timer = setTimeout(() => cleanupSession(key), 60_000);
+    session.timer.unref?.();
+    session.total = Math.max(session.total, totalChunks);
+  }
+
+  await session.chain;
+
+  if (chunkIndex < 0 || chunkIndex >= session.total) {
+    throw new Error('chunk index out of range');
+  }
+
+  session.chunks[chunkIndex] = chunk;
+  session.received.add(chunkIndex);
+
+  const done = session.received.size >= session.total && session.chunks.every((c) => c instanceof Buffer);
+  if (!done) return;
+
+  try {
+    const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+    const filePath = jailPath(baseDirectory, relativePath);
+    const tmpPath = `${filePath}.part-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const ordered = session.chunks as Buffer[];
+    await writeFile(tmpPath, Buffer.concat(ordered));
+    await rename(tmpPath, filePath);
+  } finally {
+    cleanupSession(key);
+  }
 }
