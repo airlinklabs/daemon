@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { create as tarCreate, extract as tarExtract } from 'tar';
+import { applyConfigFiles, type ConfigFileEntry } from '../handlers/configFiles';
 import {
   createInstaller,
   deleteContainerAndVolume,
@@ -38,6 +39,7 @@ export type CachedStartConfig = {
   Swap?: number;
   StartCommand?: string;
   mounts?: { source: string; target: string; readOnly?: boolean }[];
+  configFiles?: Record<string, ConfigFileEntry>;
   savedAt: string;
 };
 
@@ -365,6 +367,7 @@ export async function handleContainerStart(req: Request): Promise<Response> {
     Swap?: number;
     StartCommand?: string;
     mounts?: { source: string; target: string; readOnly?: boolean }[];
+    configFiles?: Record<string, ConfigFileEntry>;
   };
   try {
     body = (await req.json()) as typeof body;
@@ -372,11 +375,15 @@ export async function handleContainerStart(req: Request): Promise<Response> {
     return json({ error: 'invalid json body' }, 400);
   }
 
-  const { id, image, ports, env, Memory, Cpu, Storage, Swap, StartCommand, mounts } = body;
+  const { id, image, ports, env, Memory, Cpu, Storage, Swap, StartCommand, mounts, configFiles } = body;
   if (!id || !image) return json({ error: 'container ID and image are required' }, 400);
   if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
 
   const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
+
+  if (configFiles && typeof configFiles === 'object') {
+    await applyConfigFiles(id, configFiles, envVars);
+  }
 
   // resolve both {{VAR}} (pterodactyl style) and $ALVKT(VAR) in the start command
   let updatedCmd = StartCommand ?? '';
@@ -419,6 +426,7 @@ export async function handleContainerStart(req: Request): Promise<Response> {
       Swap,
       StartCommand,
       mounts,
+      configFiles: configFiles ?? undefined,
       savedAt: new Date().toISOString(),
     });
     return json({ message: `container ${id} started successfully` });
@@ -445,6 +453,9 @@ export async function handleContainerRestart(req: Request): Promise<Response> {
 
   try {
     clearLogBuffer(body.id);
+    if (cached.configFiles && typeof cached.configFiles === 'object') {
+      await applyConfigFiles(body.id, cached.configFiles, cached.env ?? {});
+    }
     await stopContainer(body.id, body.stopCmd);
     await startContainer(
       body.id,
