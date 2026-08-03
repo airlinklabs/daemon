@@ -1,6 +1,7 @@
 import type { ServerWebSocket } from 'bun';
 import config from '../config';
 import { sendCommandToContainer } from '../handlers/docker';
+import { appendLogLine } from '../handlers/logHistory';
 import logger from '../logger';
 import { attachToContainer } from './attach';
 import { subscribe } from './events';
@@ -38,6 +39,7 @@ export function appendLog(containerId: string, line: string): void {
   const buf = logBuffers.get(containerId)!;
   buf.push(line);
   if (buf.length > LOG_BUFFER_SIZE) buf.shift();
+  appendLogLine(containerId, line);
 }
 
 export function getLogBuffer(containerId: string): string[] {
