@@ -1,3 +1,7 @@
+> [!WARNING]
+> # This project is a work in progress and is highly unstable
+> It is not recommended for production use. APIs, features, and data may break, change, or disappear at any time. Use at your own risk.
+
 # Airlink Daemon
 
 **The thing that actually runs your game servers -_-**
