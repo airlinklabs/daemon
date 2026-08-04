@@ -110,18 +110,18 @@ function applyJson(content: string, find: Record<string, string>, env: Record<st
 
   for (const [key, rawValue] of Object.entries(find)) {
     const segments = key.split('.');
-    let cursor: any = data;
+    let cursor: unknown = data;
     let ok = true;
     for (const segment of segments.slice(0, -1)) {
       if (cursor && typeof cursor === 'object' && segment in cursor) {
-        cursor = cursor[segment];
+        cursor = (cursor as Record<string, unknown>)[segment];
       } else {
         ok = false;
         break;
       }
     }
     if (!ok || !cursor || typeof cursor !== 'object') continue;
-    cursor[segments[segments.length - 1]] = resolveToken(rawValue, env);
+    (cursor as Record<string, unknown>)[segments[segments.length - 1]] = resolveToken(rawValue, env);
   }
 
   return JSON.stringify(data, null, 2);

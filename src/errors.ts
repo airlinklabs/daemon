@@ -14,7 +14,11 @@ export type ApiErrorCode =
   | 'missing_nonce'
   | 'missing_hmac_headers'
   | 'access_denied'
-  | 'internal_error';
+  | 'internal_error'
+  | 'not_found'
+  | 'request_too_large'
+  | 'local_only'
+  | 'unsupported_content_type';
 
 export interface ApiError {
   error: string;

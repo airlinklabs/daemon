@@ -3,23 +3,12 @@ import { checkDocker, checkDockerRunning, initContainerStateMap } from './handle
 import { startNativeSftpServer } from './handlers/nativeSftp';
 import { getCurrentStats, initStatsCollection, saveStats } from './handlers/stats';
 import logger, { drawHeader } from './logger';
-import { handleHttpRequest } from './router';
+import { handleHttpRequest, isPrivateIp } from './router';
 import { getAllowedIpCheck } from './security/hmac';
 import { checkRateLimit } from './security/rateLimit';
 import { validateContainerId } from './validation';
 import type { WsData } from './ws/server';
 import { buildWsData, openConnections, wsClose, wsMessage, wsOpen } from './ws/server';
-
-function isPrivateIp(ip: string): boolean {
-  return (
-    ip === '127.0.0.1' ||
-    ip === '::1' ||
-    ip === 'localhost' ||
-    ip.startsWith('10.') ||
-    ip.startsWith('192.168.') ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(ip)
-  );
-}
 
 function resolveEffectiveIp(req: Request, server: ReturnType<typeof Bun.serve>): string {
   const rawIp = server.requestIP(req);
@@ -74,7 +63,7 @@ process.on('uncaughtException', (err) => {
 });
 
 process.on('unhandledRejection', (reason) => {
-  logger.error('unhandled rejection', reason as Error);
+  logger.error('unhandled rejection', reason instanceof Error ? reason : new Error(String(reason)));
   if (isFatalServerStartError(reason)) {
     logger.error('fatal: HTTP server could not be started, exiting');
     process.exit(1);
@@ -88,14 +77,14 @@ try {
   await checkDockerRunning();
   await initContainerStateMap();
 } catch (err) {
-  logger.error('docker is not ready, so container actions are paused for now', err as Error);
+  logger.error('docker is not ready, so container actions are paused for now', err instanceof Error ? err : new Error(String(err)));
 }
 initStatsCollection();
 
 // Native SFTP server (replaces the legacy atmoz/sftp sidecar). Started
 // independently so a port conflict doesn't take down the daemon.
 startNativeSftpServer().catch((err) => {
-  logger.error('failed to start native SFTP server', err as Error);
+  logger.error('failed to start native SFTP server', err instanceof Error ? err : new Error(String(err)));
 });
 
 const tls =

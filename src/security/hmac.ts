@@ -2,12 +2,12 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import config from '../config';
 import logger from '../logger';
 
-const WINDOW_SECS = 30;
+const HMAC_WINDOW_SECS = 30;
 const seenNonces = new Set<string>();
 
 // Must match HMAC_PAYLOAD_VERSION in the panel's daemonRequest.ts.
 // Increment both sides together when changing the signing format.
-const _HMAC_PAYLOAD_VERSION = 1;
+// Protocol version: 1
 
 // Why this format: ${ts}:${nonce}:${method}:${path}:${body}
 // - ts: timestamps the request, enables 30s expiry window
@@ -22,7 +22,7 @@ function rememberNonce(ts: number, nonceValue: string): Response | null {
   const now = Math.floor(Date.now() / 1000);
   for (const nonce of seenNonces) {
     const nonceTs = parseInt(nonce.split(':', 1)[0], 10);
-    if (Number.isNaN(nonceTs) || Math.abs(now - nonceTs) > WINDOW_SECS) seenNonces.delete(nonce);
+    if (Number.isNaN(nonceTs) || Math.abs(now - nonceTs) > HMAC_WINDOW_SECS) seenNonces.delete(nonce);
   }
 
   const cacheKey = `${ts}:${nonceValue}`;
@@ -63,7 +63,7 @@ export async function verifyHmac(req: Request, key: string): Promise<Response | 
   }
 
   const drift = Math.abs(Math.floor(Date.now() / 1000) - ts);
-  if (drift > WINDOW_SECS) {
+  if (drift > HMAC_WINDOW_SECS) {
     return new Response(JSON.stringify({ error: 'timestamp out of window' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },

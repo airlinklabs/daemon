@@ -8,34 +8,18 @@
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseEnvFile } from './utils/parseEnv';
 
 // bun --compile bundles these into the binary as static assets
 import envTemplate from '../example.env' with { type: 'text' };
 import defaultConfig from '../storage/config.json';
 import defaultFileSpecifier from '../storage/fileSpecifier.json';
 
-function parseEnv(content: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq === -1) continue;
-    const key = trimmed.slice(0, eq).trim();
-    let val = trimmed.slice(eq + 1).trim();
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-      val = val.slice(1, -1);
-    }
-    result[key] = val;
-  }
-  return result;
-}
-
 const envPath = join(process.cwd(), '.env');
 
 if (!existsSync(envPath)) {
   writeFileSync(envPath, envTemplate, 'utf-8');
-  const defaults = parseEnv(envTemplate);
+  const defaults = parseEnvFile(envTemplate);
   for (const [key, val] of Object.entries(defaults)) {
     if (process.env[key] === undefined) {
       process.env[key] = val;

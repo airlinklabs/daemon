@@ -312,7 +312,31 @@ export function collectHost(now: number): HostStats {
 interface DockerResponse {
   status: number;
   body: string;
-  json: any;
+  json: unknown;
+}
+
+interface DockerContainerInfo {
+  Id: string;
+  Names?: string[];
+  Image?: string;
+  State?: string;
+  Status?: string;
+}
+
+interface DockerContainerStats {
+  cpu_stats?: {
+    cpu_usage?: { total_usage?: number };
+    system_cpu_usage?: number;
+    online_cpus?: number;
+  };
+  precpu_stats?: {
+    cpu_usage?: { total_usage?: number };
+    system_cpu_usage?: number;
+  };
+  memory_stats?: {
+    usage?: number;
+    limit?: number;
+  };
 }
 
 function decodeChunked(text: string): string {
@@ -359,7 +383,7 @@ function dockerFetch(path: string, socket: string, timeoutMs = 3000): Promise<Do
           let body = sep >= 0 ? buf.slice(sep + 4) : '';
           const status = Number(head.split(' ')[1] ?? 0);
           if (/transfer-encoding:\s*chunked/i.test(head)) body = decodeChunked(body);
-          let json: any = null;
+          let json: unknown = null;
           try {
             json = body ? JSON.parse(body) : null;
           } catch {
@@ -398,7 +422,7 @@ function getDockerSocket(): string | null {
   return null;
 }
 
-function containerStatCpu(stats: any): number {
+function containerStatCpu(stats: DockerContainerStats): number {
   const cur = stats?.cpu_stats;
   const prev = stats?.precpu_stats;
   if (!cur || !prev) return 0;
@@ -422,14 +446,14 @@ export async function collectDocker(): Promise<DockerStats> {
   const socket = getDockerSocket();
   if (!socket) return { ...empty, error: 'no docker socket found' };
   const results = await Promise.allSettled([
-    withTimeout(dockerFetch('/v1.41/containers/json?all=1', socket), 4000, null as unknown as DockerResponse),
-    withTimeout(dockerFetch('/v1.41/images/json', socket), 4000, null as unknown as DockerResponse),
-    withTimeout(dockerFetch('/v1.41/networks', socket), 4000, null as unknown as DockerResponse),
-    withTimeout(dockerFetch('/v1.41/volumes', socket), 4000, null as unknown as DockerResponse),
-    withTimeout(dockerFetch('/v1.41/system/df', socket), 4000, null as unknown as DockerResponse),
+    withTimeout(dockerFetch('/v1.41/containers/json?all=1', socket), 4000, null),
+    withTimeout(dockerFetch('/v1.41/images/json', socket), 4000, null),
+    withTimeout(dockerFetch('/v1.41/networks', socket), 4000, null),
+    withTimeout(dockerFetch('/v1.41/volumes', socket), 4000, null),
+    withTimeout(dockerFetch('/v1.41/system/df', socket), 4000, null),
   ]);
-  const firstError = results.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
-  const infos = (results[0].status === 'fulfilled' ? results[0].value?.json : null) as any[] | null;
+  const firstError = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+  const infos = (results[0].status === 'fulfilled' ? results[0].value?.json : null) as DockerContainerInfo[] | null;
   if (firstError && !infos) {
     const msg = String(firstError.reason?.message ?? firstError.reason);
     if (msg.includes('EACCES') || msg.includes('permission')) {
@@ -438,27 +462,27 @@ export async function collectDocker(): Promise<DockerStats> {
     return { ...empty, error: msg.slice(0, 40) };
   }
   if (!Array.isArray(infos)) return { ...empty, error: 'docker API unreachable' };
-  const running = infos.filter((c: any) => c.State === 'running').slice(0, 8);
+  const running = infos.filter((c: DockerContainerInfo) => c.State === 'running').slice(0, 8);
   const stats = await Promise.allSettled(
-    running.map((c: any) =>
+    running.map((c: DockerContainerInfo) =>
       withTimeout(
         dockerFetch(`/v1.41/containers/${c.Id}/stats?stream=false`, socket, 3000),
         3500,
-        null as unknown as DockerResponse,
+        null,
       ),
     ),
   );
   const perId = new Map<string, { cpu: number; memUsed: number; memLimit: number }>();
-  running.forEach((c: any, i: number) => {
+  running.forEach((c: DockerContainerInfo, i: number) => {
     const s = stats[i];
     if (s.status !== 'fulfilled' || !s.value?.json) return;
-    const v = s.value.json;
+    const v = s.value.json as DockerContainerStats;
     const cpu = containerStatCpu(v);
     const memUsed = v.memory_stats?.usage ?? 0;
     const memLimit = v.memory_stats?.limit ?? 0;
     perId.set(c.Id, { cpu, memUsed, memLimit });
   });
-  const containersOut: ContainerInfo[] = infos.map((c: any) => {
+  const containersOut: ContainerInfo[] = infos.map((c: DockerContainerInfo) => {
     const m = perId.get(c.Id);
     return {
       id: c.Id.slice(0, 12),
@@ -480,10 +504,10 @@ export async function collectDocker(): Promise<DockerStats> {
     online: true,
     error: null,
     containers: containersOut,
-    images: results[1].status === 'fulfilled' ? (results[1].value?.json?.length ?? 0) : 0,
-    networks: results[2].status === 'fulfilled' ? (results[2].value?.json?.length ?? 0) : 0,
-    volumes: results[3].status === 'fulfilled' ? (results[3].value?.json?.Volumes?.length ?? 0) : 0,
-    dockerDiskGb: results[4].status === 'fulfilled' ? (results[4].value?.json?.LayersSize ?? 0) / 1e9 : 0,
+    images: results[1].status === 'fulfilled' ? ((results[1].value?.json as { length?: number })?.length ?? 0) : 0,
+    networks: results[2].status === 'fulfilled' ? ((results[2].value?.json as { length?: number })?.length ?? 0) : 0,
+    volumes: results[3].status === 'fulfilled' ? ((results[3].value?.json as { Volumes?: unknown[] })?.Volumes?.length ?? 0) : 0,
+    dockerDiskGb: results[4].status === 'fulfilled' ? ((results[4].value?.json as { LayersSize?: number })?.LayersSize ?? 0) / 1e9 : 0,
   };
 }
 
@@ -574,7 +598,7 @@ export async function collectDaemon(ctx: DaemonCtx): Promise<DaemonInfo> {
     const res = await withTimeout(
       fetch(`http://127.0.0.1:${ctx.port}/healthz`),
       1500,
-      undefined as unknown as Response,
+      null,
     );
     online = !!res && res.ok;
   } catch {

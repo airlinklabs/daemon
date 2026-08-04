@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { collectDaemon, collectHost, type DaemonCtx } from './tui/stats';
+import { parseEnvFile } from './utils/parseEnv';
 
 function printHelp(): void {
   const bin = process.argv[1]?.split('/').pop() || 'airlinkd';
@@ -58,17 +59,7 @@ function loadEnv(dir: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const path of [`${dir}/.env`, '/etc/daemon/.env']) {
     try {
-      for (const raw of readFileSync(path, 'utf8').split('\n')) {
-        const line = raw.trim();
-        if (!line || line.startsWith('#')) continue;
-        const eq = line.indexOf('=');
-        if (eq < 1) continue;
-        let value = line.slice(eq + 1).trim();
-        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-          value = value.slice(1, -1);
-        }
-        out[line.slice(0, eq).trim()] = value;
-      }
+      Object.assign(out, parseEnvFile(readFileSync(path, 'utf8')));
     } catch {
       /* unreadable env file */
     }

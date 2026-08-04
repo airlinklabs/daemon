@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 const logsDir = join(process.cwd(), 'storage/logs');
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
+const DEFAULT_LOG_HISTORY_LIMIT = 500;
 
 function logPath(id: string): string {
   return join(logsDir, `${id}.log`);
@@ -53,7 +54,7 @@ export function appendLogLine(id: string, line: string): void {
   if (written >= MAX_LOG_BYTES) rotate(id);
 }
 
-export async function getLogHistory(id: string, limit = 500): Promise<string[]> {
+export async function getLogHistory(id: string, limit = DEFAULT_LOG_HISTORY_LIMIT): Promise<string[]> {
   const file = Bun.file(logPath(id));
   const text = await file.text().catch(() => '');
   const lines = text.split('\n').filter(Boolean);

@@ -1,4 +1,5 @@
 import config from './config';
+import { apiError } from './errors';
 import logger from './logger';
 import { handleRoot, handleStats } from './routes/core';
 import {
@@ -44,6 +45,8 @@ import { handleRadarScan, handleRadarZip } from './routes/radar';
 import { handleSftpActivity, handleSftpCreate, handleSftpRevoke, handleSftpStatus } from './routes/sftp';
 import { checkBasicAuth, getAllowedIpCheck, verifyHmac, withSecurityHeaders } from './security/hmac';
 import { checkRateLimit } from './security/rateLimit';
+
+const MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024;
 
 type Handler = (req: Request, params: Record<string, string>) => Promise<Response> | Response;
 
@@ -112,13 +115,6 @@ export function isPrivateIp(ip: string): boolean {
   );
 }
 
-function jsonError(error: string, status: number): Response {
-  return new Response(JSON.stringify({ error }), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
 export async function handleHttpRequest(req: Request, server: ReturnType<typeof Bun.serve>): Promise<Response> {
   const started = Date.now();
   const url = new URL(req.url);
@@ -134,8 +130,8 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
   };
 
   const contentLength = parseInt(req.headers.get('content-length') ?? '0', 10);
-  if (contentLength > 100 * 1024 * 1024) {
-    return finish(jsonError('request too large', 413));
+  if (contentLength > MAX_REQUEST_BODY_BYTES) {
+    return finish(apiError('request_too_large', 'request too large', 413));
   }
 
   const rawIp = server.requestIP(req);
@@ -154,7 +150,7 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
   if (key === 'GET /healthz') {
     const isLocalhost = socketIp === '127.0.0.1' || socketIp === '::1' || socketIp === 'localhost';
     if (!isLocalhost) {
-      return finish(jsonError('local only', 403));
+      return finish(apiError('local_only', 'local only', 403));
     }
     return finish(new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }));
   }
@@ -180,7 +176,7 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
       ct.startsWith('text/') ||
       ct.startsWith('multipart/');
     if (!ok) {
-      return finish(jsonError('unsupported content type', 415));
+      return finish(apiError('unsupported_content_type', 'unsupported content type', 415));
     }
   }
 
@@ -190,7 +186,7 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
       return finish(await handler(req, {}));
     } catch (err) {
       logger.error(`route error: ${key}`, err);
-      return finish(jsonError('internal error', 500));
+      return finish(apiError('internal_error', 'internal error', 500));
     }
   }
 
@@ -208,9 +204,9 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
       return finish(await dynHandler(req, params));
     } catch (err) {
       logger.error(`route error: ${url.pathname}`, err);
-      return finish(jsonError('internal error', 500));
+      return finish(apiError('internal_error', 'internal error', 500));
     }
   }
 
-  return finish(jsonError('not found', 404));
+  return finish(apiError('not_found', 'not found', 404));
 }

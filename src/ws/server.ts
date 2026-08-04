@@ -26,6 +26,7 @@ export function assertAuthed(data: WsData): asserts data is WsData & { authed: t
 let openWsCount = 0;
 const MAX_WS = 500;
 const AUTH_TIMEOUT_MS = 10_000;
+const AUTH_TIMEOUT_CLOSE_CODE = 1008;
 
 export const openConnections = new Set<ServerWebSocket<WsData>>();
 
@@ -207,7 +208,7 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
         ws.send(
           JSON.stringify({
             event: 'error',
-            data: { message: `command not sent: ${(err as Error)?.message ?? 'unknown error'}` },
+            data: { message: `command not sent: ${err instanceof Error ? err.message : 'unknown error'}` },
           }),
         );
       }

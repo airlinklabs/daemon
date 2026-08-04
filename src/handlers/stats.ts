@@ -6,7 +6,8 @@ import logger from '../logger';
 
 const storagePath = join(process.cwd(), 'storage/systemStats.json');
 const tempStoragePath = join(process.cwd(), 'storage/systemStats.tmp.json');
-const maxAge = 30 * 60 * 1000;
+const STATS_MAX_AGE_MS = 30 * 60 * 1000;
+const CPU_SAMPLE_INTERVAL_MS = 100;
 
 interface SystemStat {
   timestamp: string;
@@ -46,7 +47,7 @@ function getCpuPercent(): Promise<number> {
 
       const usage = 1 - totalIdle / totalTick;
       resolve(Math.max(0, Math.min(1, usage)));
-    }, 100);
+    }, CPU_SAMPLE_INTERVAL_MS);
   });
 }
 
@@ -68,7 +69,7 @@ export async function getCurrentStats(): Promise<SystemStat> {
 
 function cleanOldEntries(): void {
   const now = Date.now();
-  statsLog = statsLog.filter((e) => now - new Date(e.timestamp).getTime() <= maxAge);
+  statsLog = statsLog.filter((e) => now - new Date(e.timestamp).getTime() <= STATS_MAX_AGE_MS);
 }
 
 export function saveStats(stats: SystemStat): void {

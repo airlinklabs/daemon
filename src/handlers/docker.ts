@@ -10,8 +10,31 @@ import { createRuntime } from './containerRuntime';
 
 const runtime = createRuntime(config.containerRuntime);
 export const docker = runtime;
+
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'object' && err !== null && 'message' in err) return String((err as { message: unknown }).message);
+  return String(err);
+}
+
+function getDockerStatusCode(err: unknown): number | undefined {
+  if (typeof err === 'object' && err !== null && 'statusCode' in err) {
+    const code = (err as { statusCode: unknown }).statusCode;
+    if (typeof code === 'number') return code;
+  }
+  return undefined;
+}
 const CONSOLE_FIFO_RELATIVE_PATH = join('.airlinkd', 'console.in');
 const CONSOLE_FIFO_WRITE_TIMEOUT_MS = 10_000;
+const STORAGE_ENFORCE_INTERVAL_MS = 30_000;
+const DOCKER_EVENT_RECONNECT_ERROR_MS = 5_000;
+const DOCKER_EVENT_RECONNECT_END_MS = 2_000;
+const STOP_GRACEFUL_TIMEOUT_MS = 20_000;
+const STOP_GRACEFUL_POLL_MS = 500;
+const STOP_FORCE_TIMEOUT_S = 5;
+const PIDS_LIMIT = 256;
+const BLKIO_WEIGHT = 500;
+const CPU_NANO_FACTOR = 1e9;
 
 // per-container disk quota in MB, enforced by background polling (soft cap —
 // works on every storage driver, unlike Docker's overlay2-only StorageOpt)
@@ -35,14 +58,14 @@ async function applyNetworkThrottle(id: string, mbps: number): Promise<void> {
       AttachStderr: true,
     });
     const stream = await exec.start({ hijack: false, stdin: false });
-    if (stream && typeof (stream as NodeJS.ReadableStream).on === 'function') {
+    if (stream && typeof stream === 'object' && 'on' in stream && typeof (stream as { on: unknown }).on === 'function') {
       const readable = stream as NodeJS.ReadableStream;
       readable.resume();
       readable.on('error', () => {});
     }
     logger.info(`applied network throttle: ${id} @ ${mbps} mbps`);
   } catch (err) {
-    logger.warn(`network throttle skipped for ${id}: ${(err as Error)?.message}`);
+    logger.warn(`network throttle skipped for ${id}: ${getErrorMessage(err)}`);
   }
 }
 let storageEnforcementRunning = false;
@@ -72,7 +95,7 @@ function enforceStorageLimits(): void {
   }
 }
 
-setInterval(enforceStorageLimits, 30_000).unref?.();
+setInterval(enforceStorageLimits, STORAGE_ENFORCE_INTERVAL_MS).unref?.();
 
 // ── Pure function: build init.sh wrapper ────────────────────────────────────
 // Generates a shell script that patches the container's identity (hostname,
@@ -216,18 +239,18 @@ async function subscribeToDockerEvents(): Promise<void> {
 
     stream.on('error', (err: Error) => {
       logger.error('docker event stream had a bad time, reconnecting in 5s', err);
-      setTimeout(subscribeToDockerEvents, 5000);
+      setTimeout(subscribeToDockerEvents, DOCKER_EVENT_RECONNECT_ERROR_MS);
     });
 
     stream.on('end', () => {
       logger.warn('docker event stream dropped, reconnecting in 2s');
-      setTimeout(subscribeToDockerEvents, 2000);
+      setTimeout(subscribeToDockerEvents, DOCKER_EVENT_RECONNECT_END_MS);
     });
 
     logger.info('docker event stream connected');
   } catch (err) {
     logger.error('could not watch docker events, trying again in 5s', err);
-    setTimeout(subscribeToDockerEvents, 5000);
+    setTimeout(subscribeToDockerEvents, DOCKER_EVENT_RECONNECT_ERROR_MS);
   }
 }
 
@@ -317,7 +340,7 @@ export async function getContainerStats(id: string): Promise<ContainerStats | nu
       storage,
     };
   } catch (err: unknown) {
-    const statusCode = (err as { statusCode?: number })?.statusCode;
+    const statusCode = getDockerStatusCode(err);
     if (statusCode === 404 || (err instanceof Error && err.message.includes('no such container'))) return null;
     return {
       running: false,
@@ -459,8 +482,8 @@ export async function startContainer(
   try {
     await docker.getContainer(id).remove({ force: true });
   } catch (err: unknown) {
-    if ((err as { statusCode?: number })?.statusCode !== 404) {
-      logger.warn(`could not remove old ${id} container: ${(err as Error)?.message}`);
+    if (getDockerStatusCode(err) !== 404) {
+      logger.warn(`could not remove old ${id} container: ${getErrorMessage(err)}`);
     }
   }
 
@@ -530,9 +553,9 @@ export async function startContainer(
     Memory: Memory * 1024 * 1024, // panel sends MB, dockerode wants bytes
     MemorySwap: Swap === -1 ? -1 : (Memory + Math.max(0, Swap)) * 1024 * 1024,
     OomKillDisable: false,
-    PidsLimit: 256,
-    BlkioWeight: 500,
-    NanoCpus: Math.floor((Cpu / 100) * 1e9), // panel sends 0-100%, dockerode wants NanoCPUs
+    PidsLimit: PIDS_LIMIT,
+    BlkioWeight: BLKIO_WEIGHT,
+    NanoCpus: Math.floor((Cpu / 100) * CPU_NANO_FACTOR), // panel sends 0-100%, dockerode wants NanoCPUs
     RestartPolicy: { Name: 'unless-stopped' },
   };
 
@@ -582,8 +605,8 @@ export async function createInstaller(
   try {
     await docker.getContainer(`installer_${id}`).remove({ force: true });
   } catch (err: unknown) {
-    if ((err as { statusCode?: number })?.statusCode !== 404) {
-      logger.warn(`could not remove existing installer container for ${id}: ${(err as Error)?.message}`);
+    if (getDockerStatusCode(err) !== 404) {
+      logger.warn(`could not remove existing installer container for ${id}: ${getErrorMessage(err)}`);
     }
   }
 
@@ -698,9 +721,9 @@ export async function stopContainer(id: string, stopCmd?: string): Promise<void>
     }
 
     // wait up to 20s for the process to exit on its own
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + STOP_GRACEFUL_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, STOP_GRACEFUL_POLL_MS));
       const current = await container.inspect().catch(() => null);
       if (!current?.State.Running) {
         emit(id, { type: 'stopped', message: 'server stopped' });
@@ -711,19 +734,19 @@ export async function stopContainer(id: string, stopCmd?: string): Promise<void>
 
   // process didn't exit cleanly — force it
   try {
-    await container.stop({ t: 5 });
+    await container.stop({ t: STOP_FORCE_TIMEOUT_S });
   } catch (err: unknown) {
-    const status = (err as { statusCode?: number })?.statusCode;
+    const status = getDockerStatusCode(err);
     if (status !== 304 && status !== 404) {
-      logger.warn(`container.stop() for ${id}: ${(err as Error)?.message}`);
+      logger.warn(`container.stop() for ${id}: ${getErrorMessage(err)}`);
     }
   }
 
   try {
     await container.remove({ force: true });
   } catch (err: unknown) {
-    if ((err as { statusCode?: number })?.statusCode !== 404) {
-      logger.warn(`container.remove() after stop for ${id}: ${(err as Error)?.message}`);
+    if (getDockerStatusCode(err) !== 404) {
+      logger.warn(`container.remove() after stop for ${id}: ${getErrorMessage(err)}`);
     }
   }
 
@@ -735,8 +758,8 @@ export async function killContainer(id: string): Promise<void> {
   try {
     await docker.getContainer(id).remove({ force: true });
   } catch (err: unknown) {
-    if ((err as { statusCode?: number })?.statusCode !== 404) {
-      logger.warn(`killContainer for ${id}: ${(err as Error)?.message}`);
+    if (getDockerStatusCode(err) !== 404) {
+      logger.warn(`killContainer for ${id}: ${getErrorMessage(err)}`);
     }
   }
   emit(id, { type: 'killed', message: 'container forcibly removed' });
@@ -746,8 +769,8 @@ export async function deleteContainer(id: string): Promise<void> {
   try {
     await docker.getContainer(id).remove({ force: true });
   } catch (err: unknown) {
-    if ((err as { statusCode?: number })?.statusCode !== 404) {
-      logger.warn(`deleteContainer for ${id}: ${(err as Error)?.message}`);
+    if (getDockerStatusCode(err) !== 404) {
+      logger.warn(`deleteContainer for ${id}: ${getErrorMessage(err)}`);
     }
   }
 }

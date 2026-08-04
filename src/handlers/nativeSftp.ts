@@ -38,6 +38,8 @@ import { jailPath } from '../security/pathJail';
 // ---------------------------------------------------------------------------
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const READDIR_BATCH_SIZE = 100;
 
 export type SftpActivityEvent =
   | { kind: 'connect'; serverId: string; username: string; ip: string }
@@ -63,6 +65,8 @@ interface NativeSftpSession {
 const sessions = new Map<string, NativeSftpSession>();
 // serverId -> username so we can revoke by container id
 const sessionByServer = new Map<string, string>();
+// WeakMap to attach session data to ssh2 Connection objects without monkey-patching
+const clientSessions = new WeakMap<object, NativeSftpSession>();
 
 const openFiles = new Map<string, { fd: number; path: string; size: number }>();
 
@@ -423,7 +427,7 @@ function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSession):
       sftp.status(reqId, EOF);
       return;
     }
-    const batch = state.names.splice(0, 100);
+    const batch = state.names.splice(0, READDIR_BATCH_SIZE);
     const entries: FileEntry[] = [];
     for (const filename of batch) {
       try {
@@ -588,21 +592,16 @@ export async function startNativeSftpServer(): Promise<void> {
       // Bind the session to the connection BEFORE accept(): ssh2 emits
       // 'ready' synchronously when accept() is called, so it would miss a
       // pointer set after.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (client as unknown as Record<string, NativeSftpSession>)._airlinkSession = session;
+      clientSessions.set(client, session);
       ctx.accept();
     });
 
     client.on('ready', () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const bound = (client as unknown as Record<string, NativeSftpSession>)._airlinkSession;
-      if (!bound) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = clientSessions.get(client);
+      if (!session) {
         logger.warn(`SFTP client ready but no authed session bound (ownKeys=${Reflect.ownKeys(client).length})`);
         return;
       }
-      // session is stable on the connection; read explicitly
-      const session = (client as unknown as Record<string, NativeSftpSession>)._airlinkSession;
 
       client.on('session', (accept: () => Session) => {
         const channel = accept();
@@ -657,5 +656,5 @@ setInterval(
       }
     }
   },
-  60 * 60 * 1000,
+  SESSION_CLEANUP_INTERVAL_MS,
 );
