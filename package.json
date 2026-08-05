@@ -4,7 +4,7 @@
   "module": "src/app.ts",
   "type": "module",
   "scripts": {
-    "dev": "nodemon --exec 'bun src/app.ts' start",
+    "dev": "nodemon --exitcrash --exec 'bun src/app.ts' start",
     "start": "bun src/app.ts",
     "start:daemon": "bun src/app.ts start",
     "start:headless": "bun src/app.ts start",
