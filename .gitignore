@@ -154,6 +154,7 @@ bun.lock
 /storage/alc/locations.json
 /storage/alc.json
 /storage/install_logs.json
+/storage/containerConfigs/*
 
 # Backup files
 *.backup
