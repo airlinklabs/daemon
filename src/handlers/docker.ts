@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import config from '../config';
 import logger from '../logger';
 import { emit } from '../ws/events';
+import { beginCapture } from './logHistory';
 import { normalizeConsoleCommand } from './consoleCommand';
 import { createRuntime } from './containerRuntime';
 
@@ -591,6 +592,7 @@ export async function startContainer(
   if (config.networkRateMbps > 0) await applyNetworkThrottle(id, config.networkRateMbps);
   if (Storage > 0) storageLimits.set(id, Storage);
   emit(id, { type: 'started', message: 'server started' });
+  beginCapture(id);
 }
 
 // run an installer container that mounts the volume, runs a script, then exits

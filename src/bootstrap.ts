@@ -28,7 +28,7 @@ if (!existsSync(envPath)) {
   process.stdout.write('no .env found, so I made one with defaults. tweak it and restart when ready.\n');
 }
 
-for (const dir of ['logs', 'storage', 'storage/alc', 'storage/alc/files', 'volumes', 'backups']) {
+for (const dir of ['logs', 'storage', 'storage/alc', 'storage/alc/files', 'volumes', 'backups', '.airlinkd', '.airlinkd/logs']) {
   mkdirSync(dir, { recursive: true });
 }
 

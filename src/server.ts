@@ -1,6 +1,7 @@
 import config from './config';
-import { checkDocker, checkDockerRunning, initContainerStateMap } from './handlers/docker';
+import { checkDocker, checkDockerRunning, docker, initContainerStateMap } from './handlers/docker';
 import { startNativeSftpServer } from './handlers/nativeSftp';
+import { startBackgroundLogCollector } from './handlers/logHistory';
 import { getCurrentStats, initStatsCollection, saveStats } from './handlers/stats';
 import logger, { drawHeader } from './logger';
 import { handleHttpRequest, isPrivateIp } from './router';
@@ -80,6 +81,9 @@ try {
   logger.error('docker is not ready, so container actions are paused for now', err instanceof Error ? err : new Error(String(err)));
 }
 initStatsCollection();
+startBackgroundLogCollector(docker).catch((err) => {
+  logger.error('failed to start background log collector', err instanceof Error ? err : new Error(String(err)));
+});
 
 // Native SFTP server (replaces the legacy atmoz/sftp sidecar). Started
 // independently so a port conflict doesn't take down the daemon.

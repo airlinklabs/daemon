@@ -19,10 +19,9 @@ import {
 } from '../handlers/docker';
 import { copyIntoVolume, downloadToVolume } from '../handlers/fs';
 import { getInstallStatus, setServerState } from '../handlers/installState';
-import { clearLogHistory, getLogHistory } from '../handlers/logHistory';
+import { clearLogHistory, clearLogBuffer, getLogBuffer, getLogHistory } from '../handlers/logHistory';
 import logger from '../logger';
 import { validateContainerId } from '../validation';
-import { clearLogBuffer, getLogBuffer } from '../ws/server';
 
 // ── Last-used start config cache ─────────────────────────────────────────────
 // Persisted per container so `restart` can replay the exact payload that
