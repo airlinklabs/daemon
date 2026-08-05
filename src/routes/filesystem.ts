@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
+import { apiError } from '../errors';
 import {
   appendChunk,
   getDirSizeForId,
@@ -14,8 +15,31 @@ import {
 } from '../handlers/fs';
 import logger from '../logger';
 import { isPrivateIp } from '../router';
+import {
+  fsAppendBodyCodes,
+  fsAppendBodySchema,
+  fsCreateEmptyBodyCodes,
+  fsCreateEmptyBodySchema,
+  fsMkdirBodyCodes,
+  fsMkdirBodySchema,
+  fsPathOptionalBodyCodes,
+  fsPathOptionalBodySchema,
+  fsPullBodyCodes,
+  fsPullBodySchema,
+  fsRenameBodyCodes,
+  fsRenameBodySchema,
+  fsUnzipBodyCodes,
+  fsUnzipBodySchema,
+  fsUploadBodyCodes,
+  fsUploadBodySchema,
+  fsWriteBodyCodes,
+  fsWriteBodySchema,
+  fsZipBodyCodes,
+  fsZipBodySchema,
+  parseJsonBody,
+} from '../schemas';
 import { jailPath } from '../security/pathJail';
-import { validateContainerId, validateFileName, validatePath } from '../validation';
+import { validateContainerId, validatePath } from '../validation';
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -30,14 +54,14 @@ export async function handleFsList(req: Request): Promise<Response> {
   const path = params.get('path') ?? '/';
   const filter = params.get('filter') ?? undefined;
 
-  if (!id || typeof id !== 'string') return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  if (!id || typeof id !== 'string') return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
 
   try {
     const contents = await listDir(id, path, filter);
     return json(contents);
   } catch (err) {
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }
 
@@ -46,28 +70,28 @@ export async function handleFsSize(req: Request): Promise<Response> {
   const id = params.get('id');
   const path = params.get('path') ?? '/';
 
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
 
   try {
     const size = await getDirSizeForId(id, path);
     return json({ size });
   } catch (err) {
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }
 
 export async function handleFsInfo(req: Request): Promise<Response> {
   const id = new URL(req.url).searchParams.get('id');
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
 
   try {
     const contents = (await listDir(id, '/')) as {
       type: string;
       size: number;
     }[];
-    if (!Array.isArray(contents)) return json({ error: 'could not list directory' }, 500);
+    if (!Array.isArray(contents)) return apiError('internal_error', 'could not list directory', 500);
 
     const totalSize = contents.reduce((a, i) => a + (i.size || 0), 0);
     const fileCount = contents.filter((i) => i.type === 'file').length;
@@ -75,7 +99,7 @@ export async function handleFsInfo(req: Request): Promise<Response> {
 
     return json({ id, totalSize, fileCount, dirCount });
   } catch (err) {
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }
 
@@ -84,38 +108,30 @@ export async function handleFsFileRead(req: Request): Promise<Response> {
   const id = params.get('id');
   const path = params.get('path') ?? '/';
 
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
 
   try {
     const content = await getFileContent(id, path);
     if (content === null) {
-      return json({ error: 'file not found or not a text file' }, 404);
+      return apiError('not_found', 'file not found or not a text file', 404);
     }
     return new Response(content, { headers: { 'Content-Type': 'text/plain' } });
   } catch (err) {
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }
 
 export async function handleFsFileWrite(req: Request): Promise<Response> {
-  let body: { id?: string; path?: string; content?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-
-  const { id, path, content } = body;
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
-  if (!path || !validatePath(path)) return json({ error: 'invalid file path' }, 400);
+  const parsed = await parseJsonBody(req, fsWriteBodySchema, fsWriteBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, path, content } = parsed.data;
 
   try {
     await writeFileContent(id, path, content ?? '');
     return json({ message: 'file content successfully saved' });
   } catch (err) {
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }
 
@@ -124,8 +140,8 @@ export function handleFsDownload(req: Request): Response {
   const id = params.get('id');
   const path = params.get('path') ?? '/';
 
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
 
   try {
     const filePath = getFilePath(id, path);
@@ -137,53 +153,46 @@ export function handleFsDownload(req: Request): Response {
       },
     });
   } catch (err) {
-    return json({ error: err instanceof Error ? err.message : 'file not found' }, 404);
+    return apiError('not_found', err instanceof Error ? err.message : 'file not found', 404);
   }
 }
 
 export async function handleFsPull(req: Request): Promise<Response> {
-  let body: { id?: string; url?: string; path?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id) return json({ error: 'container ID is required' }, 400);
-  if (!body.url || typeof body.url !== 'string') return json({ error: 'URL is required' }, 400);
-  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, fsPullBodySchema, fsPullBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, url, path } = parsed.data;
 
-  let parsed: URL;
+  let parsedUrl: URL;
   try {
-    parsed = new URL(body.url);
+    parsedUrl = new URL(url);
   } catch {
-    return json({ error: 'invalid URL' }, 400);
+    return apiError('invalid_request', 'invalid URL', 400);
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return json({ error: 'only http(s) URLs are allowed' }, 400);
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    return apiError('invalid_request', 'only http(s) URLs are allowed', 400);
   }
-  if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-    return json({ error: 'local URLs are not allowed' }, 400);
+  if (parsedUrl.hostname === 'localhost' || parsedUrl.hostname === '127.0.0.1') {
+    return apiError('invalid_request', 'local URLs are not allowed', 400);
   }
-  if (isPrivateIp(parsed.hostname)) {
-    return json({ error: 'private network URLs are not allowed' }, 400);
+  if (isPrivateIp(parsedUrl.hostname)) {
+    return apiError('invalid_request', 'private network URLs are not allowed', 400);
   }
 
-  const targetDir =
-    body.path && typeof body.path === 'string' && body.path.trim() !== '' ? body.path.trim().replace(/^\/+/, '') : '';
+  const targetDir = path && path.trim() !== '' ? path.trim().replace(/^\/+/, '') : '';
   const resolvedDir = targetDir === '' ? '/' : targetDir;
   if (!validatePath(resolvedDir)) {
-    return json({ error: 'invalid target path' }, 400);
+    return apiError('path_traversal', 'invalid target path', 400);
   }
 
   try {
-    const volumePath = resolve(process.cwd(), `volumes/${body.id}`);
+    const volumePath = resolve(process.cwd(), `volumes/${id}`);
     const resolvedTarget = resolvedDir === '/' ? volumePath : jailPath(volumePath, resolvedDir);
     mkdirSync(resolvedTarget, { recursive: true });
 
-    const fileName = basename(parsed.pathname) || 'download';
+    const fileName = basename(parsedUrl.pathname) || 'download';
     const targetFile = resolve(resolvedTarget, fileName);
     if (!targetFile.startsWith(`${volumePath}/`)) {
-      return json({ error: 'path escapes container volume' }, 400);
+      return apiError('path_traversal', 'path escapes container volume', 400);
     }
 
     const controller = new AbortController();
@@ -192,13 +201,13 @@ export async function handleFsPull(req: Request): Promise<Response> {
     let total = 0;
 
     try {
-      const response = await fetch(body.url, { signal: controller.signal });
+      const response = await fetch(url, { signal: controller.signal });
       if (!response.ok || !response.body) {
-        return json({ error: `remote returned ${response.status}` }, 502);
+        return apiError('internal_error', `remote returned ${response.status}`, 502);
       }
       const contentLength = Number(response.headers.get('content-length') ?? '0');
       if (contentLength > MAX_PULL_BYTES) {
-        return json({ error: 'remote file exceeds the 512MB pull limit' }, 413);
+        return apiError('invalid_request', 'remote file exceeds the 512MB pull limit', 413);
       }
 
       const handle = await Bun.file(targetFile).writer();
@@ -206,7 +215,7 @@ export async function handleFsPull(req: Request): Promise<Response> {
         for await (const chunk of response.body) {
           total += chunk.length;
           if (total > MAX_PULL_BYTES) {
-            return json({ error: 'remote file exceeds the 512MB pull limit' }, 413);
+            return apiError('invalid_request', 'remote file exceeds the 512MB pull limit', 413);
           }
           handle.write(chunk);
         }
@@ -218,8 +227,8 @@ export async function handleFsPull(req: Request): Promise<Response> {
         throw new Error('download interrupted');
       }
     } catch (err) {
-      logger.error(`failed to pull ${body.url}`, err);
-      return json({ error: 'failed to download file from URL' }, 502);
+      logger.error(`failed to pull ${url}`, err);
+      return apiError('internal_error', 'failed to download file from URL', 502);
     } finally {
       clearTimeout(timeout);
     }
@@ -232,107 +241,71 @@ export async function handleFsPull(req: Request): Promise<Response> {
       size: total,
     });
   } catch (err) {
-    logger.error(`error pulling file for container ${body.id}`, err);
-    return json({ error: 'failed to pull file into container volume' }, 500);
+    logger.error(`error pulling file for container ${id}`, err);
+    return apiError('internal_error', 'failed to pull file into container volume', 500);
   }
 }
 
 export async function handleFsRm(req: Request): Promise<Response> {
-  let body: { id?: string; path?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, fsPathOptionalBodySchema, fsPathOptionalBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, path } = parsed.data;
 
   try {
-    await rmPath(body.id, body.path ?? '/');
+    await rmPath(id, path ?? '/');
     return json({ message: 'file/folder successfully removed' });
   } catch (err) {
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }
 
 export async function handleFsZip(req: Request): Promise<Response> {
-  let body: { id?: string; path?: string | string[]; zipname?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, fsZipBodySchema, fsZipBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, path, zipname } = parsed.data;
 
-  const paths = Array.isArray(body.path) ? body.path : [body.path ?? '/'];
+  const paths = Array.isArray(path) ? path : [path ?? '/'];
 
   try {
-    const zipPath = await zipPaths(body.id, paths, body.zipname ?? 'archive');
+    const zipPath = await zipPaths(id, paths, zipname ?? 'archive');
     return json({ message: 'archive created', zipPath });
   } catch (err) {
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }
 
 export async function handleFsUnzip(req: Request): Promise<Response> {
-  let body: { id?: string; path?: string; zipname?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, fsUnzipBodySchema, fsUnzipBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, path, zipname } = parsed.data;
 
   try {
-    await unzipPath(body.id, body.path ?? '/', body.zipname ?? '');
+    await unzipPath(id, path ?? '/', zipname ?? '');
     return json({ message: 'file successfully unzipped' });
   } catch (err) {
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }
 
 export async function handleFsRename(req: Request): Promise<Response> {
-  let body: { id?: string; path?: string; newName?: string; newPath?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, fsRenameBodySchema, fsRenameBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, path, newName, newPath } = parsed.data;
 
-  const newPath = body.newPath ?? body.newName ?? '';
+  const newTarget = newPath ?? newName ?? '';
 
   try {
-    await renameFile(body.id, body.path ?? '/', newPath);
+    await renameFile(id, path ?? '/', newTarget);
     return json({ message: 'file successfully renamed' });
   } catch (err) {
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }
 
 export async function handleFsUpload(req: Request): Promise<Response> {
-  let body: {
-    id?: string;
-    path?: string;
-    fileName?: string;
-    fileContent?: string;
-  };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-
-  const { id, path: relativePath, fileName, fileContent } = body;
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
-  if (!fileName) return json({ error: 'file name is required' }, 400);
-  if (!validateFileName(fileName)) return json({ error: 'invalid file name' }, 400);
-  if (!validatePath(relativePath ?? '')) return json({ error: 'invalid file path' }, 400);
-  if (!fileContent) return json({ error: 'file content is required' }, 400);
+  const parsed = await parseJsonBody(req, fsUploadBodySchema, fsUploadBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, path: relativePath, fileName, fileContent } = parsed.data;
 
   try {
     const targetPath = relativePath === '/' || !relativePath ? fileName : `${relativePath}/${fileName}`;
@@ -344,12 +317,12 @@ export async function handleFsUpload(req: Request): Promise<Response> {
     let content: Buffer;
     if (typeof fileContent === 'string' && fileContent.startsWith('data:')) {
       const match = fileContent.match(/^data:[^;]+;base64,(.+)$/);
-      if (!match?.[1]) return json({ error: 'invalid base64 format' }, 400);
+      if (!match?.[1]) return apiError('invalid_request', 'invalid base64 format', 400);
       content = Buffer.from(match[1], 'base64');
     } else if (typeof fileContent === 'string') {
       content = Buffer.from(fileContent, 'utf8');
     } else {
-      return json({ error: 'unsupported content type' }, 400);
+      return apiError('invalid_request', 'unsupported content type', 400);
     }
 
     await Bun.write(filePath, content);
@@ -360,24 +333,18 @@ export async function handleFsUpload(req: Request): Promise<Response> {
     });
   } catch (err) {
     logger.error('error during file upload', err);
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }
 
 export async function handleFsMkdir(req: Request): Promise<Response> {
-  let body: { id?: string; path?: string; folderName?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  const { id, path: relativePath, folderName } = body;
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, fsMkdirBodySchema, fsMkdirBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, path: relativePath, folderName } = parsed.data;
 
   const name = folderName ?? relativePath ?? '';
-  if (!name) return json({ error: 'folder name is required' }, 400);
-  if (!validatePath(name)) return json({ error: 'invalid folder path' }, 400);
+  if (!name) return apiError('invalid_request', 'folder name is required', 400);
+  if (!validatePath(name)) return apiError('path_traversal', 'invalid folder path', 400);
 
   try {
     const baseDir = resolve(process.cwd(), `volumes/${id}`);
@@ -390,22 +357,14 @@ export async function handleFsMkdir(req: Request): Promise<Response> {
     return json({ message: 'directory successfully created', path: targetPath });
   } catch (err) {
     logger.error('error creating directory', err);
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }
 
 export async function handleFsCreateEmpty(req: Request): Promise<Response> {
-  let body: { id?: string; path?: string; fileName?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-
-  const { id, path: relativePath, fileName } = body;
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
-  if (!fileName) return json({ error: 'file name is required' }, 400);
+  const parsed = await parseJsonBody(req, fsCreateEmptyBodySchema, fsCreateEmptyBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, path: relativePath, fileName } = parsed.data;
 
   try {
     const targetPath = relativePath === '/' || !relativePath ? fileName : `${relativePath}/${fileName}`;
@@ -421,30 +380,14 @@ export async function handleFsCreateEmpty(req: Request): Promise<Response> {
     });
   } catch (err) {
     logger.error('error creating empty file', err);
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }
 
 export async function handleFsAppend(req: Request): Promise<Response> {
-  let body: {
-    id?: string;
-    path?: string;
-    fileName?: string;
-    fileContent?: string;
-    chunkIndex?: number;
-    totalChunks?: number;
-  };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-
-  const { id, path: relativePath, fileName, fileContent, chunkIndex = 0, totalChunks = 1 } = body;
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
-  if (!fileName) return json({ error: 'file name is required' }, 400);
-  if (!fileContent) return json({ error: 'file content is required' }, 400);
+  const parsed = await parseJsonBody(req, fsAppendBodySchema, fsAppendBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, path: relativePath, fileName, fileContent, chunkIndex = 0, totalChunks = 1 } = parsed.data;
 
   try {
     const targetPath = relativePath === '/' || !relativePath ? fileName : `${relativePath}/${fileName}`;
@@ -452,12 +395,12 @@ export async function handleFsAppend(req: Request): Promise<Response> {
     let chunk: Buffer;
     if (typeof fileContent === 'string' && fileContent.startsWith('data:')) {
       const match = fileContent.match(/^data:[^;]+;base64,(.+)$/);
-      if (!match?.[1]) return json({ error: 'invalid base64 format' }, 400);
+      if (!match?.[1]) return apiError('invalid_request', 'invalid base64 format', 400);
       chunk = Buffer.from(match[1], 'base64');
     } else if (typeof fileContent === 'string') {
       chunk = Buffer.from(fileContent, 'utf8');
     } else {
-      return json({ error: 'unsupported content type' }, 400);
+      return apiError('invalid_request', 'unsupported content type', 400);
     }
 
     await appendChunk(id, targetPath, chunk, { chunkIndex, totalChunks });
@@ -470,6 +413,6 @@ export async function handleFsAppend(req: Request): Promise<Response> {
     });
   } catch (err) {
     logger.error('error appending to file', err);
-    return json({ error: err instanceof Error ? err.message : 'unknown error' }, 500);
+    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
   }
 }

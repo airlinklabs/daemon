@@ -1,3 +1,4 @@
+import { apiError } from '../errors';
 import { fetchMinecraftPlayers, isTransientError } from '../handlers/minecraft';
 import logger from '../logger';
 
@@ -24,12 +25,12 @@ export async function handleMinecraftPlayers(req: Request): Promise<Response> {
   const port = params.get('port');
 
   if (!id || !host || !port) {
-    return json({ error: 'container ID, host, and port are required', ...EMPTY_RESPONSE }, 400);
+    return apiError('container_not_found', 'container ID, host, and port are required', 400);
   }
 
   const portNum = parseInt(port, 10);
   if (Number.isNaN(portNum)) {
-    return json({ error: 'port must be a valid number', ...EMPTY_RESPONSE }, 400);
+    return apiError('invalid_request', 'port must be a valid number', 400);
   }
 
   try {
@@ -42,6 +43,6 @@ export async function handleMinecraftPlayers(req: Request): Promise<Response> {
     }
     const msg = err instanceof Error ? err.message : 'unknown error';
     logger.error(`error fetching players for container ${id}`, err);
-    return json({ error: `failed to fetch players: ${msg}`, ...EMPTY_RESPONSE }, 500);
+    return apiError('internal_error', `failed to fetch players: ${msg}`, 500);
   }
 }

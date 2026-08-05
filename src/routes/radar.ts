@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { apiError } from '../errors';
 import { type RadarPattern, type RadarScript, scanVolume } from '../handlers/radar/scan';
 import { type ZipOptions, zipScanVolume } from '../handlers/radar/zip';
 import logger from '../logger';
@@ -50,10 +51,10 @@ const radarZipRequestSchema = z.object({
 async function readJsonRecord(req: Request): Promise<Record<string, unknown> | Response> {
   try {
     const body: unknown = await req.json();
-    if (!isRecord(body)) return json({ error: 'json body must be an object' }, 400);
+    if (!isRecord(body)) return apiError('invalid_request', 'json body must be an object', 400);
     return body;
   } catch {
-    return json({ error: 'invalid json body' }, 400);
+    return apiError('invalid_json', 'invalid json body', 400);
   }
 }
 
@@ -62,7 +63,7 @@ export async function handleRadarScan(req: Request): Promise<Response> {
   if (body instanceof Response) return body;
 
   const parsed = radarScanRequestSchema.safeParse(body);
-  if (!parsed.success) return json({ error: 'valid radar scan request is required' }, 400);
+  if (!parsed.success) return apiError('invalid_request', 'valid radar scan request is required', 400);
   const { id, script } = parsed.data;
 
   try {
@@ -75,7 +76,7 @@ export async function handleRadarScan(req: Request): Promise<Response> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`error scanning container ${id}`, err);
-    return json({ success: false, error: `failed to scan container: ${msg}` }, 500);
+    return apiError('internal_error', `failed to scan container: ${msg}`, 500);
   }
 }
 
@@ -84,7 +85,7 @@ export async function handleRadarZip(req: Request): Promise<Response> {
   if (body instanceof Response) return body;
 
   const parsed = radarZipRequestSchema.safeParse(body);
-  if (!parsed.success) return json({ error: 'valid radar zip request is required' }, 400);
+  if (!parsed.success) return apiError('invalid_request', 'valid radar zip request is required', 400);
   const { id, ...options }: { id: string } & ZipOptions = parsed.data;
 
   try {
@@ -100,6 +101,6 @@ export async function handleRadarZip(req: Request): Promise<Response> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`error zipping container ${id}`, err);
-    return json({ success: false, error: `failed to zip container: ${msg}` }, 500);
+    return apiError('internal_error', `failed to zip container: ${msg}`, 500);
   }
 }

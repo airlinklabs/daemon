@@ -25,7 +25,6 @@ export function assertAuthed(data: WsData): asserts data is WsData & { authed: t
 let openWsCount = 0;
 const MAX_WS = 500;
 const AUTH_TIMEOUT_MS = 10_000;
-const AUTH_TIMEOUT_CLOSE_CODE = 1008;
 
 export const openConnections = new Set<ServerWebSocket<WsData>>();
 
@@ -35,22 +34,13 @@ type IncomingCommand = {
   command?: string;
 };
 
+// Canonical shape per D-005: { event: 'CMD', command: string } only.
+// The args/field fallbacks were undocumented compatibility shims and are gone.
 function extractCommand(msg: IncomingCommand): string | null {
-  // panel specifically sends msg.command, check it first
   if (typeof msg.command === 'string') {
     const trimmed = msg.command.replace(/\r\n?/g, '\n').trim();
     if (trimmed) return trimmed;
   }
-
-  if (Array.isArray(msg.args) && msg.args.length > 0) {
-    const joined = msg.args
-      .map((part) => (typeof part === 'string' ? part.trim() : ''))
-      .filter(Boolean)
-      .join(' ')
-      .trim();
-    if (joined) return joined;
-  }
-
   return null;
 }
 
@@ -69,8 +59,9 @@ function extractAuthKey(msg: IncomingCommand): string | null {
   return null;
 }
 
+// One canonical command event per D-005: 'CMD' (case-insensitive).
 function isCommandEvent(event: string): boolean {
-  return ['cmd', 'command', 'input', 'stdin', 'sendcommand'].includes(event.toLowerCase());
+  return event.toLowerCase() === 'cmd';
 }
 
 function clearAuthTimer(ws: ServerWebSocket<WsData>): void {
@@ -108,16 +99,13 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
     const payload = typeof raw === 'string' ? raw : raw.toString();
     msg = JSON.parse(payload) as IncomingCommand;
   } catch {
-    const fallbackCommand = typeof raw === 'string' ? raw.trim() : raw.toString().trim();
-    if (!fallbackCommand) {
-      ws.send(JSON.stringify({ error: 'invalid json' }));
-      ws.close(1008, 'invalid json');
-      return;
-    }
-    msg = { event: 'CMD', command: fallbackCommand };
+    // no raw-text coercion (D-005) — non-JSON frames are invalid
+    ws.send(JSON.stringify({ error: 'invalid json' }));
+    ws.close(1008, 'invalid json');
+    return;
   }
 
-  const event = (msg.event ?? (extractCommand(msg) ? 'CMD' : '')).trim();
+  const event = (msg.event ?? '').trim();
   const eventName = event.toLowerCase();
 
   if (!event) {

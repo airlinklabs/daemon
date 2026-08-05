@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { create as tarCreate, extract as tarExtract } from 'tar';
+import { apiError } from '../errors';
 import { applyConfigFiles, type ConfigFileEntry } from '../handlers/configFiles';
 import {
   createInstaller,
@@ -19,8 +20,29 @@ import {
 } from '../handlers/docker';
 import { copyIntoVolume, downloadToVolume } from '../handlers/fs';
 import { getInstallStatus, setServerState } from '../handlers/installState';
-import { clearLogHistory, clearLogBuffer, getLogBuffer, getLogHistory } from '../handlers/logHistory';
+import { clearLogBuffer, clearLogHistory, getLogBuffer, getLogHistory } from '../handlers/logHistory';
 import logger from '../logger';
+import {
+  backupBodyCodes,
+  backupBodySchema,
+  backupDeleteBodyCodes,
+  backupDeleteBodySchema,
+  commandBodyCodes,
+  commandBodySchema,
+  containerIdBodyCodes,
+  containerIdBodySchema,
+  installBodyCodes,
+  installBodySchema,
+  installerBodyCodes,
+  installerBodySchema,
+  killDeleteBodyCodes,
+  killDeleteBodySchema,
+  parseJsonBody,
+  restoreBodyCodes,
+  restoreBodySchema,
+  startBodyCodes,
+  startBodySchema,
+} from '../schemas';
 import { validateContainerId } from '../validation';
 
 // ── Last-used start config cache ─────────────────────────────────────────────
@@ -109,10 +131,10 @@ function globToRegExp(glob: string): RegExp {
         c === '$' ||
         c === '|'
       )
-        out += '\\' + c;
+        out += `\\${c}`;
       else out += c;
     }
-    pattern += out + '/?';
+    pattern += `${out}/?`;
   }
   return new RegExp(`^(?:${pattern}|(?:.*/)?${pattern})$`);
 }
@@ -150,23 +172,9 @@ async function saveJson(filePath: string, data: unknown): Promise<void> {
 }
 
 export async function handleContainerInstaller(req: Request): Promise<Response> {
-  let body: {
-    id?: string;
-    script?: string;
-    container?: string;
-    entrypoint?: string;
-    env?: Record<string, string>;
-  };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-
-  const { id, script, container, entrypoint, env } = body;
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
-  if (!script || !container) return json({ error: 'script and container are required' }, 400);
+  const parsed = await parseJsonBody(req, installerBodySchema, installerBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, script, container, entrypoint, env } = parsed.data;
 
   const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
 
@@ -179,26 +187,14 @@ export async function handleContainerInstaller(req: Request): Promise<Response> 
   } catch (error) {
     logger.error('error installing container', error);
     await setServerState(id, 'failed', error instanceof Error ? error.message : String(error));
-    return json({ error: `failed to install container ${id}` }, 500);
+    return apiError('internal_error', `failed to install container ${id}`, 500);
   }
 }
 
 export async function handleContainerInstall(req: Request): Promise<Response> {
-  let body: {
-    id?: string;
-    image?: string;
-    scripts?: unknown[];
-    env?: Record<string, string>;
-  };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-
-  const { id, image, scripts, env } = body;
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, installBodySchema, installBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, image, scripts, env } = parsed.data;
 
   const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
 
@@ -219,21 +215,9 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
 }
 
 export async function handleContainerReinstall(req: Request): Promise<Response> {
-  let body: {
-    id?: string;
-    image?: string;
-    scripts?: unknown[];
-    env?: Record<string, string>;
-  };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-
-  const { id, image, scripts, env } = body;
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, installBodySchema, installBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, image, scripts, env } = parsed.data;
 
   const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
 
@@ -346,8 +330,8 @@ async function performInstall(
 
 export async function handleContainerInstallStatus(_req: Request, params: Record<string, string>): Promise<Response> {
   const id = params.id;
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
 
   const status = await getInstallStatus(id);
   if (!status) return json({ message: `no install state found for container ${id}` }, 404);
@@ -355,28 +339,9 @@ export async function handleContainerInstallStatus(_req: Request, params: Record
 }
 
 export async function handleContainerStart(req: Request): Promise<Response> {
-  let body: {
-    id?: string;
-    image?: string;
-    ports?: string;
-    env?: Record<string, string>;
-    Memory?: number;
-    Cpu?: number;
-    Storage?: number;
-    Swap?: number;
-    StartCommand?: string;
-    mounts?: { source: string; target: string; readOnly?: boolean }[];
-    configFiles?: Record<string, ConfigFileEntry>;
-  };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-
-  const { id, image, ports, env, Memory, Cpu, Storage, Swap, StartCommand, mounts, configFiles } = body;
-  if (!id || !image) return json({ error: 'container ID and image are required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, startBodySchema, startBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, image, ports, env, Memory, Cpu, Storage, Swap, StartCommand, mounts, configFiles } = parsed.data;
 
   const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
 
@@ -433,25 +398,20 @@ export async function handleContainerStart(req: Request): Promise<Response> {
     logger.error('error starting container', error);
     const detail = String((error as Error).message ?? error);
     if (/port is already allocated|already in use|EADDRINUSE/i.test(detail)) {
-      return json({ error: 'port conflict', detail }, 409);
+      return apiError('port_conflict', 'port conflict', 409, detail);
     }
-    return json({ error: 'failed to start container', detail }, 500);
+    return apiError('internal_error', 'failed to start container', 500, detail);
   }
 }
 
 export async function handleContainerRestart(req: Request): Promise<Response> {
-  let body: { id?: string; stopCmd?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, containerIdBodySchema, containerIdBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const body = parsed.data;
 
   const cached = await loadStartConfig(body.id);
   if (!cached) {
-    return json({ error: `no cached start config for container ${body.id}, start it first` }, 404);
+    return apiError('container_not_found', `no cached start config for container ${body.id}, start it first`, 404);
   }
 
   try {
@@ -476,122 +436,94 @@ export async function handleContainerRestart(req: Request): Promise<Response> {
     logger.error('error restarting container', error);
     const message = error instanceof Error ? error.message : String(error);
     if (/port is already allocated|already in use|EADDRINUSE/i.test(message)) {
-      return json({ error: 'port conflict', detail: message }, 409);
+      return apiError('port_conflict', 'port conflict', 409, message);
     }
-    return json({ error: `failed to restart container ${body.id}`, detail: message }, 500);
+    return apiError('internal_error', `failed to restart container ${body.id}`, 500, message);
   }
 }
 
 export async function handleContainerStop(req: Request): Promise<Response> {
-  let body: { id?: string; stopCmd?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, containerIdBodySchema, containerIdBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const body = parsed.data;
 
   try {
     await stopContainer(body.id, body.stopCmd);
     return json({ message: `container ${body.id} stopped successfully` });
   } catch (err) {
     logger.error('error stopping container', err);
-    return json({ error: `failed to stop container ${body.id}` }, 500);
+    return apiError('internal_error', `failed to stop container ${body.id}`, 500);
   }
 }
 
 export async function handleContainerKill(req: Request): Promise<Response> {
   // DELETE with JSON body — intentional, the panel sends it this way
-  let body: { id?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id || !validateContainerId(body.id)) return json({ error: 'valid container ID required' }, 400);
+  const parsed = await parseJsonBody(req, killDeleteBodySchema, killDeleteBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id } = parsed.data;
 
   try {
-    await killContainer(body.id);
-    return json({ message: `container ${body.id} killed` });
+    await killContainer(id);
+    return json({ message: `container ${id} killed` });
   } catch (err) {
     logger.error('error killing container', err);
-    return json({ error: `failed to kill container ${body.id}` }, 500);
+    return apiError('internal_error', `failed to kill container ${id}`, 500);
   }
 }
 
 export async function handleContainerCommand(req: Request): Promise<Response> {
-  let body: { id?: string; command?: string; args?: string[]; data?: unknown; value?: unknown; payload?: unknown };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id || !validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, commandBodySchema, commandBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, command } = parsed.data;
 
-  const commandCandidate =
-    typeof body.command === 'string'
-      ? body.command
-      : typeof body.data === 'string'
-        ? body.data
-        : typeof body.value === 'string'
-          ? body.value
-          : typeof body.payload === 'string'
-            ? body.payload
-            : typeof body.args?.[0] === 'string'
-              ? body.args[0]
-              : '';
-
-  const command = commandCandidate.replace(/\r\n?/g, '\n').trim();
-  if (!command) return json({ error: 'container command is required' }, 400);
+  // Canonical shape per D-005: { id, command } only. The data/value/payload/args
+  // fallbacks were undocumented compatibility shims and are gone.
+  const normalized = (command ?? '').replace(/\r\n?/g, '\n').trim();
+  if (!normalized) return apiError('invalid_request', 'container command is required', 400);
 
   try {
-    await sendCommandToContainer(body.id, command);
-    return json({ message: `command sent to container ${body.id}` });
+    await sendCommandToContainer(id, normalized);
+    return json({ message: `command sent to container ${id}` });
   } catch (err) {
     logger.error('error sending command', err);
-    return json({ error: `failed to send command to container ${body.id}` }, 500);
+    return apiError('internal_error', `failed to send command to container ${id}`, 500);
   }
 }
 
 export async function handleContainerDelete(req: Request): Promise<Response> {
-  let body: { id?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id || !validateContainerId(body.id)) return json({ error: 'valid container ID required' }, 400);
+  const parsed = await parseJsonBody(req, killDeleteBodySchema, killDeleteBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id } = parsed.data;
 
   try {
-    await deleteContainerAndVolume(body.id);
-    clearLogHistory(body.id);
-    return json({ message: `container ${body.id} deleted` });
+    await deleteContainerAndVolume(id);
+    clearLogHistory(id);
+    return json({ message: `container ${id} deleted` });
   } catch (err) {
     logger.error('error deleting container', err);
-    return json({ error: `failed to delete container ${body.id}` }, 500);
+    return apiError('internal_error', `failed to delete container ${id}`, 500);
   }
 }
 
 export async function handleContainerLogs(_req: Request, params: Record<string, string>): Promise<Response> {
   const { id } = params;
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
   return json({ lines: getLogBuffer(id) });
 }
 
 export async function handleContainerLogHistory(req: Request): Promise<Response> {
   const id = new URL(req.url).searchParams.get('id');
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
   const logs = await getLogHistory(id);
   return json({ containerId: id, logs });
 }
 
 export async function handleContainerStatus(req: Request): Promise<Response> {
   const id = new URL(req.url).searchParams.get('id');
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
 
   try {
     const knownRunning = isContainerRunning(id);
@@ -616,14 +548,14 @@ export async function handleContainerStatus(req: Request): Promise<Response> {
     });
   } catch (err) {
     logger.error('error getting container status', err);
-    return json({ error: `failed to get status for container ${id}` }, 500);
+    return apiError('internal_error', `failed to get status for container ${id}`, 500);
   }
 }
 
 export async function handleContainerStats(req: Request): Promise<Response> {
   const id = new URL(req.url).searchParams.get('id');
-  if (!id) return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
 
   try {
     const stats = await getContainerStats(id);
@@ -631,23 +563,17 @@ export async function handleContainerStats(req: Request): Promise<Response> {
     return json(stats);
   } catch (err) {
     logger.error('error getting container stats', err);
-    return json({ error: `failed to get stats for container ${id}` }, 500);
+    return apiError('internal_error', `failed to get stats for container ${id}`, 500);
   }
 }
 
 export async function handleContainerBackup(req: Request): Promise<Response> {
-  let body: { id?: string; name?: string; ignore?: string[] };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id) return json({ error: 'container ID is required' }, 400);
-  if (!body.name) return json({ error: 'backup name is required' }, 400);
-  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, backupBodySchema, backupBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const body = parsed.data;
 
   const volumePath = resolve(process.cwd(), `volumes/${body.id}`);
-  if (!existsSync(volumePath)) return json({ error: 'container volume not found' }, 404);
+  if (!existsSync(volumePath)) return apiError('container_not_found', 'container volume not found', 404);
 
   try {
     const backupsDir = resolve(process.cwd(), 'backups', body.id);
@@ -700,31 +626,24 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
     });
   } catch (err) {
     logger.error(`error creating backup for container ${body.id}`, err);
-    return json(
-      {
-        error: `failed to create backup: ${err instanceof Error ? err.message : 'unknown error'}`,
-      },
+    return apiError(
+      'internal_error',
+      `failed to create backup: ${err instanceof Error ? err.message : 'unknown error'}`,
       500,
     );
   }
 }
 
 export async function handleContainerRestore(req: Request): Promise<Response> {
-  let body: { id?: string; backupPath?: string; checksum?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.id) return json({ error: 'container ID is required' }, 400);
-  if (!body.backupPath || typeof body.backupPath !== 'string') return json({ error: 'backup path is required' }, 400);
-  if (!validateContainerId(body.id)) return json({ error: 'invalid container ID' }, 400);
+  const parsed = await parseJsonBody(req, restoreBodySchema, restoreBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const body = parsed.data;
 
   // constrain path to the backups directory for this container
   const allowedBackupsDir = resolve(process.cwd(), 'backups', body.id);
   const fullPath = resolve(process.cwd(), body.backupPath);
-  if (!fullPath.startsWith(`${allowedBackupsDir}/`)) return json({ error: 'invalid backup path' }, 400);
-  if (!existsSync(fullPath)) return json({ error: 'backup file not found' }, 404);
+  if (!fullPath.startsWith(`${allowedBackupsDir}/`)) return apiError('path_traversal', 'invalid backup path', 400);
+  if (!existsSync(fullPath)) return apiError('not_found', 'backup file not found', 404);
 
   // verify integrity before touching the volume
   if (typeof body.checksum === 'string' && body.checksum.length > 0) {
@@ -739,11 +658,11 @@ export async function handleContainerRestore(req: Request): Promise<Response> {
       }
       const actual = hash.digest('hex');
       if (actual !== body.checksum) {
-        return json({ error: 'backup checksum mismatch, refusing to restore' }, 422);
+        return apiError('checksum_mismatch', 'backup checksum mismatch, refusing to restore', 422);
       }
     } catch (err) {
       logger.error(`error verifying checksum for ${fullPath}`, err);
-      return json({ error: 'failed to verify backup checksum' }, 500);
+      return apiError('internal_error', 'failed to verify backup checksum', 500);
     }
   }
 
@@ -768,38 +687,32 @@ export async function handleContainerRestore(req: Request): Promise<Response> {
     return json({ success: true, message: 'Backup restored successfully' });
   } catch (err) {
     logger.error(`error restoring backup for container ${body.id}`, err);
-    return json(
-      {
-        error: `failed to restore backup: ${err instanceof Error ? err.message : 'unknown error'}`,
-      },
+    return apiError(
+      'internal_error',
+      `failed to restore backup: ${err instanceof Error ? err.message : 'unknown error'}`,
       500,
     );
   }
 }
 
 export async function handleContainerBackupDelete(req: Request): Promise<Response> {
-  let body: { backupPath?: string };
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return json({ error: 'invalid json body' }, 400);
-  }
-  if (!body.backupPath || typeof body.backupPath !== 'string') return json({ error: 'backup path is required' }, 400);
+  const parsed = await parseJsonBody(req, backupDeleteBodySchema, backupDeleteBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const body = parsed.data;
 
   const allowedBackupsRoot = resolve(process.cwd(), 'backups');
   const fullPath = resolve(process.cwd(), body.backupPath);
-  if (!fullPath.startsWith(`${allowedBackupsRoot}/`)) return json({ error: 'invalid backup path' }, 400);
-  if (!existsSync(fullPath)) return json({ error: 'backup file not found' }, 404);
+  if (!fullPath.startsWith(`${allowedBackupsRoot}/`)) return apiError('path_traversal', 'invalid backup path', 400);
+  if (!existsSync(fullPath)) return apiError('not_found', 'backup file not found', 404);
 
   try {
     unlinkSync(fullPath);
     return json({ success: true, message: 'Backup deleted successfully' });
   } catch (err) {
     logger.error('error deleting backup', err);
-    return json(
-      {
-        error: `failed to delete backup: ${err instanceof Error ? err.message : 'unknown error'}`,
-      },
+    return apiError(
+      'internal_error',
+      `failed to delete backup: ${err instanceof Error ? err.message : 'unknown error'}`,
       500,
     );
   }
@@ -809,12 +722,12 @@ export function handleContainerBackupDownload(req: Request): Response {
   const params = new URL(req.url).searchParams;
   const backupPath = params.get('backupPath');
 
-  if (!backupPath || typeof backupPath !== 'string') return json({ error: 'backup path is required' }, 400);
+  if (!backupPath || typeof backupPath !== 'string') return apiError('invalid_request', 'backup path is required', 400);
 
   const allowedBackupsRoot = resolve(process.cwd(), 'backups');
   const fullPath = resolve(process.cwd(), backupPath);
-  if (!fullPath.startsWith(`${allowedBackupsRoot}/`)) return json({ error: 'invalid backup path' }, 400);
-  if (!existsSync(fullPath)) return json({ error: 'backup file not found' }, 404);
+  if (!fullPath.startsWith(`${allowedBackupsRoot}/`)) return apiError('path_traversal', 'invalid backup path', 400);
+  if (!existsSync(fullPath)) return apiError('not_found', 'backup file not found', 404);
 
   const fileName = basename(fullPath);
 
@@ -831,9 +744,9 @@ export async function handleContainerBackupUpload(req: Request): Promise<Respons
   const id = params.get('id');
   const backupUuid = params.get('backupUuid');
 
-  if (!id || typeof id !== 'string') return json({ error: 'container ID is required' }, 400);
-  if (!validateContainerId(id)) return json({ error: 'invalid container ID' }, 400);
-  if (!backupUuid || typeof backupUuid !== 'string') return json({ error: 'backup UUID is required' }, 400);
+  if (!id || typeof id !== 'string') return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
+  if (!backupUuid || typeof backupUuid !== 'string') return apiError('invalid_request', 'backup UUID is required', 400);
 
   try {
     const backupsDir = resolve(process.cwd(), 'backups', id);
@@ -842,7 +755,7 @@ export async function handleContainerBackupUpload(req: Request): Promise<Respons
     const backupFileName = `${backupUuid}.tar.gz`;
     const backupPath = join(backupsDir, backupFileName);
 
-    if (!req.body) return json({ error: 'request body is required' }, 400);
+    if (!req.body) return apiError('invalid_request', 'request body is required', 400);
     await Bun.write(backupPath, new Response(req.body));
 
     return json({
@@ -852,10 +765,9 @@ export async function handleContainerBackupUpload(req: Request): Promise<Respons
     });
   } catch (err) {
     logger.error('error uploading backup', err);
-    return json(
-      {
-        error: `failed to upload backup: ${err instanceof Error ? err.message : 'unknown error'}`,
-      },
+    return apiError(
+      'internal_error',
+      `failed to upload backup: ${err instanceof Error ? err.message : 'unknown error'}`,
       500,
     );
   }

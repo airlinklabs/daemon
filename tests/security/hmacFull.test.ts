@@ -1,10 +1,14 @@
-import { describe, expect, test, beforeEach } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { verifyHmac, checkBasicAuth, getAllowedIpCheck, withSecurityHeaders } from '../../src/security/hmac';
 
 const TEST_KEY = 'test-secret-daemon-key-123456';
 
-function sign(key: string, method: string, path: string, body: string, ts: number, nonce: string): string {
-  const payload = `${ts}:${nonce}:${method.toUpperCase()}:${path}:${body}`;
+function digestHex(data: string): string {
+  return new Bun.CryptoHasher('sha256').update(data).digest('hex');
+}
+
+function sign(key: string, method: string, path: string, bodyRepr: string, ts: number, nonce: string): string {
+  const payload = `${ts}:${nonce}:${method.toUpperCase()}:${path}:${bodyRepr}`;
   return new Bun.CryptoHasher('sha256', key).update(payload).digest('hex');
 }
 
@@ -16,83 +20,95 @@ function createRequest(method: string, path: string, body = '', headers: Record<
   });
 }
 
-describe('HMAC verification — brute force resistance', () => {
+function signedRequest(
+  method: string,
+  path: string,
+  body = '',
+  key = TEST_KEY,
+  ts = Math.floor(Date.now() / 1000),
+  nonce = `nonce-${Math.random().toString(36).slice(2)}`,
+  headers: Record<string, string> = {},
+): Request {
+  const bodyRepr = body.length > 0 ? `digest:${digestHex(body)}` : '';
+  const sig = sign(key, method, path, bodyRepr, ts, nonce);
+  return createRequest(method, path, body, {
+    'x-airlink-timestamp': String(ts),
+    'x-airlink-signature': sig,
+    'x-airlink-nonce': nonce,
+    'x-airlink-payload-version': '1',
+    ...(bodyRepr ? { 'x-airlink-digest': `sha256:${digestHex(body)}` } : {}),
+    ...headers,
+  });
+}
+
+const ROUTE = (method: string, path: string): string => `${method} ${path}`;
+
+describe('HMAC verification — brute force resistance (protocol v1)', () => {
+  test('signature matches the known-answer vector shared with the panel test suite', () => {
+    // cross-repo parity: panel tests/hmac.test.ts asserts the same payload +
+    // signature — if the signing format drifts on either side this fails
+    const body = '{"id":"test"}';
+    const ts = 1700000000;
+    const nonce = 'nonce';
+    const bodyRepr = `digest:${digestHex(body)}`;
+    const sig = sign('test-secret-key-12345', 'POST', '/container/start', bodyRepr, ts, nonce);
+    expect(bodyRepr).toBe('digest:665c531373a4d3427505587923a4f15ac573fb8e96b1f983ec1d6eacdfa4334c');
+    expect(sig).toBe('07dc58d6643f3b31e3dad065dc7565aa5fc56f82d3c656b3fcc451f6efc059b8');
+  });
+
   test('rejects request with no HMAC headers', async () => {
     const req = createRequest('GET', '/stats');
-    const result = await verifyHmac(req, TEST_KEY);
+    const result = await verifyHmac(req, TEST_KEY, ROUTE('GET', '/stats'));
     expect(result).not.toBeNull();
     expect(result!.status).toBe(401);
   });
 
   test('rejects request with only timestamp header', async () => {
     const req = createRequest('GET', '/stats', '', { 'x-airlink-timestamp': String(Date.now()) });
-    const result = await verifyHmac(req, TEST_KEY);
+    const result = await verifyHmac(req, TEST_KEY, ROUTE('GET', '/stats'));
     expect(result).not.toBeNull();
   });
 
   test('rejects request with only signature header', async () => {
     const req = createRequest('GET', '/stats', '', { 'x-airlink-signature': 'abc' });
-    const result = await verifyHmac(req, TEST_KEY);
+    const result = await verifyHmac(req, TEST_KEY, ROUTE('GET', '/stats'));
     expect(result).not.toBeNull();
   });
 
   test('rejects expired timestamp (>30s drift)', async () => {
     const ts = Math.floor(Date.now() / 1000) - 61;
-    const nonce = 'expired-nonce';
-    const sig = sign(TEST_KEY, 'GET', '/stats', '', ts, nonce);
-    const req = createRequest('GET', '/stats', '', {
-      'x-airlink-timestamp': String(ts),
-      'x-airlink-signature': sig,
-      'x-airlink-nonce': nonce,
-    });
-    expect((await verifyHmac(req, TEST_KEY))!.status).toBe(401);
+    const req = signedRequest('GET', '/stats', '', TEST_KEY, ts, 'expired-nonce');
+    expect((await verifyHmac(req, TEST_KEY, ROUTE('GET', '/stats')))!.status).toBe(401);
   });
 
   test('rejects future timestamp (>30s drift)', async () => {
     const ts = Math.floor(Date.now() / 1000) + 61;
-    const nonce = 'future-nonce';
-    const sig = sign(TEST_KEY, 'GET', '/stats', '', ts, nonce);
-    const req = createRequest('GET', '/stats', '', {
-      'x-airlink-timestamp': String(ts),
-      'x-airlink-signature': sig,
-      'x-airlink-nonce': nonce,
-    });
-    expect((await verifyHmac(req, TEST_KEY))!.status).toBe(401);
+    const req = signedRequest('GET', '/stats', '', TEST_KEY, ts, 'future-nonce');
+    expect((await verifyHmac(req, TEST_KEY, ROUTE('GET', '/stats')))!.status).toBe(401);
   });
 
   test('rejects non-numeric timestamp', async () => {
-    const nonce = 'bad-ts';
-    const sig = sign(TEST_KEY, 'GET', '/stats', '', 12345, nonce);
-    const req = createRequest('GET', '/stats', '', {
+    const req = signedRequest('GET', '/stats', '', TEST_KEY, Math.floor(Date.now() / 1000), 'bad-ts', {
       'x-airlink-timestamp': 'not-a-number',
-      'x-airlink-signature': sig,
-      'x-airlink-nonce': nonce,
     });
-    expect((await verifyHmac(req, TEST_KEY))!.status).toBe(401);
+    expect((await verifyHmac(req, TEST_KEY, ROUTE('GET', '/stats')))!.status).toBe(401);
   });
 
   test('rejects wrong key', async () => {
-    const ts = Math.floor(Date.now() / 1000);
-    const nonce = 'wrong-key';
-    const sig = sign('wrong-key-1234567890123456', 'GET', '/stats', '', ts, nonce);
-    const req = createRequest('GET', '/stats', '', {
-      'x-airlink-timestamp': String(ts),
-      'x-airlink-signature': sig,
-      'x-airlink-nonce': nonce,
-    });
-    expect((await verifyHmac(req, TEST_KEY))!.status).toBe(401);
+    const req = signedRequest('GET', '/stats', '', 'wrong-key-1234567890123456');
+    expect((await verifyHmac(req, TEST_KEY, ROUTE('GET', '/stats')))!.status).toBe(401);
   });
 
-  test('rejects tampered body', async () => {
+  test('rejects tampered body even with a validly signed digest', async () => {
     const ts = Math.floor(Date.now() / 1000);
-    const nonce = 'tamper-body';
-    const sig = sign(TEST_KEY, 'POST', '/container/start', '{"id":"abc"}', ts, nonce);
-    const req = createRequest('POST', '/container/start', '{"id":"hacked"}', {
-      'x-airlink-timestamp': String(ts),
-      'x-airlink-signature': sig,
-      'x-airlink-nonce': nonce,
-    });
-    expect((await verifyHmac(req, TEST_KEY))!.status).toBe(401);
+    // signature covers digest:sha256 of the *original* body
+    const req = signedRequest('POST', '/container/start', '{"id":"abc"}', TEST_KEY, ts, 'tamper-body');
+    // attacker swaps the body, keeps all headers
+    const hacked = createRequest('POST', '/container/start', '{"id":"hacked"}');
+    for (const [name, value] of req.headers.entries()) {
+      if (value !== null) hacked.headers.set(name, value);
+    }
+    expect((await verifyHmac(hacked, TEST_KEY, ROUTE('POST', '/container/start')))!.status).toBe(401);
   });
 
   test('rejects tampered path', async () => {
@@ -103,8 +119,9 @@ describe('HMAC verification — brute force resistance', () => {
       'x-airlink-timestamp': String(ts),
       'x-airlink-signature': sig,
       'x-airlink-nonce': nonce,
+      'x-airlink-payload-version': '1',
     });
-    expect((await verifyHmac(req, TEST_KEY))!.status).toBe(401);
+    expect((await verifyHmac(req, TEST_KEY, ROUTE('GET', '/healthz')))!.status).toBe(401);
   });
 
   test('rejects tampered method', async () => {
@@ -115,62 +132,54 @@ describe('HMAC verification — brute force resistance', () => {
       'x-airlink-timestamp': String(ts),
       'x-airlink-signature': sig,
       'x-airlink-nonce': nonce,
+      'x-airlink-payload-version': '1',
     });
-    expect((await verifyHmac(req, TEST_KEY))!.status).toBe(401);
+    expect((await verifyHmac(req, TEST_KEY, ROUTE('DELETE', '/test')))!.status).toBe(401);
   });
 
   test('rejects missing nonce', async () => {
-    const ts = Math.floor(Date.now() / 1000);
-    const sig = sign(TEST_KEY, 'GET', '/stats', '', ts, '');
-    const req = createRequest('GET', '/stats', '', {
-      'x-airlink-timestamp': String(ts),
-      'x-airlink-signature': sig,
-    });
-    expect((await verifyHmac(req, TEST_KEY))!.status).toBe(401);
+    const req = signedRequest('GET', '/stats', '', TEST_KEY, Math.floor(Date.now() / 1000), '');
+    req.headers.delete('x-airlink-nonce');
+    expect((await verifyHmac(req, TEST_KEY, ROUTE('GET', '/stats')))!.status).toBe(401);
   });
 
   test('rejects replayed nonce', async () => {
     const ts = Math.floor(Date.now() / 1000);
     const nonce = 'replay-this';
-    const sig = sign(TEST_KEY, 'POST', '/container/start', '', ts, nonce);
+    const req1 = signedRequest('POST', '/container/start', '', TEST_KEY, ts, nonce);
+    expect(await verifyHmac(req1, TEST_KEY, ROUTE('POST', '/container/start'))).toBeNull(); // first use OK
 
-    const req1 = createRequest('POST', '/container/start', '', {
-      'x-airlink-timestamp': String(ts),
-      'x-airlink-signature': sig,
-      'x-airlink-nonce': nonce,
-    });
-    expect(await verifyHmac(req1, TEST_KEY)).toBeNull(); // first use OK
-
-    const req2 = createRequest('POST', '/container/start', '', {
-      'x-airlink-timestamp': String(ts),
-      'x-airlink-signature': sig,
-      'x-airlink-nonce': nonce,
-    });
-    expect((await verifyHmac(req2, TEST_KEY))!.status).toBe(401); // replay blocked
+    const req2 = signedRequest('POST', '/container/start', '', TEST_KEY, ts, nonce);
+    expect((await verifyHmac(req2, TEST_KEY, ROUTE('POST', '/container/start')))!.status).toBe(401); // replay blocked
   });
 
   test('rejects invalid hex signature', async () => {
-    const ts = Math.floor(Date.now() / 1000);
-    const nonce = 'invalid-hex';
-    const req = createRequest('GET', '/stats', '', {
-      'x-airlink-timestamp': String(ts),
+    const req = signedRequest('GET', '/stats', '', TEST_KEY, Math.floor(Date.now() / 1000), 'invalid-hex', {
       'x-airlink-signature': 'not-valid-hex',
-      'x-airlink-nonce': nonce,
     });
-    expect((await verifyHmac(req, TEST_KEY))!.status).toBe(401);
+    expect((await verifyHmac(req, TEST_KEY, ROUTE('GET', '/stats')))!.status).toBe(401);
   });
 
-  test('accepts valid request', async () => {
-    const ts = Math.floor(Date.now() / 1000);
-    const nonce = 'valid-request';
-    const body = '{"id":"test-123"}';
-    const sig = sign(TEST_KEY, 'POST', '/container/start', body, ts, nonce);
-    const req = createRequest('POST', '/container/start', body, {
-      'x-airlink-timestamp': String(ts),
-      'x-airlink-signature': sig,
-      'x-airlink-nonce': nonce,
-    });
-    expect(await verifyHmac(req, TEST_KEY)).toBeNull();
+  test('rejects missing payload version', async () => {
+    const req = signedRequest('GET', '/stats', '', TEST_KEY, Math.floor(Date.now() / 1000), 'no-version');
+    req.headers.delete('x-airlink-payload-version');
+    expect((await verifyHmac(req, TEST_KEY, ROUTE('GET', '/stats')))!.status).toBe(401);
+  });
+
+  test('rejects unsupported payload version', async () => {
+    const req = signedRequest('GET', '/stats', '', TEST_KEY, Math.floor(Date.now() / 1000), 'ver-2');
+    req.headers.set('x-airlink-payload-version', '2');
+    expect((await verifyHmac(req, TEST_KEY, ROUTE('GET', '/stats')))!.status).toBe(401);
+  });
+
+  test('accepts valid request with body digest', async () => {
+    const req = signedRequest('POST', '/container/start', '{"id":"test-123"}', TEST_KEY);
+    expect(await verifyHmac(req, TEST_KEY, ROUTE('POST', '/container/start'))).toBeNull();
+  });
+
+  test('accepts valid request with empty body', async () => {
+    const req = signedRequest('POST', '/container/start', '', TEST_KEY);
+    expect(await verifyHmac(req, TEST_KEY, ROUTE('POST', '/container/start'))).toBeNull();
   });
 });
 

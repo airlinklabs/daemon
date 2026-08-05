@@ -27,7 +27,7 @@ describe('radar route contracts', () => {
     const response = await handleRadarScan(postJson([]));
 
     expect(response.status).toBe(400);
-    expect(await responseJson(response)).toEqual({ error: 'json body must be an object' });
+    expect(await responseJson(response)).toEqual({ error: 'json body must be an object', code: 'invalid_request', status: 400 });
   });
 
   test('requires a valid radar script shape', async () => {
@@ -39,7 +39,7 @@ describe('radar route contracts', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await responseJson(response)).toEqual({ error: 'valid radar scan request is required' });
+    expect(await responseJson(response)).toEqual({ error: 'valid radar scan request is required', code: 'invalid_request', status: 400 });
   });
 
   test('rejects invalid zip include folders', async () => {
@@ -51,7 +51,7 @@ describe('radar route contracts', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await responseJson(response)).toEqual({ error: 'valid radar zip request is required' });
+    expect(await responseJson(response)).toEqual({ error: 'valid radar zip request is required', code: 'invalid_request', status: 400 });
   });
 
   test('rejects zip size limits outside the contract', async () => {
@@ -63,6 +63,6 @@ describe('radar route contracts', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await responseJson(response)).toEqual({ error: 'valid radar zip request is required' });
+    expect(await responseJson(response)).toEqual({ error: 'valid radar zip request is required', code: 'invalid_request', status: 400 });
   });
 });

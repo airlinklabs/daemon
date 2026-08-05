@@ -1,5 +1,6 @@
 import config from './config';
 import { apiError } from './errors';
+import { maxBodyBytesFor } from './limits';
 import logger from './logger';
 import { handleRoot, handleStats } from './routes/core';
 import {
@@ -45,8 +46,6 @@ import { handleRadarScan, handleRadarZip } from './routes/radar';
 import { handleSftpActivity, handleSftpCreate, handleSftpRevoke, handleSftpStatus } from './routes/sftp';
 import { checkBasicAuth, getAllowedIpCheck, verifyHmac, withSecurityHeaders } from './security/hmac';
 import { checkRateLimit } from './security/rateLimit';
-
-const MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024;
 
 type Handler = (req: Request, params: Record<string, string>) => Promise<Response> | Response;
 
@@ -130,7 +129,7 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
   };
 
   const contentLength = parseInt(req.headers.get('content-length') ?? '0', 10);
-  if (contentLength > MAX_REQUEST_BODY_BYTES) {
+  if (contentLength > maxBodyBytesFor(key)) {
     return finish(apiError('request_too_large', 'request too large', 413));
   }
 
@@ -161,7 +160,7 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
   const authErr = checkBasicAuth(req, config.key);
   if (authErr) return finish(authErr);
 
-  const hmacErr = await verifyHmac(req, config.key);
+  const hmacErr = await verifyHmac(req, config.key, key);
   if (hmacErr) return finish(hmacErr);
 
   const rlErr = checkRateLimit(effectiveIp);
