@@ -19,6 +19,7 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  realpathSync,
   renameSync,
   rmdirSync,
   statSync,
@@ -26,7 +27,7 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import type { Attributes, Connection, FileEntry, Session, SFTPWrapper } from 'ssh2';
 import { Server, utils } from 'ssh2';
 import config from '../config';
@@ -204,6 +205,32 @@ export function getActiveSessionCount(): number {
   return sessions.size;
 }
 
+export type SftpAuthOutcome =
+  | { ok: true; session: NativeSftpSession }
+  | { ok: false; reason: 'invalid_credential' | 'expired' | 'invalid_password' };
+
+// Pure, unit-testable authentication decision. The ssh2 connection handler
+// delegates here so the login rules — existence, expiry, and a timing-safe
+// password comparison — are exercised without requiring a live TCP server.
+export function authenticateSftpSession(username: string, password: string, now: number = Date.now()): SftpAuthOutcome {
+  const session = sessions.get(username);
+  if (!session || !password) {
+    // Absent session or missing password: fall through without logging, so we
+    // do not disclose whether a username exists (enumeration hardening).
+    return { ok: false, reason: 'invalid_credential' };
+  }
+  if (now > session.expiresAt) {
+    // Expired credentials are removed so a stale password can never resurface.
+    sessions.delete(username);
+    sessionByServer.delete(session.serverId);
+    return { ok: false, reason: 'expired' };
+  }
+  if (!timingSafeEq(session.passwordHash, hashPassword(password))) {
+    return { ok: false, reason: 'invalid_password' };
+  }
+  return { ok: true, session };
+}
+
 // gone the panel wires a hook (P3-4 auditing) attached to any live session
 // for a given server. used by the daemon when an SFTP activity reporter is
 // configured; returns false when no session exists yet.
@@ -225,7 +252,6 @@ const NO_SUCH_FILE = 2;
 const PERMISSION_DENIED = 3;
 const FAILURE = 4;
 
-const SSH_FXF_READ = 0x00000001;
 const SSH_FXF_WRITE = 0x00000002;
 const SSH_FXF_APPEND = 0x00000004;
 const SSH_FXF_CREAT = 0x00000008;
@@ -238,11 +264,36 @@ function toStatus(err: unknown): number {
   return FAILURE;
 }
 
-function rooted(base: string, remote: string): string {
+export function rooted(base: string, remote: string): string {
   // SFTP always sends rooted paths; strip the leading slash and jail.
   const rel = remote.replace(/^\/+/, '');
   if (rel === '') return base;
-  return jailPath(base, rel);
+
+  const jailed = jailPath(base, rel);
+
+  // jailPath resolves the PARENT directory against the real volume root, but it
+  // leaves the FINAL path component for the following syscall to follow. A
+  // final-component symlink pointing outside the volume (e.g. a link to
+  // /etc/hostname) would otherwise be followed on open/read/write, escaping the
+  // jail entirely. Resolve the whole path ourselves and reject any outcome that
+  // lands outside the real volume root.
+  let resolved: string;
+  try {
+    resolved = realpathSync(jailed);
+  } catch {
+    // Dangling or not-yet-created final component (typical for new writes). The
+    // parent was already bounded by jailPath, so the path is still in-jail.
+    return jailed;
+  }
+  const realBase = realpathSync(base);
+  if (resolved !== realBase && !resolved.startsWith(realBase + sep)) {
+    throw new Error(`symlink escapes volume boundary: ${rel}`);
+  }
+
+  // Keep returning the jailed (symlink) path, not its realpath, so activity
+  // paths and longnames keep the name the client actually addressed while the
+  // boundary check above guarantees following it cannot leave the volume.
+  return jailed;
 }
 
 function toAttributes(st: unknown): Attributes {
@@ -292,6 +343,28 @@ function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSession):
     if (session.hook) session.hook(full);
   };
 
+  // Track this session's open file descriptors so they are closed on an abnormal
+  // disconnect. Without this, a client that drops the TCP connection without
+  // sending CLOSE for each handle would leak fds until process exit.
+  const sessionOpenFiles = new Set<string>();
+  const closeSessionFiles = (): void => {
+    for (const key of sessionOpenFiles) {
+      const rec = openFiles.get(key);
+      if (rec) {
+        openFiles.delete(key);
+        try {
+          closeSync(rec.fd);
+        } catch {
+          /* fd already closed elsewhere — nothing left to clean up */
+        }
+      }
+    }
+    sessionOpenFiles.clear();
+  };
+  // Wait for both stream-end signals so a hard drop still triggers cleanup.
+  sftp.on('close', closeSessionFiles);
+  sftp.on('end', closeSessionFiles);
+
   sftp.on('OPEN', (reqId, remote, flags, _attrs) => {
     let full: string;
     try {
@@ -318,6 +391,7 @@ function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSession):
       const st = statSync(full);
       const key = randomBytes(16).toString('hex');
       openFiles.set(key, { fd, path: full, size: st.size });
+      sessionOpenFiles.add(key);
       sftp.handle(reqId, Buffer.from(key, 'hex'));
     } catch (err) {
       sftp.status(reqId, toStatus(err));
@@ -382,6 +456,7 @@ function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSession):
       return;
     }
     openFiles.delete(handle.toString('hex'));
+    sessionOpenFiles.delete(handle.toString('hex'));
     try {
       closeSync(state.fd);
       sftp.status(reqId, OK);
@@ -567,28 +642,25 @@ export async function startNativeSftpServer(): Promise<void> {
 
   const priv = loadOrCreateHostKey();
 
-  server = new Server({ hostKeys: [priv], banner: 'Airlink daemon SFTP' }, (client: Connection) => {
+  server = new Server({ hostKeys: [priv], banner: 'Airlink daemon SFTP' }, (client: Connection, info) => {
+    // ssh2 exposes the peer address via the connection event's ClientInfo, not
+    // on the Connection itself. Captured here once and threaded into activity.
+    const clientIp = info.ip;
+
     client.on('authentication', (ctx) => {
       if (ctx.method !== 'password') {
         ctx.reject(['password']);
         return;
       }
-      const session = sessions.get(ctx.username);
-      if (!session || !ctx.password) {
+      const outcome = authenticateSftpSession(ctx.username, ctx.password ?? '');
+      if (!outcome.ok) {
+        if (outcome.reason === 'invalid_password') {
+          logger.info(`SFTP auth password mismatch for ${ctx.username}`);
+        }
         ctx.reject(['password']);
         return;
       }
-      if (Date.now() > session.expiresAt) {
-        sessions.delete(ctx.username);
-        sessionByServer.delete(session.serverId);
-        ctx.reject(['password']);
-        return;
-      }
-      if (!timingSafeEq(session.passwordHash, hashPassword(ctx.password))) {
-        logger.info(`SFTP auth password mismatch for ${ctx.username}`);
-        ctx.reject(['password']);
-        return;
-      }
+      const session = outcome.session;
       // Bind the session to the connection BEFORE accept(): ssh2 emits
       // 'ready' synchronously when accept() is called, so it would miss a
       // pointer set after.
@@ -617,7 +689,7 @@ export async function startNativeSftpServer(): Promise<void> {
             kind: 'connect' as const,
             serverId: session.serverId,
             username: session.username,
-            ip: (client as unknown as { remoteAddress?: string }).remoteAddress ?? '',
+            ip: clientIp,
           };
           recordActivity(connEvent);
           session.hook?.(connEvent);
@@ -646,15 +718,12 @@ export async function startNativeSftpServer(): Promise<void> {
 }
 
 // periodic cleanup of expired sessions
-setInterval(
-  () => {
-    const now = Date.now();
-    for (const [user, session] of sessions) {
-      if (session.expiresAt <= now) {
-        sessions.delete(user);
-        sessionByServer.delete(session.serverId);
-      }
+setInterval(() => {
+  const now = Date.now();
+  for (const [user, session] of sessions) {
+    if (session.expiresAt <= now) {
+      sessions.delete(user);
+      sessionByServer.delete(session.serverId);
     }
-  },
-  SESSION_CLEANUP_INTERVAL_MS,
-);
+  }
+}, SESSION_CLEANUP_INTERVAL_MS);

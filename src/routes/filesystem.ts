@@ -3,6 +3,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { apiError } from '../errors';
 import {
   appendChunk,
+  fetchPublicUrl,
   getDirSizeForId,
   getFileContent,
   getFilePath,
@@ -14,7 +15,7 @@ import {
   zipPaths,
 } from '../handlers/fs';
 import logger from '../logger';
-import { isPrivateIp } from '../router';
+import { PublicUrlError, validatePublicUrl } from '../router';
 import {
   fsAppendBodyCodes,
   fsAppendBodySchema,
@@ -61,7 +62,8 @@ export async function handleFsList(req: Request): Promise<Response> {
     const contents = await listDir(id, path, filter);
     return json(contents);
   } catch (err) {
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    logger.error(`failed to list directory contents for container ${id}`, err);
+    return apiError('internal_error', 'failed to list directory contents', 500);
   }
 }
 
@@ -77,7 +79,8 @@ export async function handleFsSize(req: Request): Promise<Response> {
     const size = await getDirSizeForId(id, path);
     return json({ size });
   } catch (err) {
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    logger.error(`failed to compute directory size for container ${id}`, err);
+    return apiError('internal_error', 'failed to compute directory size', 500);
   }
 }
 
@@ -99,7 +102,8 @@ export async function handleFsInfo(req: Request): Promise<Response> {
 
     return json({ id, totalSize, fileCount, dirCount });
   } catch (err) {
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    logger.error(`failed to read container info for container ${id}`, err);
+    return apiError('internal_error', 'failed to read container info', 500);
   }
 }
 
@@ -118,7 +122,8 @@ export async function handleFsFileRead(req: Request): Promise<Response> {
     }
     return new Response(content, { headers: { 'Content-Type': 'text/plain' } });
   } catch (err) {
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    logger.error(`failed to read file for container ${id}`, err);
+    return apiError('internal_error', 'failed to read file', 500);
   }
 }
 
@@ -131,7 +136,8 @@ export async function handleFsFileWrite(req: Request): Promise<Response> {
     await writeFileContent(id, path, content ?? '');
     return json({ message: 'file content successfully saved' });
   } catch (err) {
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    logger.error(`failed to save file for container ${id}`, err);
+    return apiError('internal_error', 'failed to save file', 500);
   }
 }
 
@@ -153,7 +159,21 @@ export function handleFsDownload(req: Request): Response {
       },
     });
   } catch (err) {
-    return apiError('not_found', err instanceof Error ? err.message : 'file not found', 404);
+    logger.error(`file download failed for container ${id}`, err);
+    return apiError('not_found', 'file not found', 404);
+  }
+}
+
+function pullUrlError(err: PublicUrlError): Response {
+  switch (err.reason) {
+    case 'invalid_url':
+      return apiError('invalid_request', 'invalid URL', 400);
+    case 'unsupported_scheme':
+      return apiError('invalid_request', 'only http(s) URLs are allowed', 400);
+    case 'local':
+      return apiError('invalid_request', 'local URLs are not allowed', 400);
+    default:
+      return apiError('invalid_request', 'private network URLs are not allowed', 400);
   }
 }
 
@@ -162,20 +182,16 @@ export async function handleFsPull(req: Request): Promise<Response> {
   if ('response' in parsed) return parsed.response;
   const { id, url, path } = parsed.data;
 
-  let parsedUrl: URL;
+  // SSRF gate: reject loopback/private/link-local targets and non-http(s)
+  // schemes up front, and resolve hostnames so DNS-rebinding to a private
+  // address is caught before any bytes move.
+  let safeUrl: URL;
   try {
-    parsedUrl = new URL(url);
-  } catch {
-    return apiError('invalid_request', 'invalid URL', 400);
-  }
-  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-    return apiError('invalid_request', 'only http(s) URLs are allowed', 400);
-  }
-  if (parsedUrl.hostname === 'localhost' || parsedUrl.hostname === '127.0.0.1') {
-    return apiError('invalid_request', 'local URLs are not allowed', 400);
-  }
-  if (isPrivateIp(parsedUrl.hostname)) {
-    return apiError('invalid_request', 'private network URLs are not allowed', 400);
+    safeUrl = await validatePublicUrl(url);
+  } catch (err) {
+    if (err instanceof PublicUrlError) return pullUrlError(err);
+    logger.error(`failed to resolve pull URL ${url}`, err);
+    return apiError('internal_error', 'failed to download file from URL', 502);
   }
 
   const targetDir = path && path.trim() !== '' ? path.trim().replace(/^\/+/, '') : '';
@@ -184,66 +200,75 @@ export async function handleFsPull(req: Request): Promise<Response> {
     return apiError('path_traversal', 'invalid target path', 400);
   }
 
+  let volumePath: string;
+  let resolvedTarget: string;
   try {
-    const volumePath = resolve(process.cwd(), `volumes/${id}`);
-    const resolvedTarget = resolvedDir === '/' ? volumePath : jailPath(volumePath, resolvedDir);
+    volumePath = resolve(process.cwd(), `volumes/${id}`);
+    resolvedTarget = resolvedDir === '/' ? volumePath : jailPath(volumePath, resolvedDir);
     mkdirSync(resolvedTarget, { recursive: true });
-
-    const fileName = basename(parsedUrl.pathname) || 'download';
-    const targetFile = resolve(resolvedTarget, fileName);
-    if (!targetFile.startsWith(`${volumePath}/`)) {
-      return apiError('path_traversal', 'path escapes container volume', 400);
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60_000);
-    const MAX_PULL_BYTES = 512 * 1024 * 1024; // 512MB
-    let total = 0;
-
-    try {
-      const response = await fetch(url, { signal: controller.signal });
-      if (!response.ok || !response.body) {
-        return apiError('internal_error', `remote returned ${response.status}`, 502);
-      }
-      const contentLength = Number(response.headers.get('content-length') ?? '0');
-      if (contentLength > MAX_PULL_BYTES) {
-        return apiError('invalid_request', 'remote file exceeds the 512MB pull limit', 413);
-      }
-
-      const handle = await Bun.file(targetFile).writer();
-      try {
-        for await (const chunk of response.body) {
-          total += chunk.length;
-          if (total > MAX_PULL_BYTES) {
-            return apiError('invalid_request', 'remote file exceeds the 512MB pull limit', 413);
-          }
-          handle.write(chunk);
-        }
-        await handle.end();
-      } catch {
-        try {
-          await handle.end();
-        } catch {}
-        throw new Error('download interrupted');
-      }
-    } catch (err) {
-      logger.error(`failed to pull ${url}`, err);
-      return apiError('internal_error', 'failed to download file from URL', 502);
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    return json({
-      success: true,
-      message: 'File pulled successfully',
-      file: fileName,
-      path: resolvedDir === '/' ? `/${fileName}` : `${resolvedDir}/${fileName}`,
-      size: total,
-    });
   } catch (err) {
-    logger.error(`error pulling file for container ${id}`, err);
-    return apiError('internal_error', 'failed to pull file into container volume', 500);
+    logger.error(`invalid pull target directory for container ${id}`, err);
+    return apiError('path_traversal', 'path escapes container volume', 400);
   }
+
+  const fileName = basename(safeUrl.pathname) || 'download';
+  const relativeTarget = (resolvedDir === '/' ? '' : resolvedDir) + (resolvedDir === '/' ? '' : '/') + fileName;
+  let targetFile: string;
+  try {
+    targetFile = jailPath(volumePath, relativeTarget);
+  } catch (err) {
+    logger.error(`invalid pull target file for container ${id}`, err);
+    return apiError('path_traversal', 'path escapes container volume', 400);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
+  const MAX_PULL_BYTES = 512 * 1024 * 1024; // 512MB
+  let total = 0;
+
+  try {
+    const response = await fetchPublicUrl(url, controller.signal);
+    if (!response.ok || !response.body) {
+      return apiError('internal_error', `remote returned ${response.status}`, 502);
+    }
+    const contentLength = Number(response.headers.get('content-length') ?? '0');
+    if (contentLength > MAX_PULL_BYTES) {
+      return apiError('invalid_request', 'remote file exceeds the 512MB pull limit', 413);
+    }
+
+    const handle = await Bun.file(targetFile).writer();
+    try {
+      for await (const chunk of response.body) {
+        total += chunk.length;
+        if (total > MAX_PULL_BYTES) {
+          return apiError('invalid_request', 'remote file exceeds the 512MB pull limit', 413);
+        }
+        handle.write(chunk);
+      }
+      await handle.end();
+    } catch {
+      try {
+        await handle.end();
+      } catch {}
+      throw new Error('download interrupted');
+    }
+  } catch (err) {
+    // a redirect hop or second-stage resolution may still land on a private
+    // address — surface it with the same stable code/message as the upfront gate
+    if (err instanceof PublicUrlError) return pullUrlError(err);
+    logger.error(`failed to pull ${url} for container ${id}`, err);
+    return apiError('internal_error', 'failed to download file from URL', 502);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  return json({
+    success: true,
+    message: 'File pulled successfully',
+    file: fileName,
+    path: resolvedDir === '/' ? `/${fileName}` : `${resolvedDir}/${fileName}`,
+    size: total,
+  });
 }
 
 export async function handleFsRm(req: Request): Promise<Response> {
@@ -255,7 +280,8 @@ export async function handleFsRm(req: Request): Promise<Response> {
     await rmPath(id, path ?? '/');
     return json({ message: 'file/folder successfully removed' });
   } catch (err) {
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    logger.error(`failed to remove path for container ${id}`, err);
+    return apiError('internal_error', 'failed to remove path', 500);
   }
 }
 
@@ -270,7 +296,8 @@ export async function handleFsZip(req: Request): Promise<Response> {
     const zipPath = await zipPaths(id, paths, zipname ?? 'archive');
     return json({ message: 'archive created', zipPath });
   } catch (err) {
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    logger.error(`failed to create archive for container ${id}`, err);
+    return apiError('internal_error', 'failed to create archive', 500);
   }
 }
 
@@ -283,7 +310,8 @@ export async function handleFsUnzip(req: Request): Promise<Response> {
     await unzipPath(id, path ?? '/', zipname ?? '');
     return json({ message: 'file successfully unzipped' });
   } catch (err) {
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    logger.error(`failed to extract archive for container ${id}`, err);
+    return apiError('internal_error', 'failed to extract archive', 500);
   }
 }
 
@@ -298,7 +326,8 @@ export async function handleFsRename(req: Request): Promise<Response> {
     await renameFile(id, path ?? '/', newTarget);
     return json({ message: 'file successfully renamed' });
   } catch (err) {
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    logger.error(`failed to rename path for container ${id}`, err);
+    return apiError('internal_error', 'failed to rename path', 500);
   }
 }
 
@@ -333,7 +362,7 @@ export async function handleFsUpload(req: Request): Promise<Response> {
     });
   } catch (err) {
     logger.error('error during file upload', err);
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    return apiError('internal_error', 'failed to upload file', 500);
   }
 }
 
@@ -357,7 +386,7 @@ export async function handleFsMkdir(req: Request): Promise<Response> {
     return json({ message: 'directory successfully created', path: targetPath });
   } catch (err) {
     logger.error('error creating directory', err);
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    return apiError('internal_error', 'failed to create directory', 500);
   }
 }
 
@@ -380,7 +409,7 @@ export async function handleFsCreateEmpty(req: Request): Promise<Response> {
     });
   } catch (err) {
     logger.error('error creating empty file', err);
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    return apiError('internal_error', 'failed to create empty file', 500);
   }
 }
 
@@ -413,6 +442,6 @@ export async function handleFsAppend(req: Request): Promise<Response> {
     });
   } catch (err) {
     logger.error('error appending to file', err);
-    return apiError('internal_error', err instanceof Error ? err.message : 'unknown error', 500);
+    return apiError('internal_error', 'failed to append to file', 500);
   }
 }

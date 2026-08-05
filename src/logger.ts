@@ -1,6 +1,5 @@
-import { appendFileSync, mkdirSync } from 'node:fs';
-
-mkdirSync('logs', { recursive: true });
+import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 
 const ESC = '\x1b';
 const RESET = `${ESC}[0m`;
@@ -27,8 +26,79 @@ const levels: Record<Level, { color: string; bg: string; icon: string; label: st
   ok: { color: GRN, bg: BG_GRN, icon: '+', label: 'OK   ' },
 };
 
+// ── Bounded file output ──────────────────────────────────────────────────────
+function positiveIntEnv(name: string, fallback: number): number {
+  const raw = Bun.env[name];
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+// Log directory is resolved from process.cwd() so the daemon writes into its own
+// data dir (tests chdir into a scratch dir before importing).
+const LOG_DIR = join(process.cwd(), 'logs');
+// Rotate a level file once it would exceed this many bytes; at most one .1
+// backup is kept per level, so on-disk output stays under ~2x the cap.
+const LOG_FILE_MAX_BYTES = positiveIntEnv('AIRLINK_LOG_FILE_MAX_BYTES', 1024 * 1024);
+
+mkdirSync(LOG_DIR, { recursive: true });
+
+function rotateIfNeeded(filePath: string, incomingBytes: number): void {
+  let size = 0;
+  try {
+    size = statSync(filePath).size;
+  } catch {
+    size = 0; // first write — nothing to rotate yet
+  }
+  if (size + incomingBytes <= LOG_FILE_MAX_BYTES) return;
+  try {
+    renameSync(filePath, `${filePath}.1`);
+  } catch {
+    // rotation is best-effort; never crash the daemon over log housekeeping
+  }
+}
+
+// ── Secret redaction ─────────────────────────────────────────────────────────
+const REDACTED = '[REDACTED]';
+
+// Key names that mark a value as sensitive; matched case-insensitively against
+// JSON/config key tokens. The \b guards stop monster words (e.g. "keyboard",
+// "monkey") from being treated as secrets.
+const SECRET_KEY_PATTERN =
+  /\b(?:key|token|secret|passwd|password|passphrase|authorization|signature|nonce|apikey|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|hmac|hmac[_-]?secret|daemon[_-]?key)\b/i;
+
+// Scrub secrets out of an arbitrary log line. This is applied to every output
+// destination (stdout, JSON logs, files) so a config.key, HMAC secret, token,
+// password, or Authorization header can never reach a log.
+function redactSecrets(input: string): string {
+  let out = input;
+  // Header style first: "Authorization: Basic <b64>". The bare-value matcher
+  // below would only scrub the scheme word and leak the credential.
+  out = out.replace(/(authorization|proxy-authorization):\s*(?:basic|bearer)\s+[^\s,;]+/gi, `$1: ${REDACTED}`);
+  // JSON/config style: "password":"hunter2", token = abc, apiKey: xyz.
+  out = out.replace(
+    /(["'])?([A-Za-z0-9_.-]+)(["'])?\s*([:=])\s*(?:"([^"]*)"|'([^']*)'|([^\s,;}&]+))/gi,
+    (full: string, open: string, key: string, close: string, sep: string) => {
+      if (!SECRET_KEY_PATTERN.test(key)) return full;
+      return `${open}${key}${close}${sep}${REDACTED}`;
+    },
+  );
+  return out;
+}
+
 function ts(): string {
   return new Date().toISOString().replace('T', ' ').split('.')[0];
+}
+
+function writeToFile(level: Level, fileMsg: string): void {
+  const fileName = level === 'error' ? 'error' : 'combined';
+  const filePath = join(LOG_DIR, `${fileName}.log`);
+  try {
+    rotateIfNeeded(filePath, Buffer.byteLength(fileMsg));
+    appendFileSync(filePath, fileMsg);
+  } catch {
+    /* don't crash the daemon if log write fails */
+  }
 }
 
 function write(level: Level, msg: string, extra?: unknown) {
@@ -48,19 +118,15 @@ function write(level: Level, msg: string, extra?: unknown) {
     };
     if (extra instanceof Error) json.error = { message: extra.message, stack: extra.stack };
     else if (extra !== undefined) json.extra = extra;
-    process.stdout.write(`${JSON.stringify(json)}\n`);
+    // Redact the serialized payload so nested secret fields are scrubbed too.
+    process.stdout.write(`${redactSecrets(JSON.stringify(json))}\n`);
     return;
   }
 
   const line = `${GRAY}${ts()}${RESET} ${color}${icon} ${bg}${BOLD}${label}${RESET} ${color}${msg}${extraStr}${RESET}`;
-  process.stdout.write(`${line}\n`);
+  process.stdout.write(`${redactSecrets(line)}\n`);
 
-  const fileMsg = `[${ts()}] ${label.trim()}: ${msg}${extraStr}\n`;
-  try {
-    appendFileSync(`logs/${level === 'error' ? 'error' : 'combined'}.log`, fileMsg);
-  } catch {
-    /* don't crash the daemon if log write fails */
-  }
+  writeToFile(level, redactSecrets(`[${ts()}] ${label.trim()}: ${msg}${extraStr}\n`));
 }
 
 export function drawHeader(_version: string, _port: number) {
@@ -69,12 +135,12 @@ export function drawHeader(_version: string, _port: number) {
     '                                              ',
     '  /$$$$$$ /$$         /$$/$$         /$$      ',
     ' /$$__  $|__/        | $|__/        | $$      ',
-    '| $$  \\ $$/$$ /$$$$$$| $$/$$/$$$$$$$| $$   /$$',
+    '| $$   $$/$$ /$$$$$$| $$/$$/$$$$$$$| $$   /$$',
     '| $$$$$$$| $$/$$__  $| $| $| $$__  $| $$  /$$/',
-    '| $$__  $| $| $$  \\__| $| $| $$  \\ $| $$$$$$/ ',
+    '| $$__  $| $| $$  __| $| $| $$   $| $$$$$$/ ',
     '| $$  | $| $| $$     | $| $| $$  | $| $$_  $$ ',
     '| $$  | $| $| $$     | $| $| $$  | $| $$ \\  $$',
-    '|__/  |__|__|__/     |__|__|__/  |__|__/  \\__/',
+    '|__/  |__|__|__/     |__|__|__/  |__|__/  __/',
     '                                              ',
     '-----Airlinkd - By Airlinklabs MIT LICENSE-----',
     '',

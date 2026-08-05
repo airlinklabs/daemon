@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { ServerWebSocket } from 'bun';
 import config from '../config';
 import { sendCommandToContainer } from '../handlers/docker';
@@ -6,10 +7,39 @@ import { attachToContainer } from './attach';
 import { subscribe } from './events';
 import { startStatusPolling, stopStatusPolling } from './status';
 
+// ---------------------------------------------------------------------------
+// WS in-band auth threat model (Ledger F-005).
+//
+// The panel authenticates each socket with an in-band `auth` message carrying
+// the daemon key (`config.key`). The key is a long-lived static secret, so a
+// socket that carries it is trusted for its whole lifetime. An attacker who can
+// read network traffic can capture the key and replay it on a fresh socket —
+// the daemon has no way to distinguish a replayed key from a fresh one. Closing
+// that gap requires a per-connection challenge (a nonce signed with the shared
+// key), which is a cross-repo protocol change: the panel client would have to
+// participate. The current wire shape is pinned by the panel, so within it the
+// meaningful mitigations are:
+//
+//   1. Constant-time key comparison — `===` leaks the byte-by-byte match length
+//      via response timing, which a remote attacker can exploit to recover the
+//      key over many guesses.
+//   2. Per-socket auth attempt cap — retries are bounded, so a socket without
+//      the key can only burn MAX_AUTH_ATTEMPTS guesses before being closed.
+//   3. Auth timeout — a socket that never authenticates is closed after
+//      AUTH_TIMEOUT_MS (bounded brute force window even with many sockets).
+//   4. Close on auth failure — once the cap is reached the socket is closed and
+//      can never be re-purposed, even by a later correct key.
+//
+// These make online guessing against a single socket impractical but do NOT
+// defend against offline replay of a captured key. See the phase report for
+// where a nonce challenge belongs.
+// ---------------------------------------------------------------------------
+
 export type WsData = {
   route: 'container' | 'containerstatus' | 'containerevents';
   containerId: string;
   authed: boolean;
+  authFailures: number;
   authTimer?: ReturnType<typeof setTimeout>;
   timer?: ReturnType<typeof setInterval>;
   unsub?: () => void;
@@ -25,8 +55,24 @@ export function assertAuthed(data: WsData): asserts data is WsData & { authed: t
 let openWsCount = 0;
 const MAX_WS = 500;
 const AUTH_TIMEOUT_MS = 10_000;
+const MAX_AUTH_ATTEMPTS = 5;
 
 export const openConnections = new Set<ServerWebSocket<WsData>>();
+
+// Constant-time comparison of the WS auth key.
+//
+// `timingSafeEqual` requires equal-length inputs and throws otherwise, so we
+// hash both candidates to fixed-size sha256 digests first. sha256 output length
+// is constant, so the digest carries no information about the key length, and
+// the comparison runs in constant time regardless of the wire value. Hashing
+// the expected key once per message is cheap (32 bytes) and keeps the code
+// simple; the expected digest could be precomputed, but that optimization is
+// not worth the extra state.
+function timingSafeKeyEquals(a: string, b: string): boolean {
+  const digestA = createHash('sha256').update(a, 'utf8').digest();
+  const digestB = createHash('sha256').update(b, 'utf8').digest();
+  return timingSafeEqual(digestA, digestB);
+}
 
 type IncomingCommand = {
   event?: string;
@@ -115,15 +161,45 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
   }
 
   if (eventName === 'auth') {
-    const key = extractAuthKey(msg);
-    if (key !== config.key) {
-      logger.warn(`ws auth rejected for ${ws.data.containerId}`);
-      ws.send(JSON.stringify({ error: 'invalid key' }));
+    // Reject a second auth message once the socket is authenticated. The route
+    // handlers (attach / status polling / event subscription) are wired to this
+    // socket on first auth; re-auth would re-wire them (duplicate log streams,
+    // double polling intervals) and would let an attacker re-key a hijacked
+    // socket. The panel sends auth exactly once, so this only fires on protocol
+    // violations.
+    if (ws.data.authed) {
+      ws.send(JSON.stringify({ error: 'already authenticated' }));
+      ws.close(1008, 'auth rejected');
+      return;
+    }
+
+    // The cap already exhausted — the close above should be in flight, but
+    // defend the "never authenticate after cap" invariant even if close is
+    // delivered asynchronously.
+    if (ws.data.authFailures >= MAX_AUTH_ATTEMPTS) {
       ws.close(1008, 'auth failed');
       return;
     }
 
+    const key = extractAuthKey(msg);
+    if (!key || !timingSafeKeyEquals(key, config.key)) {
+      ws.data.authFailures += 1;
+      if (ws.data.authFailures >= MAX_AUTH_ATTEMPTS) {
+        logger.warn(`ws auth failed ${MAX_AUTH_ATTEMPTS} times for ${ws.data.containerId}; closing`);
+        ws.send(JSON.stringify({ error: 'auth failed' }));
+        ws.close(1008, 'auth failed');
+        return;
+      }
+      // Keep the socket open so a legitimate client can retry a mistyped key,
+      // but only a bounded number of times — this caps brute force per socket.
+      // The auth timeout in wsOpen is the second, wall-clock bound.
+      logger.warn(`ws auth rejected for ${ws.data.containerId} (${ws.data.authFailures}/${MAX_AUTH_ATTEMPTS})`);
+      ws.send(JSON.stringify({ error: 'invalid key' }));
+      return;
+    }
+
     ws.data.authed = true;
+    ws.data.authFailures = 0;
     clearAuthTimer(ws);
 
     if (ws.data.route === 'container') {
@@ -182,5 +258,5 @@ export function wsClose(ws: ServerWebSocket<WsData>, _code: number, _reason: str
 
 // builds the data object attached to each WS upgrade
 export function buildWsData(route: 'container' | 'containerstatus' | 'containerevents', containerId: string): WsData {
-  return { route, containerId, authed: false };
+  return { route, containerId, authed: false, authFailures: 0 };
 }

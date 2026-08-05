@@ -25,7 +25,18 @@ export function emit(containerId: string, event: ContainerEvent): void {
 }
 
 export function subscribe(containerId: string, handler: Handler): () => void {
-  if (!subs.has(containerId)) subs.set(containerId, new Set());
-  subs.get(containerId)?.add(handler);
-  return () => subs.get(containerId)?.delete(handler);
+  const existing = subs.get(containerId);
+  if (existing) {
+    existing.add(handler);
+  } else {
+    subs.set(containerId, new Set([handler]));
+  }
+  return () => {
+    const current = subs.get(containerId);
+    if (!current) return;
+    current.delete(handler);
+    // Drop the now-empty set so a container that stops being observed doesn't
+    // linger in the map forever (was a slow leak across many container cycles).
+    if (current.size === 0) subs.delete(containerId);
+  };
 }

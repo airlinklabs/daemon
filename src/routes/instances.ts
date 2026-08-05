@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { create as tarCreate, extract as tarExtract } from 'tar';
@@ -43,6 +43,7 @@ import {
   startBodyCodes,
   startBodySchema,
 } from '../schemas';
+import { resolveBackupPath, resolveBackupsRoot } from '../security/pathJail';
 import { validateContainerId } from '../validation';
 
 // ── Last-used start config cache ─────────────────────────────────────────────
@@ -639,13 +640,16 @@ export async function handleContainerRestore(req: Request): Promise<Response> {
   if ('response' in parsed) return parsed.response;
   const body = parsed.data;
 
-  // constrain path to the backups directory for this container
-  const allowedBackupsDir = resolve(process.cwd(), 'backups', body.id);
-  const fullPath = resolve(process.cwd(), body.backupPath);
-  if (!fullPath.startsWith(`${allowedBackupsDir}/`)) return apiError('path_traversal', 'invalid backup path', 400);
+  // F-012/F-017: centralised jail — the path must resolve inside backups/<id>/
+  let fullPath: string;
+  try {
+    fullPath = resolveBackupPath(body.id, body.backupPath);
+  } catch {
+    return apiError('path_traversal', 'invalid backup path', 400);
+  }
   if (!existsSync(fullPath)) return apiError('not_found', 'backup file not found', 404);
 
-  // verify integrity before touching the volume
+  // verify integrity before touching anything
   if (typeof body.checksum === 'string' && body.checksum.length > 0) {
     try {
       const hash = createHash('sha256');
@@ -666,32 +670,67 @@ export async function handleContainerRestore(req: Request): Promise<Response> {
     }
   }
 
+  const volumePath = resolve(process.cwd(), `volumes/${body.id}`);
+
+  // F-012: restore is staged and swapped, not extracted into a wiped volume.
+  // The existing volume stays intact until the backup has fully extracted; a
+  // corrupt archive or disk error therefore can't destroy the live server.
+  let staging: string | null = null;
+  let wasRunning = false;
+
   try {
-    const volumePath = resolve(process.cwd(), `volumes/${body.id}`);
-
-    try {
-      const info = await docker
-        .getContainer(body.id)
-        .inspect()
-        .catch(() => null);
-      if (info?.State.Running) await stopContainer(body.id);
-    } catch (err) {
-      logger.warn(`could not stop container ${body.id}: ${err}`);
+    const info = await docker
+      .getContainer(body.id)
+      .inspect()
+      .catch(() => null);
+    if (info?.State.Running) {
+      wasRunning = true;
+      await stopContainer(body.id);
     }
+  } catch (err) {
+    logger.warn(`could not stop container ${body.id}: ${err}`);
+  }
 
+  try {
+    staging = mkdtempSync(resolve(process.cwd(), 'storage', `restore-${body.id}-`));
+    await tarExtract({ file: fullPath, cwd: staging });
+
+    // swap: only now is the old volume replaced
     if (existsSync(volumePath)) rmSync(volumePath, { recursive: true, force: true });
-    mkdirSync(volumePath, { recursive: true });
+    mkdirSync(resolve(process.cwd(), 'volumes'), { recursive: true });
+    renameSync(staging, volumePath);
+    staging = null;
 
-    await tarExtract({ file: fullPath, cwd: volumePath });
+    if (wasRunning) {
+      const cached = await loadStartConfig(body.id);
+      if (cached) {
+        if (cached.configFiles && typeof cached.configFiles === 'object') {
+          await applyConfigFiles(body.id, cached.configFiles, cached.env ?? {}).catch((err) => {
+            logger.error(`restore: applying config files failed for ${body.id}`, err);
+          });
+        }
+        await startContainer(
+          body.id,
+          cached.image,
+          cached.env ?? {},
+          cached.ports ?? '',
+          cached.Memory ?? 512,
+          cached.Cpu ?? 100,
+          cached.Storage ?? 0,
+          cached.Swap ?? 0,
+          cached.mounts ?? [],
+        ).catch((err) => {
+          logger.error(`backup restored but failed to restart container ${body.id}`, err);
+        });
+      }
+    }
 
     return json({ success: true, message: 'Backup restored successfully' });
   } catch (err) {
     logger.error(`error restoring backup for container ${body.id}`, err);
-    return apiError(
-      'internal_error',
-      `failed to restore backup: ${err instanceof Error ? err.message : 'unknown error'}`,
-      500,
-    );
+    return apiError('internal_error', 'failed to restore backup', 500);
+  } finally {
+    if (staging) rmSync(staging, { recursive: true, force: true });
   }
 }
 
@@ -700,9 +739,12 @@ export async function handleContainerBackupDelete(req: Request): Promise<Respons
   if ('response' in parsed) return parsed.response;
   const body = parsed.data;
 
-  const allowedBackupsRoot = resolve(process.cwd(), 'backups');
-  const fullPath = resolve(process.cwd(), body.backupPath);
-  if (!fullPath.startsWith(`${allowedBackupsRoot}/`)) return apiError('path_traversal', 'invalid backup path', 400);
+  let fullPath: string;
+  try {
+    fullPath = resolveBackupsRoot(body.backupPath);
+  } catch {
+    return apiError('path_traversal', 'invalid backup path', 400);
+  }
   if (!existsSync(fullPath)) return apiError('not_found', 'backup file not found', 404);
 
   try {
@@ -710,11 +752,7 @@ export async function handleContainerBackupDelete(req: Request): Promise<Respons
     return json({ success: true, message: 'Backup deleted successfully' });
   } catch (err) {
     logger.error('error deleting backup', err);
-    return apiError(
-      'internal_error',
-      `failed to delete backup: ${err instanceof Error ? err.message : 'unknown error'}`,
-      500,
-    );
+    return apiError('internal_error', 'failed to delete backup', 500);
   }
 }
 
@@ -724,9 +762,12 @@ export function handleContainerBackupDownload(req: Request): Response {
 
   if (!backupPath || typeof backupPath !== 'string') return apiError('invalid_request', 'backup path is required', 400);
 
-  const allowedBackupsRoot = resolve(process.cwd(), 'backups');
-  const fullPath = resolve(process.cwd(), backupPath);
-  if (!fullPath.startsWith(`${allowedBackupsRoot}/`)) return apiError('path_traversal', 'invalid backup path', 400);
+  let fullPath: string;
+  try {
+    fullPath = resolveBackupsRoot(backupPath);
+  } catch {
+    return apiError('path_traversal', 'invalid backup path', 400);
+  }
   if (!existsSync(fullPath)) return apiError('not_found', 'backup file not found', 404);
 
   const fileName = basename(fullPath);
@@ -747,6 +788,13 @@ export async function handleContainerBackupUpload(req: Request): Promise<Respons
   if (!id || typeof id !== 'string') return apiError('container_not_found', 'container ID is required', 400);
   if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
   if (!backupUuid || typeof backupUuid !== 'string') return apiError('invalid_request', 'backup UUID is required', 400);
+
+  // F-013: backupUuid is a path component; reject anything that isn't a plain
+  // identifier so it can never smuggle separators or traversal out of the
+  // container's backup directory.
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(backupUuid)) {
+    return apiError('invalid_request', 'invalid backup UUID', 400);
+  }
 
   try {
     const backupsDir = resolve(process.cwd(), 'backups', id);

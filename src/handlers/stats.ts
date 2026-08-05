@@ -4,9 +4,22 @@ import { cpus, freemem, totalmem } from 'node:os';
 import { join } from 'node:path';
 import logger from '../logger';
 
-const storagePath = join(process.cwd(), 'storage/systemStats.json');
-const tempStoragePath = join(process.cwd(), 'storage/systemStats.tmp.json');
-const STATS_MAX_AGE_MS = 30 * 60 * 1000;
+// ── Tunable limits ───────────────────────────────────────────────────────────
+// Overridable through env so operators can tune behavior without a rebuild and
+// so tests can shrink the caps to exercise the boundedness paths.
+
+function positiveIntEnv(name: string, fallback: number): number {
+  const raw = Bun.env[name];
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+// Entries older than this are dropped from both the in-memory log and the file.
+const STATS_MAX_AGE_MS = positiveIntEnv('AIRLINK_STATS_MAX_AGE_MS', 30 * 60 * 1000);
+// Hard count cap: even with a very fast collection interval the array and the
+// persisted file stay bounded.
+const STATS_MAX_ENTRIES = positiveIntEnv('AIRLINK_STATS_MAX_ENTRIES', 2000);
 const CPU_SAMPLE_INTERVAL_MS = 100;
 
 interface SystemStat {
@@ -19,6 +32,13 @@ interface SystemStat {
 
 let statsLog: SystemStat[] = [];
 
+// Storage paths are resolved per call so the module honors process.cwd() at
+// call time (tests chdir into a scratch dir before exercising this module).
+function storagePaths(): { storage: string; temp: string } {
+  const dir = join(process.cwd(), 'storage');
+  return { storage: join(dir, 'systemStats.json'), temp: join(dir, 'systemStats.tmp.json') };
+}
+
 // Sample CPU times, wait briefly, sample again, then compute the delta.
 // This works in Bun and on all supported desktop/server platforms.
 function getCpuPercent(): Promise<number> {
@@ -28,14 +48,19 @@ function getCpuPercent(): Promise<number> {
       const after = cpus();
       let totalIdle = 0;
       let totalTick = 0;
-
-      for (let i = 0; i < before.length; i++) {
-        const b = before[i].times;
-        const a = after[i].times;
-        const dIdle = a.idle - b.idle;
+      const count = Math.min(before.length, after.length);
+      for (let i = 0; i < count; i++) {
+        const b = before[i];
+        const a = after[i];
+        if (!b || !a) continue;
+        const dIdle = a.times.idle - b.times.idle;
         const dTick =
-          (Object.values(a) as number[]).reduce((s, v) => s + v, 0) -
-          (Object.values(b) as number[]).reduce((s, v) => s + v, 0);
+          a.times.user +
+          a.times.nice +
+          a.times.sys +
+          a.times.idle +
+          a.times.irq -
+          (b.times.user + b.times.nice + b.times.sys + b.times.idle + b.times.irq);
         totalIdle += dIdle;
         totalTick += dTick;
       }
@@ -67,9 +92,37 @@ export async function getCurrentStats(): Promise<SystemStat> {
   };
 }
 
-function cleanOldEntries(): void {
+// Validates persisted entries without a cast. Only the timestamp is checked
+// structurally; the numeric fields are reported exactly as stored.
+function isSystemStat(value: unknown): value is SystemStat {
+  if (typeof value !== 'object' || value === null) return false;
+  return typeof Reflect.get(value, 'timestamp') === 'string';
+}
+
+function pruneStats(): void {
   const now = Date.now();
-  statsLog = statsLog.filter((e) => now - new Date(e.timestamp).getTime() <= STATS_MAX_AGE_MS);
+  // Entries with an unparseable timestamp yield NaN, which fails the <= test
+  // and are therefore dropped here.
+  let kept = statsLog.filter((e) => now - new Date(e.timestamp).getTime() <= STATS_MAX_AGE_MS);
+  if (kept.length > STATS_MAX_ENTRIES) kept = kept.slice(-STATS_MAX_ENTRIES);
+  statsLog = kept;
+}
+
+// Persisted writes are serialized through a promise chain so concurrent
+// saveStats calls can never interleave the temp-file write/rename.
+let persistChain: Promise<void> = Promise.resolve();
+
+function schedulePersist(): void {
+  const snapshot = JSON.stringify(statsLog, null, 2);
+  const { storage, temp } = storagePaths();
+  persistChain = persistChain
+    .then(async () => {
+      await Bun.write(temp, snapshot);
+      await rename(temp, storage);
+    })
+    .catch((err: unknown) => {
+      logger.error('failed to write stats file', err);
+    });
 }
 
 export function saveStats(stats: SystemStat): void {
@@ -79,20 +132,26 @@ export function saveStats(stats: SystemStat): void {
   }
 
   statsLog.push(stats);
-  cleanOldEntries();
+  pruneStats();
+  schedulePersist();
+}
 
-  // Write to a temporary file first, then rename into place.
-  Bun.write(tempStoragePath, JSON.stringify(statsLog, null, 2))
-    .then(() => rename(tempStoragePath, storagePath))
-    .catch((err) => logger.error('failed to write stats file', err));
+// Resolves once the last scheduled persistence write has landed. Useful for
+// shutdown paths and for tests that assert on the persisted file.
+export async function flushStatsPersistence(): Promise<void> {
+  await persistChain;
 }
 
 export function getTotalStats(): SystemStat[] {
+  // The in-memory log is authoritative once saveStats/initStatsCollection ran;
+  // fall back to the persisted file when nothing is loaded yet.
+  if (statsLog.length > 0) return [...statsLog];
   try {
-    if (existsSync(storagePath)) {
-      const data = readFileSync(storagePath, 'utf8');
-      const parsed = JSON.parse(data);
-      if (Array.isArray(parsed)) return parsed as SystemStat[];
+    const { storage } = storagePaths();
+    if (existsSync(storage)) {
+      const data = readFileSync(storage, 'utf8');
+      const parsed: unknown = JSON.parse(data);
+      if (Array.isArray(parsed)) return parsed.filter(isSystemStat);
     }
   } catch (err) {
     logger.error('error reading total stats', err);
@@ -102,19 +161,19 @@ export function getTotalStats(): SystemStat[] {
 
 // called once on startup to load persisted stats
 export function initStatsCollection(): void {
-  if (existsSync(storagePath)) {
-    try {
-      const data = readFileSync(storagePath, 'utf8').trim();
-      if (!data) return;
+  const { storage } = storagePaths();
+  if (!existsSync(storage)) return;
+  try {
+    const data = readFileSync(storage, 'utf8').trim();
+    if (!data) return;
 
-      const parsed = JSON.parse(data);
-      if (Array.isArray(parsed)) {
-        statsLog = parsed.filter((e: SystemStat) => e?.timestamp);
-        cleanOldEntries();
-      }
-    } catch (err) {
-      logger.error('error loading stats on startup', err);
-      statsLog = [];
+    const parsed: unknown = JSON.parse(data);
+    if (Array.isArray(parsed)) {
+      statsLog = parsed.filter(isSystemStat);
+      pruneStats();
     }
+  } catch (err) {
+    logger.error('error loading stats on startup', err);
+    statsLog = [];
   }
 }

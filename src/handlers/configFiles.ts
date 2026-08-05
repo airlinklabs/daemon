@@ -45,7 +45,7 @@ function applyProperties(content: string, find: Record<string, string>, env: Rec
   return lines.join('\n');
 }
 
-function yamlChainDepth(lines: string[], idx: number, key: string): number {
+function yamlChainDepth(lines: string[], idx: number, _key: string): number {
   // count leading spaces to infer nesting depth
   const match = lines[idx].match(/^(\s*)/);
   return match ? match[1].length : 0;
@@ -90,7 +90,9 @@ function applyYaml(content: string, find: Record<string, string>, env: Record<st
       }
 
       if (chain.join('.') === key) {
-        const indent = lines[i].match(/^\s*/)![0];
+        // `^\s*` always matches (even an empty line), so the captured indent is
+        // never undefined in practice; the ?. keeps the linter and types honest
+        const indent = lines[i].match(/^\s*/)?.[0] ?? '';
         lines[i] = `${indent}${leaf}: ${value}`;
         break;
       }
@@ -150,7 +152,7 @@ export async function applyConfigFiles(
     }
 
     const target = resolve(volumeRoot, cleanPath);
-    if (!target.startsWith(volumeRoot + '/')) {
+    if (!target.startsWith(`${volumeRoot}/`)) {
       logger.warn(`skipping config file outside volume root: ${filePath}`);
       continue;
     }

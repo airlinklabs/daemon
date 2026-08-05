@@ -1,7 +1,9 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { copyFile, lstat, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve, sep } from 'node:path';
+import { extract as tarExtract, list as tarList } from 'tar';
+import { validatePublicUrl } from '../router';
 import { jailPath, jailRename } from '../security/pathJail';
 import fileSpecifier from '../utils/fileSpecifier';
 
@@ -117,8 +119,8 @@ export async function getDirSizeForId(id: string, relativePath = '/'): Promise<n
 export async function getFileContent(id: string, relativePath = '/'): Promise<string | null> {
   try {
     const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
-    if (!existsSync(join(baseDirectory, relativePath))) return null;
     const filePath = jailPath(baseDirectory, relativePath);
+    if (!existsSync(filePath)) return null;
     const s = await stat(filePath);
     if (!s.isFile()) return null;
     return await readFile(filePath, 'utf-8');
@@ -162,7 +164,45 @@ export async function renameFile(id: string, oldPath: string, newPath: string): 
   await jailRename(baseDirectory, oldPath, newPath);
 }
 
+const MAX_REDIRECT_HOPS = 5;
+
+// Safe HTTP(S) fetch: follows redirects manually and re-runs the SSRF guard on
+// every hop. Bun's fetch follows redirects transparently, which turns a single
+// public URL into a foothold on 127.0.0.1 (the classic /fs/pull SSRF). Here a
+// 3xx is intercepted, the Location is validated, and any hop to a private
+// address or a non-http(s) scheme aborts the whole fetch. The caller owns the
+// AbortSignal (and therefore the timeout) so it covers headers + body frames.
+export async function fetchPublicUrl(rawUrl: string, signal: AbortSignal): Promise<Response> {
+  let current = rawUrl;
+  for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+    const safeUrl = await validatePublicUrl(current);
+    const response = await fetch(safeUrl.toString(), { redirect: 'manual', signal });
+
+    if (
+      response.status === 301 ||
+      response.status === 302 ||
+      response.status === 303 ||
+      response.status === 307 ||
+      response.status === 308
+    ) {
+      const location = response.headers.get('location');
+      // release the redirect body (usually small) so the socket frees up
+      await response.body?.cancel();
+      if (!location) {
+        throw new Error(`redirect response without a location header (${response.status})`);
+      }
+      current = new URL(location, safeUrl).toString();
+      continue;
+    }
+
+    return response;
+  }
+  throw new Error(`too many redirects (more than ${MAX_REDIRECT_HOPS})`);
+}
+
 // download a file from a URL into the container volume
+// the URL is SSRF-validated (scheme + resolved address) before connecting, and
+// every redirect hop is re-validated, matching the /fs/pull hardening.
 export async function downloadToVolume(
   id: string,
   url: string,
@@ -177,7 +217,7 @@ export async function downloadToVolume(
 
   let response: Response;
   try {
-    response = await fetch(url, { signal: controller.signal });
+    response = await fetchPublicUrl(url, controller.signal);
   } finally {
     clearTimeout(timer);
   }
@@ -222,15 +262,21 @@ export async function copyIntoVolume(id: string, sourcePath: string, destRelativ
 export async function zipPaths(id: string, filePaths: string[], zipname: string): Promise<string> {
   const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
 
+  const clean = (f: string): string => f.replace(/[[\]"']/g, '').trim();
   const files = filePaths
     .flatMap((f) => (typeof f === 'string' ? f.split(',').map((s) => s.trim()) : [f]))
-    .map((f) => ({
-      cleanPath: f.replace(/[[\]"']/g, '').trim(),
-      fullPath: join(baseDirectory, f.replace(/[[\]"']/g, '').trim()),
-    }));
+    .map((f) => {
+      const cleanPath = clean(f);
+      // jailPath resolves the parent's realpath and rejects `..`/absolute targets,
+      // so a path like '../etc/passwd' can never read a file off the host
+      const fullPath = jailPath(baseDirectory, cleanPath);
+      return { cleanPath, fullPath };
+    });
 
-  const firstFileDir = dirname(files[0].fullPath);
-  const zipPath = join(firstFileDir, `${zipname}.zip`);
+  // the zip name is operator-supplied (unvalidated by the schema) — jail it so
+  // it cannot traverse out of the volume either
+  const firstFileRel = files[0].cleanPath.split('/').slice(0, -1).join('/');
+  const zipPath = jailPath(baseDirectory, join(firstFileRel, `${zipname}.zip`));
   await mkdir(dirname(zipPath), { recursive: true });
 
   // stage files into a temp dir so we control paths inside the zip
@@ -238,7 +284,8 @@ export async function zipPaths(id: string, filePaths: string[], zipname: string)
   const staging = mkdtempSync(join(tmpdir(), 'airlinkd-zip-'));
   try {
     for (const { cleanPath, fullPath } of files) {
-      const dest = join(staging, cleanPath);
+      // reject `..`/absolute staging names outright — nothing escapes the staging tree
+      const dest = jailPath(staging, cleanPath);
       await Bun.spawn(['mkdir', '-p', dirname(dest)], {
         stdout: 'pipe',
         stderr: 'pipe',
@@ -268,51 +315,180 @@ export async function zipPaths(id: string, filePaths: string[], zipname: string)
   return zipPath;
 }
 
+// ── Safe archive extraction (F-011 zip-slip) ────────────────────────────────
+// Extraction used to shell out to unzip/tar/unrar/7z with zero entry
+// validation — a `../evil` member escapes the container volume and writes
+// anywhere the daemon can. Every format now (1) validates every member name
+// against absolute / `..` / backslash / empty rules BEFORE anything is
+// written, and (2) walks the extraction tree afterwards confirming every
+// realpath stays inside the extraction directory (defends against symlink
+// tricks that valid-looking names can still hide).
+
+function assertSafeArchiveEntry(entry: string, archiveName: string): void {
+  if (entry.length === 0) {
+    throw new Error(`archive ${archiveName} contains an empty entry name`);
+  }
+  if (entry.includes('\\')) {
+    throw new Error(`archive ${archiveName} contains a backslash entry name: ${entry}`);
+  }
+  if (entry.startsWith('/')) {
+    throw new Error(`archive ${archiveName} contains an absolute path entry: ${entry}`);
+  }
+  for (const segment of entry.split('/')) {
+    if (segment === '..') {
+      throw new Error(`archive ${archiveName} contains a path traversal entry: ${entry}`);
+    }
+  }
+}
+
+// list .zip/.rar/.7z members via their tooling and reject the archive if any
+// member name is unsafe — must run before extraction, not after
+async function listArchiveMembers(kind: 'zip' | 'rar' | '7z', archivePath: string): Promise<string[]> {
+  const argv =
+    kind === 'zip'
+      ? ['unzip', '-Z1', archivePath]
+      : kind === 'rar'
+        ? ['unrar', 'lb', archivePath]
+        : ['7z', 'l', '-ba', archivePath];
+
+  const proc = Bun.spawn(argv, { stdout: 'pipe', stderr: 'pipe' });
+  const [code, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  if (code !== 0) {
+    throw new Error(`${kind} listing failed (exit ${code}): ${stderr.trim()}`);
+  }
+
+  return stdout.split('\n').filter((line) => line.length > 0);
+}
+
+async function extractTar(archivePath: string, extractPath: string): Promise<void> {
+  // node-tar's extract is path-safe by default (drops `..`/absolute, refuses
+  // writes through symlinks) and its list mode gives us the raw member names to
+  // validate first — so malicious entries are rejected loudly instead of being
+  // silently skipped.
+  const members: string[] = [];
+  await tarList({
+    file: archivePath,
+    onentry: (entry) => members.push(entry.path),
+  });
+  const archiveName = basename(archivePath);
+  for (const member of members) assertSafeArchiveEntry(member, archiveName);
+
+  await tarExtract({ file: archivePath, cwd: extractPath });
+}
+
+async function extractZip(archivePath: string, extractPath: string): Promise<void> {
+  const archiveName = basename(archivePath);
+  const members = await listArchiveMembers('zip', archivePath);
+  for (const member of members) assertSafeArchiveEntry(member, archiveName);
+
+  const proc = Bun.spawn(['unzip', '-o', archivePath, '-d', extractPath], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const code = await proc.exited;
+  if (code !== 0) {
+    const err = await new Response(proc.stderr).text();
+    throw new Error(`unzip failed (exit ${code}): ${err.trim()}`);
+  }
+}
+
+async function extractRar(archivePath: string, extractPath: string): Promise<void> {
+  const archiveName = basename(archivePath);
+  const members = await listArchiveMembers('rar', archivePath);
+  for (const member of members) assertSafeArchiveEntry(member, archiveName);
+
+  const proc = Bun.spawn(['unrar', 'x', archivePath, extractPath], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const code = await proc.exited;
+  if (code !== 0) {
+    const err = await new Response(proc.stderr).text();
+    throw new Error(`unrar failed (exit ${code}): ${err.trim()}`);
+  }
+}
+
+async function extract7z(archivePath: string, extractPath: string): Promise<void> {
+  const archiveName = basename(archivePath);
+  const members = await listArchiveMembers('7z', archivePath);
+  for (const member of members) assertSafeArchiveEntry(member, archiveName);
+
+  const proc = Bun.spawn(['7z', 'x', archivePath, `-o${extractPath}`], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const code = await proc.exited;
+  if (code !== 0) {
+    const err = await new Response(proc.stderr).text();
+    throw new Error(`7z extraction failed (exit ${code}): ${err.trim()}`);
+  }
+}
+
+// Post-extraction guard: walk every entry under extractPath, realpath it, and
+// reject if any resolves outside the extraction base. Catches symlink tricks —
+// an archive member that creates `dir -> ../../..` and then writes `dir/evil`
+// lands outside even though both member names look innocent.
+async function assertExtractionStayedInside(extractPath: string): Promise<void> {
+  const base = realpathSync(extractPath);
+  const stack = [base];
+  const visited = new Set<string>();
+  let depth = 0;
+
+  while (stack.length > 0 && depth < 100) {
+    const dir = stack.pop() as string;
+    depth += 1;
+    const realDir = realpathSync(dir);
+    if (realDir !== base && !realDir.startsWith(base + sep)) {
+      throw new Error(`archive extracted outside the extraction directory: ${dir}`);
+    }
+    if (visited.has(realDir)) continue;
+    visited.add(realDir);
+
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      const real = realpathSync(full);
+      if (real !== base && !real.startsWith(base + sep)) {
+        throw new Error(`archive entry escapes the extraction directory: ${entry.name}`);
+      }
+      // recurse into real directories AND symlinks that resolve inside the
+      // base — content written through a safe symlink still needs checking
+      const st = await lstat(full);
+      if (st.isDirectory()) stack.push(full);
+    }
+  }
+}
+
 // unzip an archive inside a container volume using system unzip or tar
 export async function unzipPath(id: string, relativePath: string, zipname: string): Promise<void> {
   const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
-  const archivePath = join(baseDirectory, relativePath, zipname);
+  // jail the archive path too — the route schema does not validate `path`, so
+  // without this an operator-supplied `../../x.tar` would extract an arbitrary
+  // host file into the volume
+  const archivePath = jailPath(baseDirectory, join(relativePath, zipname));
   const extractPath = dirname(archivePath);
 
-  if (!existsSync(archivePath)) throw new Error(`file not found: ${archivePath}`);
+  if (!existsSync(archivePath)) throw new Error(`file not found: ${zipname}`);
 
   const ext = extname(archivePath).toLowerCase();
-  let proc: ReturnType<typeof Bun.spawn>;
 
-  if (ext === '.zip') {
-    proc = Bun.spawn(['unzip', '-o', archivePath, '-d', extractPath], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-  } else if (ext === '.tar') {
-    proc = Bun.spawn(['tar', '-xf', archivePath, '-C', extractPath], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-  } else if (ext === '.gz' || ext === '.tgz') {
-    proc = Bun.spawn(['tar', '-xzf', archivePath, '-C', extractPath], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+  if (ext === '.tar' || ext === '.gz' || ext === '.tgz') {
+    await extractTar(archivePath, extractPath);
+  } else if (ext === '.zip') {
+    await extractZip(archivePath, extractPath);
   } else if (ext === '.rar') {
-    proc = Bun.spawn(['unrar', 'x', archivePath, extractPath], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    await extractRar(archivePath, extractPath);
   } else if (ext === '.7z') {
-    proc = Bun.spawn(['7z', 'x', archivePath, `-o${extractPath}`], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    await extract7z(archivePath, extractPath);
   } else {
     throw new Error(`unsupported archive type: ${ext}`);
   }
 
-  const code = await proc.exited;
-  if (code !== 0) {
-    const err = await (proc.stderr instanceof ReadableStream ? new Response(proc.stderr).text() : Promise.resolve(''));
-    throw new Error(`extraction failed (exit ${code}): ${err}`);
-  }
+  await assertExtractionStayedInside(extractPath);
 }
 
 // ── Chunked upload sequencing ────────────────────────────────────────────────
@@ -364,7 +540,7 @@ export async function appendChunk(
   let session = chunkSessions.get(key);
 
   if (!session) {
-    let resolveFirst: () => void;
+    let resolveFirst: () => void = () => {};
     const firstChain = new Promise<void>((resolve) => {
       resolveFirst = resolve;
     });
@@ -378,7 +554,7 @@ export async function appendChunk(
       chain: firstChain,
     };
     chunkSessions.set(key, session);
-    resolveFirst!();
+    resolveFirst();
   } else {
     clearTimeout(session.timer);
     session.timer = setTimeout(() => cleanupSession(key), 60_000);
