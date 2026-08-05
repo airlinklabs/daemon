@@ -3,7 +3,7 @@
   "vcs": { "enabled": false },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["src/**", "build.ts"]
+    "includes": ["src/**", "build.ts", "!src/embedded.ts"]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 120 },
   "linter": {

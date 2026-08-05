@@ -16,6 +16,7 @@
     "format": "biome format --write .",
     "check": "bun run typecheck && bun run lint && bun test",
     "build": "bun run build.ts",
+    "build:dev": "bun run build.ts --dev",
     "configure": "bun src/configure.ts"
   },
   "dependencies": {
