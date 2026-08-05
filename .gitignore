@@ -155,6 +155,8 @@ bun.lock
 /storage/alc.json
 /storage/install_logs.json
 /storage/containerConfigs/*
+# Runtime-generated SFTP host key
+/storage/sftp_host_ed25519
 
 # Backup files
 *.backup
