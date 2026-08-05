@@ -50,13 +50,24 @@ function attemptUpgrade(req: Request, server: ReturnType<typeof Bun.serve>): boo
   });
 }
 
+function isPortInUseError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /EADDRINUSE|address already in use|port \d+ (is )?already in use|port \d+ in use/i.test(message);
+}
+
 function isFatalServerStartError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
-  return /failed to start server|port \d+ in use|EADDRINUSE/i.test(message);
+  return /failed to start server/i.test(message);
+}
+
+function exitForPortInUse(): never {
+  logger.error(`port ${config.port} is already in use — another daemon instance is running; exiting without restart`);
+  process.exit(0);
 }
 
 process.on('uncaughtException', (err) => {
   logger.error('uncaught exception', err);
+  if (isPortInUseError(err)) exitForPortInUse();
   if (isFatalServerStartError(err)) {
     logger.error('fatal: HTTP server could not be started, exiting');
     process.exit(1);
@@ -65,6 +76,7 @@ process.on('uncaughtException', (err) => {
 
 process.on('unhandledRejection', (reason) => {
   logger.error('unhandled rejection', reason instanceof Error ? reason : new Error(String(reason)));
+  if (isPortInUseError(reason)) exitForPortInUse();
   if (isFatalServerStartError(reason)) {
     logger.error('fatal: HTTP server could not be started, exiting');
     process.exit(1);
@@ -134,6 +146,7 @@ export const server = (() => {
       tls,
     });
   } catch (err) {
+    if (isPortInUseError(err)) exitForPortInUse();
     logger.error(`failed to start HTTP server on port ${config.port}`, err);
     logger.error('fatal: exiting');
     process.exit(1);

@@ -592,7 +592,11 @@ export async function startContainer(
   if (config.networkRateMbps > 0) await applyNetworkThrottle(id, config.networkRateMbps);
   if (Storage > 0) storageLimits.set(id, Storage);
   emit(id, { type: 'started', message: 'server started' });
-  beginCapture(id);
+  try {
+    beginCapture(id);
+  } catch (err) {
+    logger.warn(`log capture init failed for ${id}: ${getErrorMessage(err)}`);
+  }
 }
 
 // run an installer container that mounts the volume, runs a script, then exits

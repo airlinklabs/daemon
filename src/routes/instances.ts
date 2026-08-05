@@ -431,7 +431,11 @@ export async function handleContainerStart(req: Request): Promise<Response> {
     return json({ message: `container ${id} started successfully` });
   } catch (error) {
     logger.error('error starting container', error);
-    return json({ error: `failed to start container ${id}` }, 500);
+    const detail = String((error as Error).message ?? error);
+    if (/port is already allocated|already in use|EADDRINUSE/i.test(detail)) {
+      return json({ error: 'port conflict', detail }, 409);
+    }
+    return json({ error: 'failed to start container', detail }, 500);
   }
 }
 
@@ -470,7 +474,11 @@ export async function handleContainerRestart(req: Request): Promise<Response> {
     return json({ message: `container ${body.id} restarted successfully` });
   } catch (error) {
     logger.error('error restarting container', error);
-    return json({ error: `failed to restart container ${body.id}` }, 500);
+    const message = error instanceof Error ? error.message : String(error);
+    if (/port is already allocated|already in use|EADDRINUSE/i.test(message)) {
+      return json({ error: 'port conflict', detail: message }, 409);
+    }
+    return json({ error: `failed to restart container ${body.id}`, detail: message }, 500);
   }
 }
 
