@@ -374,6 +374,9 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
     return finish(new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }));
   }
 
+  const rlErr = checkRateLimit(effectiveIp);
+  if (rlErr) return finish(rlErr);
+
   const ipErr = getAllowedIpCheck(effectiveIp);
   if (ipErr) return finish(ipErr);
 
@@ -382,9 +385,6 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
 
   const hmacErr = await verifyHmac(req, config.key, key);
   if (hmacErr) return finish(hmacErr);
-
-  const rlErr = checkRateLimit(effectiveIp);
-  if (rlErr) return finish(rlErr);
 
   if (req.method !== 'GET') {
     const ct = req.headers.get('content-type') ?? '';
