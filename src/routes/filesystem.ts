@@ -3,6 +3,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { apiError } from '../errors';
 import {
   appendChunk,
+  copyIntoVolume,
   fetchPublicUrl,
   getDirSizeForId,
   getFileContent,
@@ -19,6 +20,8 @@ import { PublicUrlError, validatePublicUrl } from '../router';
 import {
   fsAppendBodyCodes,
   fsAppendBodySchema,
+  fsCopyBodyCodes,
+  fsCopyBodySchema,
   fsCreateEmptyBodyCodes,
   fsCreateEmptyBodySchema,
   fsMkdirBodyCodes,
@@ -328,6 +331,36 @@ export async function handleFsRename(req: Request): Promise<Response> {
   } catch (err) {
     logger.error(`failed to rename path for container ${id}`, err);
     return apiError('internal_error', 'failed to rename path', 500);
+  }
+}
+
+function defaultCopyTarget(source: string): string {
+  const base = basename(source);
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : '';
+  const dir = dirname(source);
+  return dir === '.' ? `${stem}-copy${ext}` : `${dir}/${stem}-copy${ext}`;
+}
+
+export async function handleFsCopy(req: Request): Promise<Response> {
+  const parsed = await parseJsonBody(req, fsCopyBodySchema, fsCopyBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, source, newPath } = parsed.data;
+
+  if (!validatePath(source)) return apiError('path_traversal', 'source escapes container volume', 400);
+  if (newPath && !validatePath(newPath)) return apiError('path_traversal', 'invalid target path', 400);
+
+  try {
+    // getFilePath jails the source into the container's volume (no arbitrary
+    // host reads); copyIntoVolume jails the destination. If newPath is omitted,
+    // derive a same-basename "-copy" target.
+    const destRelative = newPath?.trim() ? newPath.trim() : defaultCopyTarget(source);
+    await copyIntoVolume(id, getFilePath(id, source), destRelative);
+    return json({ message: 'file successfully copied', path: destRelative });
+  } catch (err) {
+    logger.error(`failed to copy path for container ${id}`, err);
+    return apiError('internal_error', 'failed to copy path', 500);
   }
 }
 

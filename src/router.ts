@@ -7,6 +7,7 @@ import logger from './logger';
 import { handleRoot, handleStats } from './routes/core';
 import {
   handleFsAppend,
+  handleFsCopy,
   handleFsCreateEmpty,
   handleFsDownload,
   handleFsFileRead,
@@ -78,6 +79,7 @@ const exactRoutes = new Map<string, Handler>([
   ['POST /fs/file/content', handleFsFileWrite],
   ['GET /fs/download', handleFsDownload],
   ['DELETE /fs/rm', handleFsRm],
+  ['POST /fs/copy', handleFsCopy],
   ['POST /fs/pull', handleFsPull],
   ['POST /fs/zip', handleFsZip],
   ['POST /fs/unzip', handleFsUnzip],

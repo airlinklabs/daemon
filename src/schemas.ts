@@ -152,6 +152,13 @@ export const fsRenameBodySchema = z.object({
 });
 export const fsRenameBodyCodes = { id: 'container_not_found' } as const;
 
+export const fsCopyBodySchema = z.object({
+  id: containerIdSchema,
+  source: z.string().min(1, 'source path is required'),
+  newPath: z.string().optional(),
+});
+export const fsCopyBodyCodes = { id: 'container_not_found' } as const;
+
 const fileNameSchema = z
   .string({ error: 'file name is required' })
   .min(1, 'file name is required')
