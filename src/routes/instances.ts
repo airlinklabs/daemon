@@ -7,6 +7,7 @@ import { apiError } from '../errors';
 import { applyConfigFiles, type ConfigFileEntry } from '../handlers/configFiles';
 import {
   createInstaller,
+  deleteContainer,
   deleteContainerAndVolume,
   docker,
   getContainerStats,
@@ -46,6 +47,8 @@ import {
   killDeleteBodyCodes,
   killDeleteBodySchema,
   parseJsonBody,
+  reinstallBodyCodes,
+  reinstallBodySchema,
   restoreBodyCodes,
   restoreBodySchema,
   startBodyCodes,
@@ -224,9 +227,9 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
 }
 
 export async function handleContainerReinstall(req: Request): Promise<Response> {
-  const parsed = await parseJsonBody(req, installBodySchema, installBodyCodes);
+  const parsed = await parseJsonBody(req, reinstallBodySchema, reinstallBodyCodes);
   if ('response' in parsed) return parsed.response;
-  const { id, image, scripts, env } = parsed.data;
+  const { id, image, scripts, env, preserveData } = parsed.data;
 
   const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
 
@@ -235,8 +238,15 @@ export async function handleContainerReinstall(req: Request): Promise<Response> 
   // fire-and-forget — response returned immediately, panel polls /container/status/:id
   (async () => {
     try {
-      // Atomic: remove the running container and wipe its volume, then rebuild.
-      await deleteContainerAndVolume(id);
+      // Remove the running container, then rebuild it from the install
+      // scripts. The volume (worlds, configs, files) survives by default —
+      // only an explicit preserveData:false (panel "delete all data"
+      // confirmation) wipes it.
+      if (preserveData === false) {
+        await deleteContainerAndVolume(id);
+      } else {
+        await deleteContainer(id);
+      }
       await performInstall(id, image, scripts, envVars);
       await setServerState(id, 'installed');
     } catch (err) {

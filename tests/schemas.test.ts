@@ -6,6 +6,7 @@ import {
   errorEnvelopeSchema,
   fsWriteBodySchema,
   parseJsonBody,
+  reinstallBodySchema,
   sftpBodySchema,
   startBodySchema,
 } from '../src/schemas';
@@ -110,5 +111,30 @@ describe('parseJsonBody', () => {
   test('sftp id over 64 chars reports invalid container ID format', async () => {
     const body = await parseError(jsonRequest({ id: 'a'.repeat(65) }), sftpBodySchema, { id: 'container_not_found' });
     expect(body).toEqual({ error: 'invalid container ID format', code: 'container_not_found', status: 400 });
+  });
+
+  test('reinstall defaults to preserving data when preserveData is omitted', () => {
+    const result = reinstallBodySchema.safeParse({ id: 'abc' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.preserveData).toBeUndefined();
+    }
+  });
+
+  test('reinstall accepts an explicit preserveData:false wipe request', () => {
+    const result = reinstallBodySchema.safeParse({ id: 'abc', preserveData: false });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.preserveData).toBe(false);
+    }
+  });
+
+  test('reinstall rejects a non-boolean preserveData', () => {
+    expect(reinstallBodySchema.safeParse({ id: 'abc', preserveData: 'yes' }).success).toBe(false);
+  });
+
+  test('reinstall requires a valid container id', async () => {
+    const body = await parseError(jsonRequest({ id: 'bad!' }), reinstallBodySchema, { id: 'container_not_found' });
+    expect(body).toEqual({ error: 'invalid container ID', code: 'container_not_found', status: 400 });
   });
 });

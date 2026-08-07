@@ -41,6 +41,14 @@ export const installBodySchema = z.object({
 });
 export const installBodyCodes = { id: 'container_not_found' } as const;
 
+// Reinstall takes the install shape plus an explicit data-wipe opt-in. Data
+// preservation is the default: the volume is only removed when the panel
+// sends preserveData:false as part of a confirmed "delete all data" flow.
+export const reinstallBodySchema = installBodySchema.extend({
+  preserveData: z.boolean().optional(),
+});
+export const reinstallBodyCodes = installBodyCodes;
+
 export const startBodySchema = z.object({
   id: z
     .string({ error: 'container ID and image are required' })
