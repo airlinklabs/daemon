@@ -113,6 +113,12 @@ export const backupDeleteBodySchema = z.object({
 });
 export const backupDeleteBodyCodes = {} as const;
 
+export const logArchiveDownloadBodySchema = z.object({
+  id: containerIdSchema,
+  file: z.string({ error: 'file is required' }).min(1, 'file is required'),
+});
+export const logArchiveDownloadBodyCodes = { id: 'container_not_found' } as const;
+
 const fsPathSchema = z
   .string({ error: 'invalid file path' })
   .min(1, 'invalid file path')

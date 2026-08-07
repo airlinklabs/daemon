@@ -212,7 +212,10 @@ export function withSecurityHeaders(res: Response): Response {
   h.set('X-XSS-Protection', '0'); // deprecated but harmless
   h.set('Referrer-Policy', 'no-referrer');
   h.set('Permissions-Policy', 'interest-cohort=()');
-  h.set('Cross-Origin-Resource-Policy', 'same-origin');
+  // Default to same-origin, but never override a handler-set value. The
+  // /dl/<token> download route intentionally serves cross-origin so the panel
+  // origin can render <img> previews and run downloads from the daemon host.
+  if (!h.has('Cross-Origin-Resource-Policy')) h.set('Cross-Origin-Resource-Policy', 'same-origin');
   h.set('Cache-Control', 'no-store');
   // not setting CSP — this is a JSON API, not HTML
   return new Response(res.body, { status: res.status, headers: h });

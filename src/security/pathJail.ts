@@ -3,7 +3,7 @@
 // volume dir. not as low-level but works cross-platform and doesn't need gcc.
 
 import type { Stats } from 'node:fs';
-import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import { rename } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 
@@ -107,6 +107,10 @@ function backupsRoot(): string {
 
 // normalizes rawPath (trailing slashes, `..`, absolute vs relative) against
 // process.cwd() and verifies the result stays inside `root` (or equals it).
+// The lexical check mirrors the old behaviour; on top of it, the deepest
+// existing ancestor of the resolved path is realpath'd and must resolve inside
+// `root` too — this closes the symlink escape where `backups/<id> -> /etc`
+// makes a lexical lookup look safe while the real file lives outside.
 function jailToBackupsRoot(root: string, rawPath: string): string {
   if (typeof rawPath !== 'string' || rawPath.length === 0) {
     throw new BackupPathError('backup path is required');
@@ -122,6 +126,31 @@ function jailToBackupsRoot(root: string, rawPath: string): string {
   // the root itself or a path strictly beneath it
   if (!isInside(root, resolvedPath)) {
     throw new BackupPathError('backup path escapes backup directory');
+  }
+
+  // walk up to the deepest ancestor that actually exists; for a fresh backup
+  // that is `root` itself (created lazily by the write path) or above it — in
+  // that case there is nothing to resolve and the lexical check stands.
+  let probe = resolvedPath;
+  while (!existsSync(probe)) {
+    const parent = dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+
+  // Only enforce realpath containment when the existing ancestor lives at or
+  // beneath `root`. If it lives above root (root doesn't exist yet) the real
+  // path is guaranteed to be the lexical one by the time the file is written.
+  if (probe === root || isInside(root, probe)) {
+    let realProbe: string;
+    try {
+      realProbe = realpathSync(probe);
+    } catch {
+      throw new BackupPathError('backup path escapes backup directory');
+    }
+    if (realProbe !== root && !isInside(root, realProbe)) {
+      throw new BackupPathError('backup path escapes backup directory');
+    }
   }
 
   return resolvedPath;

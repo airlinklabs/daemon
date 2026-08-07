@@ -6,10 +6,12 @@ import { maxBodyBytesFor } from './limits';
 import logger from './logger';
 import { handleRoot, handleStats } from './routes/core';
 import {
+  handleDownloadToken,
   handleFsAppend,
   handleFsCopy,
   handleFsCreateEmpty,
   handleFsDownload,
+  handleFsDownloadToken,
   handleFsFileRead,
   handleFsFileWrite,
   handleFsInfo,
@@ -27,6 +29,7 @@ import {
   handleContainerBackup,
   handleContainerBackupDelete,
   handleContainerBackupDownload,
+  handleContainerBackupDownloadToken,
   handleContainerBackupUpload,
   handleContainerCommand,
   handleContainerDelete,
@@ -35,6 +38,7 @@ import {
   handleContainerInstallStatus,
   handleContainerKill,
   handleContainerLogArchiveDownload,
+  handleContainerLogArchiveDownloadToken,
   handleContainerLogArchiveRead,
   handleContainerLogArchives,
   handleContainerLogHistory,
@@ -72,11 +76,13 @@ const exactRoutes = new Map<string, Handler>([
   ['GET /container/logs/archives', handleContainerLogArchives],
   ['GET /container/logs/archives/read', handleContainerLogArchiveRead],
   ['GET /container/logs/archives/download', handleContainerLogArchiveDownload],
+  ['POST /container/logs/archives/download-token', handleContainerLogArchiveDownloadToken],
   ['GET /container/stats', handleContainerStats],
   ['POST /container/backup', handleContainerBackup],
   ['POST /container/restore', handleContainerRestore],
   ['DELETE /container/backup', handleContainerBackupDelete],
   ['GET /container/backup/download', handleContainerBackupDownload],
+  ['POST /container/backup/download-token', handleContainerBackupDownloadToken],
   ['POST /container/backup/upload', handleContainerBackupUpload],
   ['GET /fs/list', handleFsList],
   ['GET /fs/size', handleFsSize],
@@ -84,6 +90,7 @@ const exactRoutes = new Map<string, Handler>([
   ['GET /fs/file/content', handleFsFileRead],
   ['POST /fs/file/content', handleFsFileWrite],
   ['GET /fs/download', handleFsDownload],
+  ['POST /fs/download-token', handleFsDownloadToken],
   ['DELETE /fs/rm', handleFsRm],
   ['POST /fs/copy', handleFsCopy],
   ['POST /fs/pull', handleFsPull],
@@ -385,6 +392,17 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
 
   const ipErr = getAllowedIpCheck(effectiveIp);
   if (ipErr) return finish(ipErr);
+
+  // ── One-time download tokens ──────────────────────────────────────────────
+  // GET /dl/<token> is the only route that skips Basic + HMAC auth. The token
+  // IS the credential: 256 bits of CSPRNG entropy, single-use, 90s TTL, and
+  // consumed on first read. It is still rate-limited and IP allowlisted above.
+  const tokenMatch = req.method === 'GET' ? /^\/dl\/([a-zA-Z0-9_-]{40,})$/.exec(url.pathname) : null;
+  if (tokenMatch) {
+    const token = tokenMatch[1];
+    const res = await handleDownloadToken(req, token);
+    return finish(res);
+  }
 
   const authErr = checkBasicAuth(req, config.key);
   if (authErr) return finish(authErr);

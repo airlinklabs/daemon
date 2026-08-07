@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { apiError } from '../errors';
 import {
@@ -42,6 +42,7 @@ import {
   fsZipBodySchema,
   parseJsonBody,
 } from '../schemas';
+import { consumeDownloadToken, createDownloadToken } from '../security/downloadTokens';
 import { jailPath } from '../security/pathJail';
 import { validateContainerId, validatePath } from '../validation';
 
@@ -165,6 +166,61 @@ export function handleFsDownload(req: Request): Response {
     logger.error(`file download failed for container ${id}`, err);
     return apiError('not_found', 'file not found', 404);
   }
+}
+
+// Signed (HMAC) mint endpoint. Called by the panel when a user asks for a file.
+// Returns a one-time URL the browser is redirected to — the panel never proxies
+// the file bytes itself.
+export async function handleFsDownloadToken(req: Request): Promise<Response> {
+  const parsed = await parseJsonBody(req, fsPathOptionalBodySchema, fsPathOptionalBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, path } = parsed.data;
+
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
+
+  try {
+    const filePath = getFilePath(id, path ?? '/');
+    if (!existsSync(filePath)) return apiError('not_found', 'file not found', 404);
+    const s = statSync(filePath);
+    if (!s.isFile()) return apiError('not_found', 'not a file', 404);
+
+    const token = createDownloadToken({
+      filePath,
+      fileName: basename(filePath),
+      contentType: 'application/octet-stream',
+      disposition: 'attachment',
+    });
+
+    return json({ token, url: `/dl/${token}` });
+  } catch (err) {
+    logger.error(`failed to mint download token for container ${id}`, err);
+    return apiError('not_found', 'file not found', 404);
+  }
+}
+
+// Browser-facing route (GET /dl/<token>). No Basic/HMAC auth — the token itself
+// is the credential — but it is single-use, short-lived, rate-limited, and IP
+// allowlisted (enforced by the router before this handler runs). Serves the
+// already-jailed file directly to the browser, cross-origin so the panel's
+// <img> previews can render it.
+export async function handleDownloadToken(_req: Request, token: string): Promise<Response> {
+  const entry = consumeDownloadToken(token);
+  if (!entry) return apiError('not_found', 'download link is invalid or expired', 404);
+
+  if (!existsSync(entry.filePath)) {
+    logger.warn(`download token referenced a missing file: ${entry.filePath}`);
+    return apiError('not_found', 'file not found', 404);
+  }
+
+  const disposition = `${entry.disposition}; filename="${entry.fileName}"`;
+  return new Response(Bun.file(entry.filePath), {
+    headers: {
+      'Content-Type': entry.contentType,
+      'Content-Disposition': disposition,
+      'Cross-Origin-Resource-Policy': 'cross-origin',
+    },
+  });
 }
 
 function pullUrlError(err: PublicUrlError): Response {
@@ -388,6 +444,7 @@ export async function handleFsUpload(req: Request): Promise<Response> {
     }
 
     await Bun.write(filePath, content);
+    logger.info(`file uploaded: container=${id} path=${targetPath} bytes=${content.byteLength}`);
     return json({
       message: 'file successfully uploaded',
       fileName,

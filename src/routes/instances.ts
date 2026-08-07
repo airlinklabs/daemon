@@ -46,6 +46,8 @@ import {
   installerBodySchema,
   killDeleteBodyCodes,
   killDeleteBodySchema,
+  logArchiveDownloadBodyCodes,
+  logArchiveDownloadBodySchema,
   parseJsonBody,
   reinstallBodyCodes,
   reinstallBodySchema,
@@ -54,6 +56,7 @@ import {
   startBodyCodes,
   startBodySchema,
 } from '../schemas';
+import { createDownloadToken } from '../security/downloadTokens';
 import { resolveBackupPath, resolveBackupsRoot } from '../security/pathJail';
 import { validateContainerId } from '../validation';
 
@@ -576,6 +579,29 @@ export async function handleContainerLogArchiveDownload(req: Request): Promise<R
   });
 }
 
+// Signed mint endpoint for log-archive direct downloads.
+export async function handleContainerLogArchiveDownloadToken(req: Request): Promise<Response> {
+  const parsed = await parseJsonBody(req, logArchiveDownloadBodySchema, logArchiveDownloadBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { id, file } = parsed.data;
+
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
+  if (!file) return apiError('invalid_request', 'file is required', 400);
+
+  const archivePath = resolveLogArchivePath(id, file);
+  if (!archivePath || !existsSync(archivePath)) return apiError('not_found', 'log archive not found', 404);
+
+  const token = createDownloadToken({
+    filePath: archivePath,
+    fileName: file,
+    contentType: 'application/gzip',
+    disposition: 'attachment',
+  });
+
+  return json({ token, url: `/dl/${token}` });
+}
+
 export async function handleContainerStatus(req: Request): Promise<Response> {
   const id = new URL(req.url).searchParams.get('id');
   if (!id) return apiError('container_not_found', 'container ID is required', 400);
@@ -835,6 +861,31 @@ export function handleContainerBackupDownload(req: Request): Response {
   });
 }
 
+// Signed mint endpoint for the direct-download backup flow. The panel calls
+// this instead of proxying the file; the browser is 302'd to /dl/<token>.
+export async function handleContainerBackupDownloadToken(req: Request): Promise<Response> {
+  const parsed = await parseJsonBody(req, backupDeleteBodySchema, backupDeleteBodyCodes);
+  if ('response' in parsed) return parsed.response;
+  const { backupPath } = parsed.data;
+
+  let fullPath: string;
+  try {
+    fullPath = resolveBackupsRoot(backupPath);
+  } catch {
+    return apiError('path_traversal', 'invalid backup path', 400);
+  }
+  if (!existsSync(fullPath)) return apiError('not_found', 'backup file not found', 404);
+
+  const token = createDownloadToken({
+    filePath: fullPath,
+    fileName: basename(fullPath),
+    contentType: 'application/gzip',
+    disposition: 'attachment',
+  });
+
+  return json({ token, url: `/dl/${token}` });
+}
+
 export async function handleContainerBackupUpload(req: Request): Promise<Response> {
   const params = new URL(req.url).searchParams;
   const id = params.get('id');
@@ -860,6 +911,9 @@ export async function handleContainerBackupUpload(req: Request): Promise<Respons
 
     if (!req.body) return apiError('invalid_request', 'request body is required', 400);
     await Bun.write(backupPath, new Response(req.body));
+
+    const size = statSync(backupPath).size;
+    logger.info(`backup uploaded: container=${id} uuid=${backupUuid} path=${backupPath} bytes=${size}`);
 
     return json({
       success: true,

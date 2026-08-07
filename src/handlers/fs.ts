@@ -18,6 +18,11 @@ const listCache = new Map<
   }
 >();
 
+// cap for GET /fs/file/content — the route reads the whole file into memory
+// for the in-browser editor, so unbounded reads would be a memory DoS. 10MB is
+// far beyond any real config file; larger files must be pulled/downloaded.
+export const MAX_FILE_CONTENT_BYTES = 10 * 1024 * 1024;
+
 async function getDirSize(dir: string, depth = 0): Promise<number> {
   if (depth > 20) return 0;
   let total = 0;
@@ -123,6 +128,9 @@ export async function getFileContent(id: string, relativePath = '/'): Promise<st
     if (!existsSync(filePath)) return null;
     const s = await stat(filePath);
     if (!s.isFile()) return null;
+    // refuse to read anything past the cap — a text "file" larger than this is
+    // not an editor document, it is a memory-exhaustion attempt
+    if (s.size > MAX_FILE_CONTENT_BYTES) return null;
     return await readFile(filePath, 'utf-8');
   } catch {
     return null;
