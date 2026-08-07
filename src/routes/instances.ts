@@ -20,7 +20,15 @@ import {
 } from '../handlers/docker';
 import { copyIntoVolume, downloadToVolume } from '../handlers/fs';
 import { getInstallStatus, setServerState } from '../handlers/installState';
-import { clearLogBuffer, clearLogHistory, getLogBuffer, getLogHistory } from '../handlers/logHistory';
+import {
+  clearLogBuffer,
+  clearLogHistory,
+  getLogBuffer,
+  getLogHistory,
+  listLogArchives,
+  readLogArchive,
+  resolveLogArchivePath,
+} from '../handlers/logHistory';
 import logger from '../logger';
 import {
   backupBodyCodes,
@@ -519,6 +527,43 @@ export async function handleContainerLogHistory(req: Request): Promise<Response>
   if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
   const logs = await getLogHistory(id);
   return json({ containerId: id, logs });
+}
+
+export async function handleContainerLogArchives(req: Request): Promise<Response> {
+  const id = new URL(req.url).searchParams.get('id');
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
+  return json({ logs: await listLogArchives(id) });
+}
+
+export async function handleContainerLogArchiveRead(req: Request): Promise<Response> {
+  const params = new URL(req.url).searchParams;
+  const id = params.get('id');
+  const file = params.get('file');
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
+  if (!file) return apiError('invalid_request', 'file is required', 400);
+  const lines = await readLogArchive(id, file);
+  if (!lines) return apiError('not_found', 'log archive not found', 404);
+  return json({ lines });
+}
+
+export async function handleContainerLogArchiveDownload(req: Request): Promise<Response> {
+  const params = new URL(req.url).searchParams;
+  const id = params.get('id');
+  const file = params.get('file');
+  if (!id) return apiError('container_not_found', 'container ID is required', 400);
+  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
+  if (!file) return apiError('invalid_request', 'file is required', 400);
+  const archivePath = resolveLogArchivePath(id, file);
+  if (!archivePath) return apiError('not_found', 'log archive not found', 404);
+  if (!existsSync(archivePath)) return apiError('not_found', 'log archive not found', 404);
+  return new Response(Bun.file(archivePath), {
+    headers: {
+      'Content-Type': 'application/gzip',
+      'Content-Disposition': `attachment; filename="${file}"`,
+    },
+  });
 }
 
 export async function handleContainerStatus(req: Request): Promise<Response> {

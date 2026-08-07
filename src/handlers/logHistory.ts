@@ -1,5 +1,20 @@
-import { createWriteStream, mkdirSync, renameSync, unlinkSync, type WriteStream } from 'node:fs';
-import { join } from 'node:path';
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  type WriteStream,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { create as tarCreate, extract as tarExtract } from 'tar';
 import logger from '../logger';
 import type { ContainerRuntime } from './containerRuntime';
 
@@ -202,6 +217,108 @@ export async function getLogHistory(id: string, limit = DEFAULT_LOG_HISTORY_LIMI
   }
   const all = parts.join('\n').split('\n').filter(Boolean);
   return all.slice(-limit);
+}
+
+// ── Log archival ─────────────────────────────────────────────────────────────
+// When a container stops or is killed, its console log is frozen into a
+// timestamped tar.gz under `.airlinkd/logs/archive/<id>/`. The archive holds a
+// single `<timestamp>.txt` file with the raw log text so the panel can list,
+// read, and download past sessions.
+
+function archiveDir(id: string): string {
+  return join(logDir(), 'archive', id);
+}
+
+function timestamp(): string {
+  const now = new Date();
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return (
+    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+    `_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
+  );
+}
+
+// Archives a container's rotated + live log into a timestamped tar.gz. Returns
+// the archive path, or null when the container has no log content. Never throws
+// for "no logs"; only real I/O failures propagate.
+export async function archiveLogHistory(id: string): Promise<string | null> {
+  await flushLogHistory(id);
+  const parts: string[] = [];
+  // Mirror getLogHistory's read order: rotated (older) first, then live.
+  for (const path of [rotatedPath(id), logPath(id)]) {
+    const text = await Bun.file(path)
+      .text()
+      .catch(() => '');
+    if (text) parts.push(text);
+  }
+  const combined = parts.join('\n');
+  if (!combined.trim()) return null;
+
+  const stamp = timestamp();
+  const archivePath = join(archiveDir(id), `${stamp}.log.tar.gz`);
+  mkdirSync(archiveDir(id), { recursive: true });
+
+  let tempDir: string | null = null;
+  try {
+    tempDir = mkdtempSync(join(tmpdir(), 'airlinkd-log-archive-'));
+    writeFileSync(join(tempDir, `${stamp}.txt`), combined, 'utf8');
+    await tarCreate({ gzip: true, file: archivePath, cwd: tempDir }, [`${stamp}.txt`]);
+  } finally {
+    if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+  }
+  return archivePath;
+}
+
+export async function listLogArchives(id: string): Promise<{ fileName: string; size: number; createdAt: string }[]> {
+  const dir = archiveDir(id);
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return entries
+    .map((fileName) => {
+      try {
+        const st = statSync(join(dir, fileName));
+        return { fileName, size: st.size, createdAt: st.mtime.toISOString() };
+      } catch {
+        return null;
+      }
+    })
+    .filter((e): e is { fileName: string; size: number; createdAt: string } => e !== null)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+// Resolves an archive file name to a path jailed inside the container's archive
+// dir. Returns null for anything that isn't a plain basename.
+export function resolveLogArchivePath(id: string, fileName: string): string | null {
+  if (!/^[A-Za-z0-9._-]+$/.test(fileName)) return null;
+  const dir = archiveDir(id);
+  const path = resolve(join(dir, fileName));
+  if (!path.startsWith(dir)) return null;
+  return path;
+}
+
+// Reads the raw txt back out of an archive. Returns the non-empty lines, or
+// null when the file is missing/unsafe/unreadable.
+export async function readLogArchive(id: string, fileName: string): Promise<string[] | null> {
+  const archivePath = resolveLogArchivePath(id, fileName);
+  if (!archivePath) return null;
+  if (!existsSync(archivePath)) return null;
+
+  let tempDir: string | null = null;
+  try {
+    tempDir = mkdtempSync(join(tmpdir(), 'airlinkd-log-read-'));
+    await tarExtract({ file: archivePath, cwd: tempDir });
+    const txt = readdirSync(tempDir).find((f) => f.endsWith('.txt'));
+    if (!txt) return null;
+    return readFileSync(join(tempDir, txt), 'utf8').split('\n').filter(Boolean);
+  } catch {
+    return null;
+  } finally {
+    if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 export function clearLogHistory(id: string): void {

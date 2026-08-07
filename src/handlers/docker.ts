@@ -8,7 +8,7 @@ import logger from '../logger';
 import { emit } from '../ws/events';
 import { normalizeConsoleCommand } from './consoleCommand';
 import { createRuntime } from './containerRuntime';
-import { beginCapture } from './logHistory';
+import { archiveLogHistory, beginCapture } from './logHistory';
 
 const runtime = createRuntime(config.containerRuntime);
 export const docker = runtime;
@@ -952,6 +952,9 @@ export async function stopContainer(id: string, stopCmd?: string): Promise<void>
           // confirmed stopped via inspect — the cache may only report false
           // once it is actually false
           setContainerRunning(id, false);
+          await archiveLogHistory(id).catch((err) => {
+            logger.warn(`could not archive logs for ${id}: ${getErrorMessage(err)}`);
+          });
           emit(id, { type: 'stopped', message: 'server stopped' });
           return;
         }
@@ -961,6 +964,9 @@ export async function stopContainer(id: string, stopCmd?: string): Promise<void>
         // until the deadline rather than guessing.
         if (getDockerStatusCode(err) === 404) {
           setContainerRunning(id, false);
+          await archiveLogHistory(id).catch((err) => {
+            logger.warn(`could not archive logs for ${id}: ${getErrorMessage(err)}`);
+          });
           emit(id, { type: 'stopped', message: 'server stopped' });
           return;
         }
@@ -988,6 +994,9 @@ export async function stopContainer(id: string, stopCmd?: string): Promise<void>
   }
 
   setContainerRunning(id, false);
+  await archiveLogHistory(id).catch((err) => {
+    logger.warn(`could not archive logs for ${id}: ${getErrorMessage(err)}`);
+  });
   emit(id, { type: 'stopped', message: 'server stopped' });
 }
 export async function killContainer(id: string): Promise<void> {
@@ -1005,6 +1014,9 @@ export async function killContainer(id: string): Promise<void> {
   }
   forgetContainer(id);
   setContainerRunning(id, false);
+  await archiveLogHistory(id).catch((err) => {
+    logger.warn(`could not archive logs for ${id}: ${getErrorMessage(err)}`);
+  });
   emit(id, { type: 'killed', message: 'container forcibly removed' });
 }
 
