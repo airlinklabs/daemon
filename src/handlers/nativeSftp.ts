@@ -31,6 +31,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import type { Attributes, Connection, FileEntry, Session, SFTPWrapper } from 'ssh2';
 import { Server, utils } from 'ssh2';
 import config from '../config';
+import { getPaths } from '../paths';
 import logger from '../logger';
 import { jailPath } from '../security/pathJail';
 
@@ -106,7 +107,7 @@ function timingSafeEq(a: Buffer, b: Buffer): boolean {
 }
 
 function volumePathFor(serverId: string): string {
-  return resolve(process.cwd(), 'volumes', serverId);
+  return resolve(getPaths(config.paths).volumesRoot, serverId);
 }
 
 function usernameForServer(serverId: string): string {
@@ -119,7 +120,7 @@ function usernameForServer(serverId: string): string {
 // ---------------------------------------------------------------------------
 
 function hostKeyFile(): string {
-  return resolve(process.cwd(), 'storage', 'sftp_host_ed25519');
+  return resolve(getPaths(config.paths).storageRoot, 'sftp_host_ed25519');
 }
 
 function loadOrCreateHostKey(): string {

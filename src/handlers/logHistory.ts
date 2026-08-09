@@ -15,6 +15,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { create as tarCreate, extract as tarExtract } from 'tar';
+import config from '../config';
+import { getPaths } from '../paths';
 import logger from '../logger';
 import type { ContainerRuntime } from './containerRuntime';
 
@@ -40,10 +42,10 @@ const DOCKER_EVENT_RECONNECT_ERROR_MS = 5_000;
 const DOCKER_EVENT_RECONNECT_END_MS = 2_000;
 
 // ── Log directory ────────────────────────────────────────────────────────────
-// Resolved lazily so the daemon honors process.cwd() at call time (tests chdir
-// into a scratch dir before exercising this module).
+// Uses the centralised paths — no more process.cwd() per call. Tests supply a
+// fixture root via config.paths instead of chdir-ing.
 function logDir(): string {
-  return join(process.cwd(), '.airlinkd', 'logs');
+  return getPaths(config.paths).logsRoot;
 }
 
 function logPath(id: string): string {

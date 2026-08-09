@@ -1,5 +1,7 @@
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
+import config from '../config';
+import { getPaths } from '../paths';
 import { apiError } from '../errors';
 import {
   appendChunk,
@@ -262,7 +264,7 @@ export async function handleFsPull(req: Request): Promise<Response> {
   let volumePath: string;
   let resolvedTarget: string;
   try {
-    volumePath = resolve(process.cwd(), `volumes/${id}`);
+    volumePath = resolve(getPaths(config.paths).volumesRoot, id);
     resolvedTarget = resolvedDir === '/' ? volumePath : jailPath(volumePath, resolvedDir);
     mkdirSync(resolvedTarget, { recursive: true });
   } catch (err) {
@@ -427,7 +429,7 @@ export async function handleFsUpload(req: Request): Promise<Response> {
 
   try {
     const targetPath = relativePath === '/' || !relativePath ? fileName : `${relativePath}/${fileName}`;
-    const baseDir = resolve(process.cwd(), `volumes/${id}`);
+    const baseDir = resolve(getPaths(config.paths).volumesRoot, id);
     const filePath = jailPath(baseDir, targetPath);
 
     mkdirSync(dirname(filePath), { recursive: true });
@@ -466,7 +468,7 @@ export async function handleFsMkdir(req: Request): Promise<Response> {
   if (!validatePath(name)) return apiError('path_traversal', 'invalid folder path', 400);
 
   try {
-    const baseDir = resolve(process.cwd(), `volumes/${id}`);
+    const baseDir = resolve(getPaths(config.paths).volumesRoot, id);
     const targetPath =
       relativePath && relativePath !== '/'
         ? `${relativePath.replace(/\/+$/, '')}/${name.replace(/^\/+/, '')}`
@@ -487,7 +489,7 @@ export async function handleFsCreateEmpty(req: Request): Promise<Response> {
 
   try {
     const targetPath = relativePath === '/' || !relativePath ? fileName : `${relativePath}/${fileName}`;
-    const baseDir = resolve(process.cwd(), `volumes/${id}`);
+    const baseDir = resolve(getPaths(config.paths).volumesRoot, id);
     const filePath = jailPath(baseDir, targetPath);
 
     mkdirSync(dirname(filePath), { recursive: true });

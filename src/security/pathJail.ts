@@ -6,6 +6,8 @@ import type { Stats } from 'node:fs';
 import { existsSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import { rename } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
+import config from '../config';
+import { getPaths } from '../paths';
 
 export class BackupPathError extends Error {
   constructor(message: string) {
@@ -102,14 +104,14 @@ export async function jailRename(base: string, oldRel: string, newRel: string): 
 const BACKUPS_DIR = 'backups';
 
 function backupsRoot(): string {
-  return resolve(process.cwd(), BACKUPS_DIR);
+  return getPaths(config.paths).backupsRoot;
 }
 
 // normalizes rawPath (trailing slashes, `..`, absolute vs relative) against
-// process.cwd() and verifies the result stays inside `root` (or equals it).
-// The lexical check mirrors the old behaviour; on top of it, the deepest
-// existing ancestor of the resolved path is realpath'd and must resolve inside
-// `root` too — this closes the symlink escape where `backups/<id> -> /etc`
+// the daemon's backup root and verifies the result stays inside `root` (or
+// equals it). The lexical check mirrors the old behaviour; on top of it, the
+// deepest existing ancestor of the resolved path is realpath'd and must resolve
+// inside `root` too — this closes the symlink escape where `backups/<id> -> /etc`
 // makes a lexical lookup look safe while the real file lives outside.
 function jailToBackupsRoot(root: string, rawPath: string): string {
   if (typeof rawPath !== 'string' || rawPath.length === 0) {
@@ -120,7 +122,7 @@ function jailToBackupsRoot(root: string, rawPath: string): string {
     throw new BackupPathError('invalid backup path');
   }
 
-  const resolvedPath = resolve(process.cwd(), rawPath);
+  const resolvedPath = resolve(getPaths(config.paths).base, rawPath);
 
   // resolve() already collapsed any `..`/trailing slashes; what remains must be
   // the root itself or a path strictly beneath it

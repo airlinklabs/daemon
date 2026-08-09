@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { rename } from 'node:fs/promises';
 import { cpus, freemem, totalmem } from 'node:os';
 import { join } from 'node:path';
+import config from '../config';
+import { getPaths } from '../paths';
 import logger from '../logger';
 
 // ── Tunable limits ───────────────────────────────────────────────────────────
@@ -32,10 +34,9 @@ interface SystemStat {
 
 let statsLog: SystemStat[] = [];
 
-// Storage paths are resolved per call so the module honors process.cwd() at
-// call time (tests chdir into a scratch dir before exercising this module).
+// Storage paths resolved from the centralised DaemonPaths.
 function storagePaths(): { storage: string; temp: string } {
-  const dir = join(process.cwd(), 'storage');
+  const dir = getPaths(config.paths).storageRoot;
   return { storage: join(dir, 'systemStats.json'), temp: join(dir, 'systemStats.tmp.json') };
 }
 

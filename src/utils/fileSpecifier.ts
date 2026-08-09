@@ -1,9 +1,11 @@
 // loads the file spec map from storage — used by the install handler to find installer scripts
 // this file is part of the daemon config, not generated at runtime
 
-import { resolve } from 'node:path';
+import { join } from 'node:path';
+import config from '../config';
+import { getPaths } from '../paths';
 
-const specPath = resolve(process.cwd(), 'storage/fileSpecifier.json');
+const specPath = join(getPaths(config.paths).storageRoot, 'fileSpecifier.json');
 
 // shape: { "code": ["js", "ts", ...], "image": ["png", ...], ... }
 type FileSpecifierData = Record<string, string[]>;

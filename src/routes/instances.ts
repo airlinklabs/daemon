@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, unlin
 import fs from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { create as tarCreate, extract as tarExtract } from 'tar';
+import config from '../config';
+import { getPaths } from '../paths';
 import { apiError } from '../errors';
 import { applyConfigFiles, type ConfigFileEntry } from '../handlers/configFiles';
 import {
@@ -30,6 +32,7 @@ import {
   readLogArchive,
   resolveLogArchivePath,
 } from '../handlers/logHistory';
+import { enqueueOperation, getOperation } from '../handlers/operationManager';
 import logger from '../logger';
 import {
   backupBodyCodes,
@@ -80,16 +83,16 @@ export type CachedStartConfig = {
 };
 
 function configCachePath(id: string): string {
-  return resolve(process.cwd(), 'storage/containerConfigs', `${id}.json`);
+  return resolve(getPaths(config.paths).storageRoot, 'containerConfigs', `${id}.json`);
 }
 
-export async function saveStartConfig(config: CachedStartConfig): Promise<void> {
+export async function saveStartConfig(sc: CachedStartConfig): Promise<void> {
   try {
-    const dir = resolve(process.cwd(), 'storage/containerConfigs');
+    const dir = resolve(getPaths(config.paths).storageRoot, 'containerConfigs');
     mkdirSync(dir, { recursive: true });
-    await Bun.write(configCachePath(config.id), JSON.stringify(config, null, 2));
+    await Bun.write(configCachePath(sc.id), JSON.stringify(sc, null, 2));
   } catch (err) {
-    logger.error(`could not persist start config for ${config.id}`, err);
+    logger.error(`could not persist start config for ${sc.id}`, err);
   }
 }
 
@@ -215,16 +218,15 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
 
   await setServerState(id, 'installing');
 
-  // fire-and-forget — response returned immediately, panel polls /container/status/:id
-  (async () => {
-    try {
-      await performInstall(id, image, scripts, envVars);
-      await setServerState(id, 'installed');
-    } catch (err) {
-      logger.error('error during async install', err);
-      await setServerState(id, 'failed', err instanceof Error ? err.message : String(err));
-    }
-  })();
+  const { accepted, message } = enqueueOperation('install', id, async (signal) => {
+    if (signal.aborted) return;
+    await performInstall(id, image, scripts, envVars);
+  });
+
+  if (!accepted) {
+    await setServerState(id, 'failed', message);
+    return apiError('internal_error', message, 409);
+  }
 
   return json({ message: 'install started' });
 }
@@ -238,25 +240,24 @@ export async function handleContainerReinstall(req: Request): Promise<Response> 
 
   await setServerState(id, 'reinstalling');
 
-  // fire-and-forget — response returned immediately, panel polls /container/status/:id
-  (async () => {
-    try {
-      // Remove the running container, then rebuild it from the install
-      // scripts. The volume (worlds, configs, files) survives by default —
-      // only an explicit preserveData:false (panel "delete all data"
-      // confirmation) wipes it.
-      if (preserveData === false) {
-        await deleteContainerAndVolume(id);
-      } else {
-        await deleteContainer(id);
-      }
-      await performInstall(id, image, scripts, envVars);
-      await setServerState(id, 'installed');
-    } catch (err) {
-      logger.error('error during async reinstall', err);
-      await setServerState(id, 'failed', err instanceof Error ? err.message : String(err));
+  const { accepted, message } = enqueueOperation('reinstall', id, async (signal) => {
+    if (signal.aborted) return;
+    // Remove the running container, then rebuild it from the install
+    // scripts. The volume (worlds, configs, files) survives by default —
+    // only an explicit preserveData:false (panel "delete all data"
+    // confirmation) wipes it.
+    if (preserveData === false) {
+      await deleteContainerAndVolume(id);
+    } else {
+      await deleteContainer(id);
     }
-  })();
+    await performInstall(id, image, scripts, envVars);
+  });
+
+  if (!accepted) {
+    await setServerState(id, 'failed', message);
+    return apiError('internal_error', message, 409);
+  }
 
   return json({ message: 'reinstall started' });
 }
@@ -283,9 +284,9 @@ async function performInstall(
   }
 
   if (scripts && Array.isArray(scripts)) {
-    const alcPath = join(process.cwd(), 'storage/alc.json');
-    const locationsPath = join(process.cwd(), 'storage/alc/locations.json');
-    const filesDir = join(process.cwd(), 'storage/alc/files');
+    const alcPath = join(getPaths(config.paths).storageRoot, 'alc.json');
+    const locationsPath = join(getPaths(config.paths).storageRoot, 'alc', 'locations.json');
+    const filesDir = getPaths(config.paths).alcFilesRoot;
 
     const alc = (await loadJson(alcPath)) as {
       Name: string;
@@ -332,7 +333,7 @@ async function performInstall(
 
           if (alcEntry) {
             // cache it for next time
-            const tempPath = resolve(process.cwd(), `volumes/${id}/${fileName}`);
+            const tempPath = join(getPaths(config.paths).volumesRoot, id, fileName);
             await Bun.spawn(['cp', tempPath, join(filesDir, cachedFileId)], { stdout: 'pipe', stderr: 'pipe' }).exited;
             locations.push({
               Name: fileName,
@@ -654,11 +655,11 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
   if ('response' in parsed) return parsed.response;
   const body = parsed.data;
 
-  const volumePath = resolve(process.cwd(), `volumes/${body.id}`);
+  const volumePath = join(getPaths(config.paths).volumesRoot, body.id);
   if (!existsSync(volumePath)) return apiError('container_not_found', 'container volume not found', 404);
 
   try {
-    const backupsDir = resolve(process.cwd(), 'backups', body.id);
+    const backupsDir = join(getPaths(config.paths).backupsRoot, body.id);
     mkdirSync(backupsDir, { recursive: true });
 
     const backupUuid = crypto.randomUUID();
@@ -751,7 +752,7 @@ export async function handleContainerRestore(req: Request): Promise<Response> {
     }
   }
 
-  const volumePath = resolve(process.cwd(), `volumes/${body.id}`);
+  const volumePath = join(getPaths(config.paths).volumesRoot, body.id);
 
   // F-012: restore is staged and swapped, not extracted into a wiped volume.
   // The existing volume stays intact until the backup has fully extracted; a
@@ -773,12 +774,12 @@ export async function handleContainerRestore(req: Request): Promise<Response> {
   }
 
   try {
-    staging = mkdtempSync(resolve(process.cwd(), 'storage', `restore-${body.id}-`));
+    staging = mkdtempSync(resolve(getPaths(config.paths).storageRoot, `restore-${body.id}-`));
     await tarExtract({ file: fullPath, cwd: staging });
 
     // swap: only now is the old volume replaced
     if (existsSync(volumePath)) rmSync(volumePath, { recursive: true, force: true });
-    mkdirSync(resolve(process.cwd(), 'volumes'), { recursive: true });
+    mkdirSync(getPaths(config.paths).volumesRoot, { recursive: true });
     renameSync(staging, volumePath);
     staging = null;
 
@@ -903,7 +904,7 @@ export async function handleContainerBackupUpload(req: Request): Promise<Respons
   }
 
   try {
-    const backupsDir = resolve(process.cwd(), 'backups', id);
+    const backupsDir = join(getPaths(config.paths).backupsRoot, id);
     mkdirSync(backupsDir, { recursive: true });
 
     const backupFileName = `${backupUuid}.tar.gz`;

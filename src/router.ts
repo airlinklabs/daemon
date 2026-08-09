@@ -1,9 +1,11 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import config from './config';
+import { docker } from './handlers/docker';
 import { apiError } from './errors';
 import { maxBodyBytesFor } from './limits';
 import logger from './logger';
+import { shutdownOperations } from './handlers/operationManager';
 import { handleRoot, handleStats } from './routes/core';
 import {
   handleDownloadToken,
@@ -62,6 +64,12 @@ type Handler = (req: Request, params: Record<string, string>) => Promise<Respons
 const exactRoutes = new Map<string, Handler>([
   ['GET /', handleRoot],
   ['GET /stats', handleStats],
+  ['GET /capabilities', (_req) => {
+    const caps = docker.capabilities();
+    return new Response(JSON.stringify(caps), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }],
   ['POST /container/installer', handleContainerInstaller],
   ['POST /container/install', handleContainerInstall],
   ['POST /container/reinstall', handleContainerReinstall],

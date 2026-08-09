@@ -4,6 +4,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, st
 import { join, resolve } from 'node:path';
 import type Docker from 'dockerode';
 import config from '../config';
+import { getPaths } from '../paths';
 import logger from '../logger';
 import { emit } from '../ws/events';
 import { normalizeConsoleCommand } from './consoleCommand';
@@ -383,7 +384,7 @@ export type ContainerStats = {
 };
 
 function getStorageUsageMb(id: string): number {
-  const volumePath = resolve(process.cwd(), 'volumes', id);
+  const volumePath = join(getPaths(config.paths).volumesRoot, id);
   if (!existsSync(volumePath)) return 0;
 
   function walk(dir: string): number {
@@ -548,7 +549,7 @@ export function parseEnvironmentVariables(env: Record<string, string>): Record<s
 
 // creates the volume dir for a container if it doesn't exist, returns the path
 export function initContainer(id: string): string {
-  const volumesDir = resolve(process.cwd(), 'volumes');
+  const volumesDir = getPaths(config.paths).volumesRoot;
   const volumePath = join(volumesDir, id);
   if (!existsSync(volumesDir)) mkdirSync(volumesDir, { recursive: true });
   if (!existsSync(volumePath)) mkdirSync(volumePath, { recursive: true });
@@ -1037,14 +1038,14 @@ export async function deleteContainer(id: string): Promise<void> {
 export async function deleteContainerAndVolume(id: string): Promise<void> {
   storageLimits.delete(id);
   await deleteContainer(id);
-  const volumePath = resolve(process.cwd(), 'volumes', id);
+  const volumePath = join(getPaths(config.paths).volumesRoot, id);
   if (existsSync(volumePath)) {
     rmSync(volumePath, { recursive: true, force: true });
   }
 }
 
 async function writeCommandToConsoleFifo(id: string, command: string): Promise<void> {
-  const fifoPath = resolve(process.cwd(), 'volumes', id, CONSOLE_FIFO_RELATIVE_PATH);
+  const fifoPath = join(getPaths(config.paths).volumesRoot, id, CONSOLE_FIFO_RELATIVE_PATH);
   if (!existsSync(fifoPath) || !statSync(fifoPath).isFIFO()) {
     throw new Error(
       `console command FIFO is not ready for container ${id}; restart the container with the current daemon`,

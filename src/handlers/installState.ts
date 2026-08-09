@@ -1,8 +1,10 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import config from '../config';
+import { getPaths } from '../paths';
 import logger from '../logger';
 
-const defaultLogsPath = join(process.cwd(), 'storage/install_logs.json');
+const defaultLogsPath = join(getPaths(config.paths).storageRoot, 'install_logs.json');
 let logsPath = defaultLogsPath;
 
 // Test-only seam: lets unit tests point the state file at a writable temp path

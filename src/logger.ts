@@ -34,8 +34,9 @@ function positiveIntEnv(name: string, fallback: number): number {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-// Log directory is resolved from process.cwd() so the daemon writes into its own
-// data dir (tests chdir into a scratch dir before importing).
+// Log directory resolved from the centralised paths. config.paths is set by
+// bootstrap.ts before this module is imported (server.ts imports logger after
+// bootstrap completes).
 const LOG_DIR = join(process.cwd(), 'logs');
 // Rotate a level file once it would exceed this many bytes; at most one .1
 // backup is kept per level, so on-disk output stays under ~2x the cap.

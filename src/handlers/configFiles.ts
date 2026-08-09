@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import config from '../config';
+import { getPaths } from '../paths';
 import logger from '../logger';
 
 // Applies Wings/PTDL-v2 style egg config files before a container starts.
@@ -142,7 +144,7 @@ export async function applyConfigFiles(
   files: Record<string, ConfigFileEntry>,
   env: Record<string, string>,
 ): Promise<void> {
-  const volumeRoot = resolve(process.cwd(), 'volumes', containerId);
+  const volumeRoot = resolve(getPaths(config.paths).volumesRoot, containerId);
 
   for (const [filePath, entry] of Object.entries(files)) {
     const cleanPath = filePath.replace(/^[/\\]+/, '');

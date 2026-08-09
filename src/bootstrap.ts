@@ -10,8 +10,10 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 // bun --compile bundles these into the binary as static assets
 import envTemplate from '../example.env' with { type: 'text' };
+import config from './config';
 import { EMBEDDED_STORAGE } from './embedded';
 import { parseEnvFile } from './utils/parseEnv';
+import { resolveDaemonPaths } from './paths';
 
 const envPath = join(process.cwd(), '.env');
 
@@ -38,6 +40,11 @@ for (const dir of [
 ]) {
   mkdirSync(dir, { recursive: true });
 }
+
+// ── Resolve and validate all daemon paths ───────────────────────────────────
+// Must run after .env is loaded (so process.cwd() is correct) and before any
+// handler module is imported. Overwrites the placeholder in config.paths.
+config.paths = resolveDaemonPaths(process.cwd());
 
 // ---------------------------------------------------------------------------
 // Embedded storage extraction (first-run detector)

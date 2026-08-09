@@ -1,5 +1,7 @@
 // bun loads .env automatically, no dotenv needed
 
+import type { DaemonPaths } from './paths';
+
 const ALL_ZEROS = '00000000000000000000000000000000';
 const MIN_KEY_LENGTH = 16;
 
@@ -27,7 +29,25 @@ function parseContainerRuntime(raw: string | undefined): ContainerRuntime {
   return 'docker';
 }
 
-const config = {
+interface DaemonConfig {
+  readonly remote: string;
+  readonly key: string;
+  readonly port: number;
+  readonly debug: boolean;
+  readonly version: string;
+  readonly statsInterval: number;
+  readonly containerRuntime: ContainerRuntime;
+  readonly allowedIps: readonly string[];
+  readonly tlsCertPath: string | null;
+  readonly tlsKeyPath: string | null;
+  readonly sftpPort: number;
+  readonly networkRateMbps: number;
+  readonly requireHmac: boolean;
+  /** Set once by resolveDaemonPaths() during bootstrap. Never null at runtime. */
+  paths: DaemonPaths;
+}
+
+const config: DaemonConfig = {
   remote: required('remote', 'localhost'),
   key: daemonKey,
   port: parseInt(required('port', '3002'), 10),
@@ -44,7 +64,10 @@ const config = {
   sftpPort: parseInt(required('sftpPort', '3004'), 10),
   networkRateMbps: parseInt(Bun.env.NETWORK_RATE_MBPS ?? '0', 10) || 0,
   requireHmac: Bun.env.REQUIRE_HMAC !== 'false',
-} as const;
+  // Assigned by resolveDaemonPaths() in bootstrap.ts before any handler runs.
+  // Placeholder is overwritten synchronously before the event loop starts.
+  paths: undefined as unknown as DaemonPaths,
+};
 
 // Production must NEVER allow unsigned requests.
 if (!config.requireHmac && process.env.NODE_ENV === 'production') {

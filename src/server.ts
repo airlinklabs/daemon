@@ -2,6 +2,7 @@ import config from './config';
 import { checkDocker, checkDockerRunning, docker, initContainerStateMap } from './handlers/docker';
 import { startNativeSftpServer } from './handlers/nativeSftp';
 import { startBackgroundLogCollector } from './handlers/logHistory';
+import { shutdownOperations } from './handlers/operationManager';
 import { getCurrentStats, initStatsCollection, saveStats } from './handlers/stats';
 import logger, { drawHeader } from './logger';
 import { handleHttpRequest, isPrivateIp } from './router';
@@ -173,6 +174,9 @@ async function shutdown(signal: string): Promise<void> {
   server.stop(false);
 
   for (const ws of openConnections) ws.close(1001, 'server shutting down');
+
+  // Cancel pending/running operations before stats flush
+  await shutdownOperations(5_000);
 
   try {
     const stats = await getCurrentStats();

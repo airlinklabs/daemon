@@ -2,7 +2,9 @@ import type { Dirent } from 'node:fs';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { copyFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { extname, join, resolve, sep } from 'node:path';
+import { extname, join, sep } from 'node:path';
+import config from '../../config';
+import { getPaths } from '../../paths';
 
 // folders that are safe to include — contain plugins, mods, config
 const DEFAULT_INCLUDE = ['plugins', 'mods', 'config', 'addons', 'datapacks'];
@@ -60,8 +62,9 @@ export interface ZipOptions {
 // collect scannable files then zip with system zip — most secure approach
 // no archiver library, no in-memory buffer growing without bound
 export async function zipScanVolume(id: string, options: ZipOptions = {}): Promise<ArrayBuffer> {
-  const baseDir = resolve(process.cwd(), `volumes/${id}`);
-  const realVolumesDir = resolve(process.cwd(), 'volumes');
+  const paths = getPaths(config.paths);
+  const baseDir = join(paths.volumesRoot, id);
+  const realVolumesDir = paths.volumesRoot;
 
   let realVolumeDir: string;
   try {

@@ -3,9 +3,16 @@ import { copyFile, lstat, mkdir, readdir, readFile, rename, rm, stat, unlink, wr
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { extract as tarExtract, list as tarList } from 'tar';
+import config from '../config';
+import { getPaths } from '../paths';
 import { validatePublicUrl } from '../router';
 import { jailPath, jailRename } from '../security/pathJail';
 import fileSpecifier from '../utils/fileSpecifier';
+
+/** Resolve a container's volume root from the centralised paths. */
+function volumeRoot(id: string): string {
+  return join(getPaths(config.paths).volumesRoot, id);
+}
 
 // per-container cache to avoid hammering the filesystem on every list request
 const listCache = new Map<
@@ -78,7 +85,7 @@ export async function listDir(id: string, relativePath = '/', filter?: string): 
     return rateData.cache;
   }
 
-  const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+  const baseDirectory = volumeRoot(id);
   const targetDirectory = jailPath(baseDirectory, relativePath);
   const entries = await readdir(targetDirectory, { withFileTypes: true });
 
@@ -116,14 +123,14 @@ export async function listDir(id: string, relativePath = '/', filter?: string): 
 }
 
 export async function getDirSizeForId(id: string, relativePath = '/'): Promise<number> {
-  const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+  const baseDirectory = volumeRoot(id);
   const dirPath = jailPath(baseDirectory, relativePath);
   return getDirSize(dirPath);
 }
 
 export async function getFileContent(id: string, relativePath = '/'): Promise<string | null> {
   try {
-    const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+    const baseDirectory = volumeRoot(id);
     const filePath = jailPath(baseDirectory, relativePath);
     if (!existsSync(filePath)) return null;
     const s = await stat(filePath);
@@ -138,7 +145,7 @@ export async function getFileContent(id: string, relativePath = '/'): Promise<st
 }
 
 export async function writeFileContent(id: string, relativePath: string, content: string | Buffer): Promise<void> {
-  const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+  const baseDirectory = volumeRoot(id);
   await mkdir(baseDirectory, { recursive: true });
   const filePath = jailPath(baseDirectory, relativePath);
   await mkdir(dirname(filePath), { recursive: true });
@@ -147,13 +154,13 @@ export async function writeFileContent(id: string, relativePath: string, content
 }
 
 export function getFilePath(id: string, relativePath = '/'): string {
-  const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+  const baseDirectory = volumeRoot(id);
   return jailPath(baseDirectory, relativePath);
 }
 
 export async function rmPath(id: string, relativePath: string): Promise<void> {
   if (relativePath === '/') throw new Error('root directory cannot be deleted');
-  const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+  const baseDirectory = volumeRoot(id);
   const targetPath = jailPath(baseDirectory, relativePath);
   const s = await lstat(targetPath);
   if (s.isDirectory()) await rm(targetPath, { recursive: true, force: true });
@@ -162,7 +169,7 @@ export async function rmPath(id: string, relativePath: string): Promise<void> {
 }
 
 export async function renameFile(id: string, oldPath: string, newPath: string): Promise<void> {
-  const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+  const baseDirectory = volumeRoot(id);
 
   // pre-create destination parent so jailPath doesn't fail on realpathSync of a non-existent dir
   const rawNewParent = resolve(join(baseDirectory, dirname(newPath)));
@@ -217,7 +224,7 @@ export async function downloadToVolume(
   relativePath: string,
   env?: Record<string, string>,
 ): Promise<void> {
-  const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+  const baseDirectory = volumeRoot(id);
   const filePath = jailPath(baseDirectory, relativePath);
 
   const controller = new AbortController();
@@ -250,7 +257,7 @@ export async function downloadToVolume(
 
 // copy a file from an arbitrary source path into the container volume
 export async function copyIntoVolume(id: string, sourcePath: string, destRelative: string): Promise<void> {
-  const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+  const baseDirectory = volumeRoot(id);
   const destPath = jailPath(baseDirectory, destRelative);
   const s = await lstat(sourcePath);
 
@@ -268,7 +275,7 @@ export async function copyIntoVolume(id: string, sourcePath: string, destRelativ
 
 // zip multiple paths inside a container volume using system zip
 export async function zipPaths(id: string, filePaths: string[], zipname: string): Promise<string> {
-  const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+  const baseDirectory = volumeRoot(id);
 
   const clean = (f: string): string => f.replace(/[[\]"']/g, '').trim();
   const files = filePaths
@@ -473,7 +480,7 @@ async function assertExtractionStayedInside(extractPath: string): Promise<void> 
 
 // unzip an archive inside a container volume using system unzip or tar
 export async function unzipPath(id: string, relativePath: string, zipname: string): Promise<void> {
-  const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+  const baseDirectory = volumeRoot(id);
   // jail the archive path too — the route schema does not validate `path`, so
   // without this an operator-supplied `../../x.tar` would extract an arbitrary
   // host file into the volume
@@ -538,7 +545,7 @@ export async function appendChunk(
 
   // Single-chunk upload — write directly, no session bookkeeping.
   if (totalChunks <= 1) {
-    const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+    const baseDirectory = volumeRoot(id);
     const filePath = jailPath(baseDirectory, relativePath);
     await writeFile(filePath, chunk);
     return;
@@ -583,7 +590,7 @@ export async function appendChunk(
   if (!done) return;
 
   try {
-    const baseDirectory = resolve(process.cwd(), `volumes/${id}`);
+    const baseDirectory = volumeRoot(id);
     const filePath = jailPath(baseDirectory, relativePath);
     const tmpPath = `${filePath}.part-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
