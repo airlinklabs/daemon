@@ -124,6 +124,38 @@ describe('HMAC verification — brute force resistance (protocol v1)', () => {
     expect((await verifyHmac(req, TEST_KEY, ROUTE('GET', '/healthz')))!.status).toBe(401);
   });
 
+  test('rejects tampered query params (P0 — canonical target signing)', async () => {
+    // Panel signs '/fs/list?id=42&path=%2Fdata' — attacker swaps path param
+    const canonicalTarget = '/fs/list?id=42&path=%2Fdata';
+    const ts = Math.floor(Date.now() / 1000);
+    const nonce = 'tamper-query';
+    const sig = sign(TEST_KEY, 'GET', canonicalTarget, '', ts, nonce);
+    // Attacker changes ?id=42 to ?id=99 — different canonical target, HMAC fails
+    const req = createRequest('GET', '/fs/list?id=99&path=%2Fdata', '', {
+      'x-airlink-timestamp': String(ts),
+      'x-airlink-signature': sig,
+      'x-airlink-nonce': nonce,
+      'x-airlink-payload-version': '1',
+    });
+    expect((await verifyHmac(req, TEST_KEY, ROUTE('GET', '/fs/list?id=99&path=%2Fdata')))!.status).toBe(401);
+  });
+
+  test('accepts valid request with sorted query params', async () => {
+    // Panel sorts params by key then value, so both orderings produce the same
+    // canonical form. The daemon signs the full pathname + search.
+    const canonicalTarget = '/fs/list?id=42&path=%2Fdata';
+    const ts = Math.floor(Date.now() / 1000);
+    const nonce = 'valid-query-params';
+    const sig = sign(TEST_KEY, 'GET', canonicalTarget, '', ts, nonce);
+    const req = createRequest('GET', canonicalTarget, '', {
+      'x-airlink-timestamp': String(ts),
+      'x-airlink-signature': sig,
+      'x-airlink-nonce': nonce,
+      'x-airlink-payload-version': '1',
+    });
+    expect(await verifyHmac(req, TEST_KEY, ROUTE('GET', canonicalTarget))).toBeNull();
+  });
+
   test('rejects tampered method', async () => {
     const ts = Math.floor(Date.now() / 1000);
     const nonce = 'tamper-method';

@@ -6,6 +6,8 @@ import logger from '../logger';
 
 const HMAC_WINDOW_SECS = 30;
 const seenNonces = new Set<string>();
+const MAX_NONCE_SET_SIZE = 10_000;
+const MAX_NONCE_LENGTH = 128;
 
 // Must match HMAC_PAYLOAD_VERSION in the panel's daemonRequest.ts.
 // Increment both sides together when changing the signing format.
@@ -23,6 +25,13 @@ function sign(key: string, method: string, path: string, bodyRepr: string, ts: n
 
 function rememberNonce(ts: number, nonceValue: string): Response | null {
   const now = Math.floor(Date.now() / 1000);
+
+  // Enforce storage cap — reject new nonces if we've tracked too many.
+  // This prevents memory exhaustion under high request volume.
+  if (seenNonces.size >= MAX_NONCE_SET_SIZE) {
+    return apiError('nonce_storage_full', 'nonce storage exhausted, retry later', 503);
+  }
+
   for (const nonce of seenNonces) {
     const nonceTs = parseInt(nonce.split(':', 1)[0], 10);
     if (Number.isNaN(nonceTs) || Math.abs(now - nonceTs) > HMAC_WINDOW_SECS) seenNonces.delete(nonce);
@@ -77,7 +86,16 @@ export async function verifyHmac(req: Request, key: string, routeKey: string): P
 
   if (!tsHeader || !sigHeader) {
     if (Bun.env.REQUIRE_HMAC === 'false') {
-      logger.warn(`unsigned request allowed (REQUIRE_HMAC=false): ${req.method} ${new URL(req.url).pathname}`);
+      // In development mode only: allow unsigned requests from loopback.
+      // Production must NEVER set REQUIRE_HMAC=false.
+      const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+        ?? req.headers.get('x-real-ip')
+        ?? '';
+      const isLoopback = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === '::ffff:127.0.0.1' || clientIp === '';
+      if (!isLoopback) {
+        return apiError('missing_hmac_headers', 'missing HMAC headers', 401);
+      }
+      logger.warn(`unsigned request allowed from loopback (REQUIRE_HMAC=false): ${req.method} ${new URL(req.url).pathname}`);
       return null;
     }
     return apiError('missing_hmac_headers', 'missing HMAC headers', 401);
@@ -106,8 +124,34 @@ export async function verifyHmac(req: Request, key: string, routeKey: string): P
     return apiError('missing_nonce', 'missing nonce header', 401);
   }
 
+  // Validate nonce length — must not exceed bounds to prevent memory issues.
+  // The panel generates 32-char hex nonces; we accept any reasonable format
+  // but reject absurdly long values that could cause storage issues.
+  if (nonceHeader.length > MAX_NONCE_LENGTH) {
+    return apiError('invalid_nonce', 'nonce exceeds maximum length', 401);
+  }
+
   const url = new URL(req.url);
   const bodylessMethod = req.method === 'GET';
+
+  // Canonical target: sign the exact pathname + search that the panel signed.
+  // Previously only pathname was signed, leaving query params unprotected.
+  const canonicalTarget = url.search ? `${url.pathname}${url.search}` : url.pathname;
+
+  // Reject duplicate query keys where the panel forbids them.
+  // The panel uses buildCanonicalTarget() which throws on duplicates, so any
+  // request that makes it here with duplicate keys is either tampered or from
+  // an incompatible panel version. Either way, reject to be safe.
+  if (url.search) {
+    const keys = url.searchParams.getAll.bind(url.searchParams);
+    const uniqueKeys = new Set<string>();
+    for (const [key] of url.searchParams) {
+      if (uniqueKeys.has(key)) {
+        return apiError('duplicate_query_key', `duplicate query key "${key}"`, 400);
+      }
+      uniqueKeys.add(key);
+    }
+  }
 
   // Verify the digest over the exact bytes received, enforcing the per-route
   // cap on actual bytes read (Content-Length in the router is only a pre-check).
@@ -134,7 +178,7 @@ export async function verifyHmac(req: Request, key: string, routeKey: string): P
 
   const bodyRepr = digestHex ? `digest:${digestHex}` : '';
 
-  const expected = sign(key, req.method, url.pathname, bodyRepr, ts, nonceHeader);
+  const expected = sign(key, req.method, canonicalTarget, bodyRepr, ts, nonceHeader);
   const expBuf = Buffer.from(expected, 'hex');
   let gotBuf: Buffer;
   try {

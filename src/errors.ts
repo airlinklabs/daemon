@@ -24,7 +24,10 @@ export type ApiErrorCode =
   | 'checksum_mismatch'
   | 'request_too_large'
   | 'local_only'
-  | 'unsupported_content_type';
+  | 'unsupported_content_type'
+  | 'duplicate_query_key'
+  | 'nonce_storage_full'
+  | 'invalid_nonce';
 
 export interface ApiError {
   error: string;

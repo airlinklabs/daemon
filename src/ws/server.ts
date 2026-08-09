@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { ServerWebSocket } from 'bun';
 import config from '../config';
 import { sendCommandToContainer } from '../handlers/docker';
@@ -79,6 +79,60 @@ type IncomingCommand = {
   args?: string[];
   command?: string;
 };
+
+// ---------------------------------------------------------------------------
+// Capability token verification (panel-minted, replaces raw key auth).
+// Token format: base64url(payload).base64url(hmac-sha256)
+// Signed with the daemon key; contains serverId, permitted routes, expiry, jti.
+// ---------------------------------------------------------------------------
+interface CapabilityClaims {
+  v: number;
+  nodeId: number;
+  serverId: string;
+  routes: string[];
+  iat: number;
+  exp: number;
+  jti: string;
+}
+
+function b64urlDecode(input: string): Buffer {
+  return Buffer.from(input, 'base64url');
+}
+
+function verifyCapabilityToken(
+  token: string,
+  expectedKey: string,
+  containerId: string,
+  route: string,
+): { ok: true; claims: CapabilityClaims } | { ok: false; error: string } {
+  const parts = token.split('.');
+  if (parts.length !== 2) return { ok: false, error: 'malformed token' };
+
+  const [payload, sig] = [parts[0]!, parts[1]!];
+
+  // Verify HMAC signature
+  const expected = createHmac('sha256', expectedKey).update(payload).digest('base64url');
+  const a = Buffer.from(sig, 'base64url');
+  const b = Buffer.from(expected, 'base64url');
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return { ok: false, error: 'invalid signature' };
+  }
+
+  // Decode claims
+  let claims: CapabilityClaims;
+  try {
+    claims = JSON.parse(b64urlDecode(payload).toString('utf8')) as CapabilityClaims;
+  } catch {
+    return { ok: false, error: 'invalid payload' };
+  }
+
+  if (claims.v !== 1) return { ok: false, error: 'unsupported version' };
+  if (claims.serverId !== containerId) return { ok: false, error: 'server ID mismatch' };
+  if (!claims.routes.includes(route)) return { ok: false, error: 'route not permitted' };
+  if (typeof claims.exp !== 'number' || claims.exp < Date.now()) return { ok: false, error: 'token expired' };
+
+  return { ok: true, claims };
+}
 
 // Canonical shape per D-005: { event: 'CMD', command: string } only.
 // The args/field fallbacks were undocumented compatibility shims and are gone.
@@ -182,25 +236,40 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
     }
 
     const key = extractAuthKey(msg);
-    if (!key || !timingSafeKeyEquals(key, config.key)) {
-      ws.data.authFailures += 1;
-      if (ws.data.authFailures >= MAX_AUTH_ATTEMPTS) {
-        logger.warn(`ws auth failed ${MAX_AUTH_ATTEMPTS} times for ${ws.data.containerId}; closing`);
-        ws.send(JSON.stringify({ error: 'auth failed' }));
-        ws.close(1008, 'auth failed');
-        return;
-      }
-      // Keep the socket open so a legitimate client can retry a mistyped key,
-      // but only a bounded number of times — this caps brute force per socket.
-      // The auth timeout in wsOpen is the second, wall-clock bound.
-      logger.warn(`ws auth rejected for ${ws.data.containerId} (${ws.data.authFailures}/${MAX_AUTH_ATTEMPTS})`);
-      ws.send(JSON.stringify({ error: 'invalid key' }));
+    if (!key) {
+      ws.send(JSON.stringify({ error: 'missing credentials' }));
+      ws.close(1008, 'missing credentials');
       return;
     }
 
-    ws.data.authed = true;
-    ws.data.authFailures = 0;
-    clearAuthTimer(ws);
+    // Try capability token first (panel-minted, scoped, short-lived).
+    const capResult = verifyCapabilityToken(key, config.key, ws.data.containerId, ws.data.route);
+    if (capResult.ok) {
+      ws.data.authed = true;
+      ws.data.authFailures = 0;
+      clearAuthTimer(ws);
+    } else {
+      // Fallback: legacy raw key auth (static, unscoped).
+      // DEPRECATED: will be removed in a future version. The panel should
+      // always send capability tokens. Log a deprecation warning.
+      if (timingSafeKeyEquals(key, config.key)) {
+        logger.warn(`ws legacy raw-key auth used for ${ws.data.route}/${ws.data.containerId} — deprecated, upgrade panel`);
+        ws.data.authed = true;
+        ws.data.authFailures = 0;
+        clearAuthTimer(ws);
+      } else {
+        ws.data.authFailures += 1;
+        if (ws.data.authFailures >= MAX_AUTH_ATTEMPTS) {
+          logger.warn(`ws auth failed ${MAX_AUTH_ATTEMPTS} times for ${ws.data.containerId}; closing`);
+          ws.send(JSON.stringify({ error: 'auth failed' }));
+          ws.close(1008, 'auth failed');
+          return;
+        }
+        logger.warn(`ws auth rejected for ${ws.data.containerId} (${ws.data.authFailures}/${MAX_AUTH_ATTEMPTS})`);
+        ws.send(JSON.stringify({ error: 'invalid credentials' }));
+        return;
+      }
+    }
 
     if (ws.data.route === 'container') {
       attachToContainer(ws.data.containerId, ws);

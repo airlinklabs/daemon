@@ -43,6 +43,13 @@ const config = {
   tlsKeyPath: Bun.env.TLS_KEY ?? null,
   sftpPort: parseInt(required('sftpPort', '3004'), 10),
   networkRateMbps: parseInt(Bun.env.NETWORK_RATE_MBPS ?? '0', 10) || 0,
+  requireHmac: Bun.env.REQUIRE_HMAC !== 'false',
 } as const;
+
+// Production must NEVER allow unsigned requests.
+if (!config.requireHmac && process.env.NODE_ENV === 'production') {
+  console.error('[config] FATAL: REQUIRE_HMAC=false is not allowed in production. Remove it or set NODE_ENV=development.');
+  process.exit(1);
+}
 
 export default config;
