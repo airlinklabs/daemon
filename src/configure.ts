@@ -46,13 +46,20 @@ async function updateEnvFile(panelUrl: string, key: string): Promise<void> {
     .replace(/https?:\/\//, '')
     .split(':')[0]
     .split('/')[0];
-  envConfig.remote = remoteIp;
-  envConfig.key = key;
+  // normalize to uppercase keys for consistency
+  delete envConfig.remote;
+  delete envConfig.key;
+  delete envConfig.version;
+  delete envConfig.port;
+  delete envConfig.require_hmac;
+  delete envConfig.debug;
+  envConfig.REMOTE = remoteIp;
+  envConfig.KEY = key;
 
-  if (!envConfig.version) envConfig.version = '3.0.0';
-  if (!envConfig.port) envConfig.port = '3002';
-  if (!envConfig.require_hmac && !envConfig.REQUIRE_HMAC) envConfig.REQUIRE_HMAC = 'true';
-  if (!envConfig.debug && !envConfig.DEBUG) envConfig.DEBUG = 'false';
+  if (!envConfig.VERSION) envConfig.VERSION = '3.0.0';
+  if (!envConfig.PORT) envConfig.PORT = '3002';
+  if (!envConfig.REQUIRE_HMAC) envConfig.REQUIRE_HMAC = 'true';
+  if (!envConfig.DEBUG) envConfig.DEBUG = 'false';
 
   const newContent = Object.entries(envConfig)
     .map(([k, v]) => `${k}=${v}`)

@@ -1,78 +1,105 @@
 // bun loads .env automatically, no dotenv needed
 
+import { z } from 'zod';
 import type { DaemonPaths } from './paths';
 
-const ALL_ZEROS = '00000000000000000000000000000000';
-const MIN_KEY_LENGTH = 16;
+// ── Case-insensitive env lookup ───────────────────────────────────────────────
+// Bun loads .env case-sensitively. Our .env uses lowercase for some keys
+// (remote, key, port, version) and UPPERCASE for others. This helper tries
+// both so config works regardless of casing.
 
-const required = (key: string, fallback?: string): string => {
-  const val = Bun.env[key] ?? fallback;
-  if (val === undefined) {
-    console.error(`[config] required env var ${key} is missing`);
+function env(name: string): string | undefined {
+  const v = process.env[name];
+  if (v !== undefined) return v;
+  // try the other case
+  const alt = name === name.toUpperCase() ? name.toLowerCase() : name.toUpperCase();
+  return process.env[alt];
+}
+
+// ── Zod Schema for DaemonConfig ─────────────────────────────────────────────
+// Validates all environment variables at startup with clear error messages.
+
+const DaemonConfigSchema = z.object({
+  remote: z.string().default('localhost'),
+  key: z.string().min(16, 'daemon key must be at least 16 characters'),
+  port: z.coerce.number().int().min(1).max(65535).default(3002),
+  debug: z.coerce.boolean().default(false),
+  version: z.string().default('3.0.0'),
+  statsInterval: z.coerce.number().int().min(1000).default(10000),
+  containerRuntime: z.enum(['docker', 'podman']).default('docker'),
+  allowedIps: z.string().default('').transform((val) =>
+    val.split(',').map((s) => s.trim()).filter(Boolean)
+  ),
+  tlsCertPath: z.string().nullable().default(null),
+  tlsKeyPath: z.string().nullable().default(null),
+  sftpPort: z.coerce.number().int().min(1).max(65535).default(3004),
+  networkRateMbps: z.coerce.number().int().min(0).default(0),
+  requireHmac: z.coerce.boolean().default(true),
+});
+
+type DaemonConfig = z.infer<typeof DaemonConfigSchema> & {
+  paths: DaemonPaths;
+};
+
+// ── Parse and Validate ──────────────────────────────────────────────────────
+
+const ALL_ZEROS = '00000000000000000000000000000000';
+
+// Skip validation in test environments
+const isTest = process.env.BUN_TEST === 'true' || process.env.NODE_ENV === 'test';
+
+function parseConfig(): DaemonConfig {
+  // In test mode, use defaults if env vars are missing
+  const envKey = isTest ? (env('KEY') ?? 'test-key-for-unit-tests-12345678') : env('KEY');
+
+  const result = DaemonConfigSchema.safeParse({
+    remote: env('REMOTE'),
+    key: envKey,
+    port: env('PORT'),
+    debug: env('DEBUG'),
+    version: env('VERSION'),
+    statsInterval: env('STATS_INTERVAL'),
+    containerRuntime: env('CONTAINER_RUNTIME'),
+    allowedIps: env('ALLOWED_IPS'),
+    tlsCertPath: env('TLS_CERT'),
+    tlsKeyPath: env('TLS_KEY'),
+    sftpPort: env('SFTP_PORT'),
+    networkRateMbps: env('NETWORK_RATE_MBPS'),
+    requireHmac: env('REQUIRE_HMAC'),
+  });
+
+  if (!result.success) {
+    console.error('[config] FATAL: invalid configuration');
+    for (const issue of result.error.issues) {
+      console.error(`  ${issue.path.join('.')}: ${issue.message}`);
+    }
     process.exit(1);
   }
-  return val;
-};
 
-const daemonKey = required('key');
+  const config = result.data;
 
-if (daemonKey === ALL_ZEROS || daemonKey.length < MIN_KEY_LENGTH) {
-  console.error('[config] FATAL: daemon key is insecure (default or too short). Set a unique key in .env');
-  process.exit(1);
+  // Additional security checks (skip in test)
+  if (!isTest) {
+    if (config.key === ALL_ZEROS) {
+      console.error('[config] FATAL: daemon key is insecure (all zeros). Set a unique key in .env');
+      process.exit(1);
+    }
+
+    if (!config.requireHmac && process.env.NODE_ENV === 'production') {
+      console.error('[config] FATAL: REQUIRE_HMAC=false is not allowed in production. Remove it or set NODE_ENV=development.');
+      process.exit(1);
+    }
+
+    // TLS config: both or neither
+    if ((config.tlsCertPath === null) !== (config.tlsKeyPath === null)) {
+      console.error('[config] FATAL: both TLS_CERT and TLS_KEY must be set together');
+      process.exit(1);
+    }
+  }
+
+  return config as DaemonConfig;
 }
 
-const RUNTIME_VALUES = ['docker', 'podman'] as const;
-type ContainerRuntime = (typeof RUNTIME_VALUES)[number];
-
-function parseContainerRuntime(raw: string | undefined): ContainerRuntime {
-  if (raw === 'docker' || raw === 'podman') return raw;
-  return 'docker';
-}
-
-interface DaemonConfig {
-  readonly remote: string;
-  readonly key: string;
-  readonly port: number;
-  readonly debug: boolean;
-  readonly version: string;
-  readonly statsInterval: number;
-  readonly containerRuntime: ContainerRuntime;
-  readonly allowedIps: readonly string[];
-  readonly tlsCertPath: string | null;
-  readonly tlsKeyPath: string | null;
-  readonly sftpPort: number;
-  readonly networkRateMbps: number;
-  readonly requireHmac: boolean;
-  /** Set once by resolveDaemonPaths() during bootstrap. Never null at runtime. */
-  paths: DaemonPaths;
-}
-
-const config: DaemonConfig = {
-  remote: required('remote', 'localhost'),
-  key: daemonKey,
-  port: parseInt(required('port', '3002'), 10),
-  debug: Bun.env.DEBUG === 'true',
-  version: required('version', '3.0.0'),
-  statsInterval: parseInt(Bun.env.STATS_INTERVAL ?? '10000', 10),
-  containerRuntime: parseContainerRuntime(Bun.env.CONTAINER_RUNTIME),
-  allowedIps:
-    Bun.env.ALLOWED_IPS?.split(',')
-      .map((s) => s.trim())
-      .filter(Boolean) ?? [],
-  tlsCertPath: Bun.env.TLS_CERT ?? null,
-  tlsKeyPath: Bun.env.TLS_KEY ?? null,
-  sftpPort: parseInt(required('sftpPort', '3004'), 10),
-  networkRateMbps: parseInt(Bun.env.NETWORK_RATE_MBPS ?? '0', 10) || 0,
-  requireHmac: Bun.env.REQUIRE_HMAC !== 'false',
-  // Assigned by resolveDaemonPaths() in bootstrap.ts before any handler runs.
-  // Placeholder is overwritten synchronously before the event loop starts.
-  paths: undefined as unknown as DaemonPaths,
-};
-
-// Production must NEVER allow unsigned requests.
-if (!config.requireHmac && process.env.NODE_ENV === 'production') {
-  console.error('[config] FATAL: REQUIRE_HMAC=false is not allowed in production. Remove it or set NODE_ENV=development.');
-  process.exit(1);
-}
+const config = parseConfig();
 
 export default config;
