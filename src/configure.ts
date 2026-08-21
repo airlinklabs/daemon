@@ -51,6 +51,8 @@ async function updateEnvFile(panelUrl: string, key: string): Promise<void> {
 
   if (!envConfig.version) envConfig.version = '3.0.0';
   if (!envConfig.port) envConfig.port = '3002';
+  if (!envConfig.require_hmac && !envConfig.REQUIRE_HMAC) envConfig.REQUIRE_HMAC = 'true';
+  if (!envConfig.debug && !envConfig.DEBUG) envConfig.DEBUG = 'false';
 
   const newContent = Object.entries(envConfig)
     .map(([k, v]) => `${k}=${v}`)
