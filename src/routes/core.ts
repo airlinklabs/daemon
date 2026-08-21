@@ -3,11 +3,13 @@ import { getTotalStats } from '../handlers/stats';
 
 // read the meta version from storage/config.json at startup, fall back to env
 let daemonVersion = config.version || '3.0.0';
+let daemonCodename = '';
 try {
   const cfg = (await Bun.file('storage/config.json').json()) as {
-    meta?: { version?: string };
+    meta?: { version?: string; codename?: string };
   };
   daemonVersion = cfg?.meta?.version ?? daemonVersion;
+  daemonCodename = cfg?.meta?.codename ?? '';
 } catch {
   /* file missing or malformed — use env or default */
 }
@@ -24,10 +26,11 @@ function formatUptime(s: number): string {
 }
 
 export function handleRoot(_req: Request): Response {
+  const release = daemonCodename ? `${daemonVersion} ${daemonCodename}` : daemonVersion;
   return new Response(
     JSON.stringify({
       versionFamily: 1,
-      versionRelease: `Airlinkd ${daemonVersion}`,
+      versionRelease: release,
       status: 'Online',
       remote: config.remote,
     }),
