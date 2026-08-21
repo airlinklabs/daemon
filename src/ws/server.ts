@@ -6,6 +6,7 @@ import logger from '../logger';
 import { attachToContainer } from './attach';
 import { subscribe } from './events';
 import { startStatusPolling, stopStatusPolling } from './status';
+import { startNodeStatsPolling, stopNodeStatsPolling } from './nodestats';
 
 // ---------------------------------------------------------------------------
 // WS in-band auth threat model (Ledger F-005).
@@ -36,7 +37,7 @@ import { startStatusPolling, stopStatusPolling } from './status';
 // ---------------------------------------------------------------------------
 
 export type WsData = {
-  route: 'container' | 'containerstatus' | 'containerevents';
+  route: 'container' | 'containerstatus' | 'containerevents' | 'nodestats';
   containerId: string;
   authed: boolean;
   authFailures: number;
@@ -279,6 +280,8 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
       ws.data.unsub = subscribe(ws.data.containerId, (event) => {
         if (ws.readyState === 1) ws.send(JSON.stringify({ event: 'lifecycle', data: event }));
       });
+    } else if (ws.data.route === 'nodestats') {
+      ws.data.timer = startNodeStatsPolling(ws);
     }
     return;
   }
@@ -320,12 +323,15 @@ export function wsClose(ws: ServerWebSocket<WsData>, _code: number, _reason: str
   openConnections.delete(ws);
   clearAuthTimer(ws);
 
-  if (ws.data.timer) stopStatusPolling(ws.data.timer);
+  if (ws.data.timer) {
+    if (ws.data.route === 'nodestats') stopNodeStatsPolling(ws.data.timer);
+    else stopStatusPolling(ws.data.timer);
+  }
   if (ws.data.unsub) ws.data.unsub();
   if (ws.data._logCleanup) ws.data._logCleanup();
 }
 
 // builds the data object attached to each WS upgrade
-export function buildWsData(route: 'container' | 'containerstatus' | 'containerevents', containerId: string): WsData {
+export function buildWsData(route: 'container' | 'containerstatus' | 'containerevents' | 'nodestats', containerId: string): WsData {
   return { route, containerId, authed: false, authFailures: 0 };
 }

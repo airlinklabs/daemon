@@ -32,8 +32,17 @@ function attemptUpgrade(req: Request, server: ReturnType<typeof Bun.serve>): boo
   const url = new URL(req.url);
   const parts = url.pathname.split('/').filter(Boolean);
   const route = parts[0];
-  const containerId = parts[1];
 
+  if (route === 'nodestats') {
+    const effectiveIp = resolveEffectiveIp(req, server);
+    const ipErr = getAllowedIpCheck(effectiveIp);
+    if (ipErr) return ipErr;
+    const rlErr = checkRateLimit(effectiveIp, 60);
+    if (rlErr) return rlErr;
+    return server.upgrade(req, { data: buildWsData('nodestats', '') });
+  }
+
+  const containerId = parts[1];
   const validRoutes = ['container', 'containerstatus', 'containerevents'];
   if (!validRoutes.includes(route) || !containerId) return false;
   if (parts.length !== 2) return false;
