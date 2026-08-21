@@ -1,15 +1,15 @@
 import config from '../config';
 import { getTotalStats } from '../handlers/stats';
 
-// read the meta version from storage/config.json at startup
-let daemonVersion = '3.0.0';
+// read the meta version from storage/config.json at startup, fall back to env
+let daemonVersion = config.version || '3.0.0';
 try {
   const cfg = (await Bun.file('storage/config.json').json()) as {
     meta?: { version?: string };
   };
   daemonVersion = cfg?.meta?.version ?? daemonVersion;
 } catch {
-  /* file missing or malformed — use default */
+  /* file missing or malformed — use env or default */
 }
 
 function formatUptime(s: number): string {
