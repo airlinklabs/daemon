@@ -1,8 +1,9 @@
 import type { ServerWebSocket } from 'bun';
 import { totalmem, freemem, cpus, uptime } from 'os';
 import { statfsSync } from 'fs';
-import { getCurrentStats } from '../handlers/stats';
+import { getTotalStats } from '../handlers/stats';
 import type { WsData } from './server';
+import logger from '../logger';
 
 const POLL_MS = 3000;
 
@@ -14,7 +15,7 @@ export function startNodeStatsPolling(ws: ServerWebSocket<WsData>): ReturnType<t
   }, POLL_MS);
 }
 
-async function sendNodeStats(ws: ServerWebSocket<WsData>): Promise<void> {
+function sendNodeStats(ws: ServerWebSocket<WsData>): void {
   if (ws.readyState !== 1) return;
   try {
     const totalRam = totalmem();
@@ -30,8 +31,7 @@ async function sendNodeStats(ws: ServerWebSocket<WsData>): Promise<void> {
       disk = { total: fs.blocks * fs.bsize, used: (fs.blocks - fs.bfree) * fs.bsize, available: fs.bavail * fs.bsize };
     } catch {}
 
-    const stats = await getCurrentStats();
-    const totalStats = (await import('../handlers/stats')).getTotalStats();
+    const totalStats = getTotalStats();
     const latest = totalStats.length ? totalStats[totalStats.length - 1] : null;
 
     ws.send(JSON.stringify({
@@ -42,7 +42,9 @@ async function sendNodeStats(ws: ServerWebSocket<WsData>): Promise<void> {
         current: latest,
       },
     }));
-  } catch {}
+  } catch (err) {
+    logger.warn('nodestats send failed', err);
+  }
 }
 
 function formatUptime(s: number): string {
