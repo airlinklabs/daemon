@@ -155,7 +155,7 @@ describe('ws auth (Ledger F-005)', () => {
     expect(f.data.authed).toBe(false);
     expect(f.data.authFailures).toBe(1);
     expect(f.closedCode).toBeUndefined();
-    expect((lastJson(f) as { error: string }).error).toBe('invalid key');
+    expect((lastJson(f) as { error: string }).error).toBe('invalid credentials');
     expect(commandSpy).not.toHaveBeenCalled();
   });
 

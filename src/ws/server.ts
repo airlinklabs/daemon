@@ -238,8 +238,14 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
 
     const key = extractAuthKey(msg);
     if (!key) {
-      ws.send(JSON.stringify({ error: 'missing credentials' }));
-      ws.close(1008, 'missing credentials');
+      ws.data.authFailures += 1;
+      if (ws.data.authFailures >= MAX_AUTH_ATTEMPTS) {
+        ws.send(JSON.stringify({ error: 'auth failed' }));
+        ws.close(1008, 'auth failed');
+      } else {
+        ws.send(JSON.stringify({ error: 'missing credentials' }));
+        ws.close(1008, 'missing credentials');
+      }
       return;
     }
 
