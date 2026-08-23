@@ -6,7 +6,7 @@ import { apiError } from './errors';
 import { maxBodyBytesFor } from './limits';
 import logger from './logger';
 import { shutdownOperations } from './handlers/operationManager';
-import { handleRoot, handleStats } from './routes/core';
+import { handleRoot, handleStats, handleHostInfo } from './routes/core';
 import {
   handleDownloadToken,
   handleFsAppend,
@@ -64,6 +64,7 @@ type Handler = (req: Request, params: Record<string, string>) => Promise<Respons
 const exactRoutes = new Map<string, Handler>([
   ['GET /', handleRoot],
   ['GET /stats', handleStats],
+  ['GET /host', handleHostInfo],
   ['GET /capabilities', (_req) => {
     const caps = docker.capabilities();
     return new Response(JSON.stringify(caps), {

@@ -22,15 +22,16 @@
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
-  readdirSync as nodeReaddirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { copyFile, rename } from 'node:fs/promises';
+import { copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -41,7 +42,7 @@ const DIST_DIR = join(ROOT, 'dist');
 const STORAGE_DIR = join(ROOT, 'storage');
 const EMBEDDED_PATH = join(ROOT, 'src', 'embedded.ts');
 const MANIFEST_PATH = join(DIST_DIR, 'manifest.json');
-const BUN_VERSION = '1.3.12';
+const BUN_VERSION = '1.3.14';
 
 // Supported target matrix
 const ALL_TARGETS = [
@@ -145,7 +146,7 @@ function collectStorageFiles(): string[] {
   // Fallback: walk the directory, only include allowlisted files
   const walk = (dir: string): string[] => {
     const found: string[] = [];
-    for (const entry of nodeReaddirSync(dir, { withFileTypes: true })) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
       const rel = path.replace(ROOT + '/', '');
       if (RUNTIME_STORAGE.has(entry.name)) continue;
@@ -222,50 +223,63 @@ function generateEmbedded(checkOnly: boolean): void {
 
 // ── Command: package ─────────────────────────────────────────────────────────
 
-async function ensurePlatformPackages(): Promise<void> {
-  const corePkgPath = join(ROOT, 'node_modules', '@opentui', 'core', 'package.json');
-  if (!existsSync(corePkgPath)) return;
+/**
+ * Isolated build workspace — copies node_modules to a temp directory
+ * so we never mutate the original installed dependencies.
+ */
+async function createBuildWorkspace(): Promise<string> {
+  const stagingDir = join(tmpdir(), `airlinkd-build-${Date.now()}`);
+  mkdirSync(stagingDir, { recursive: true });
 
-  const corePkg = JSON.parse(readFileSync(corePkgPath, 'utf8'));
-  const optional = (corePkg.optionalDependencies ?? {}) as Record<string, string>;
+  // Copy source files
+  const srcDir = join(stagingDir, 'src');
+  execSync(`cp -r "${join(ROOT, 'src')}" "${srcDir}"`, { stdio: 'ignore' });
 
-  for (const [name, version] of Object.entries(optional)) {
-    const targetDir = join(ROOT, 'node_modules', name);
-    if (existsSync(join(targetDir, 'package.json'))) continue;
-
-    const bare = name.startsWith('@') ? name.split('/')[1] : name;
-    const url = `https://registry.npmjs.org/${name}/-/${bare}-${version}.tgz`;
-    console.log(`fetching ${name}@${version} from registry...`);
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`failed to fetch ${url}: HTTP ${res.status}`);
-
-    const tarball = join(tmpdir(), `${bare}-${version}.tgz`);
-    await Bun.write(tarball, await res.arrayBuffer());
-
-    const extractDir = join(ROOT, 'node_modules', '.opentui-staging');
-    rmSync(extractDir, { recursive: true, force: true });
-    mkdirSync(extractDir, { recursive: true });
-
-    const { x: tarExtract } = await import('tar');
-    await tarExtract({ file: tarball, cwd: extractDir });
-    rmSync(tarball, { force: true });
-    rename(join(extractDir, 'package'), targetDir);
-    rmSync(extractDir, { recursive: true, force: true });
-    console.log(`installed ${name}@${version}`);
+  // Copy storage files
+  const storageDir = join(stagingDir, 'storage');
+  if (existsSync(STORAGE_DIR)) {
+    execSync(`cp -r "${STORAGE_DIR}" "${storageDir}"`, { stdio: 'ignore' });
   }
+
+  // Copy package.json, lock files, and example.env (imported by bootstrap.ts)
+  for (const file of ['package.json', 'bun.lock', 'tsconfig.json', 'example.env']) {
+    const src = join(ROOT, file);
+    if (existsSync(src)) {
+      execSync(`cp "${src}" "${stagingDir}"`, { stdio: 'ignore' });
+    }
+  }
+
+  // Install fresh dependencies in workspace
+  console.log('installing dependencies in build workspace...');
+  const installProc = Bun.spawn(['bun', 'install', '--frozen-lockfile'], {
+    cwd: stagingDir,
+    stdout: 'inherit',
+    stderr: 'inherit',
+  });
+  if ((await installProc.exited) !== 0) {
+    fail('failed to install dependencies in build workspace');
+  }
+
+  return stagingDir;
 }
 
-function stubNativeModules(): void {
+/**
+ * Apply platform-specific patches in the build workspace.
+ */
+async function applyPlatformPatches(workspaceDir: string): Promise<void> {
   // Stub cpu-features (required by ssh2, never actually called)
-  writeFileSync(
-    join(ROOT, 'node_modules/cpu-features/lib/index.js'),
-    'module.exports = function() { return { flags: [], models: [] }; };\n',
-  );
-  console.log('patched cpu-features');
+  const cpuFeaturesPath = join(workspaceDir, 'node_modules/cpu-features/lib/index.js');
+  if (existsSync(cpuFeaturesPath)) {
+    writeFileSync(
+      cpuFeaturesPath,
+      'module.exports = function() { return { flags: [], models: [] }; };\n',
+    );
+    console.log('patched cpu-features');
+  }
 
   // Stub ssh2 native crypto binding — ssh2 wraps in try/catch but Bun crashes
   // on dlopen. Remove the require so ssh2 falls back to JS crypto.
-  const sshCryptoPath = join(ROOT, 'node_modules/ssh2/lib/protocol/crypto.js');
+  const sshCryptoPath = join(workspaceDir, 'node_modules/ssh2/lib/protocol/crypto.js');
   if (existsSync(sshCryptoPath)) {
     const orig = readFileSync(sshCryptoPath, 'utf8');
     if (orig.includes("require('./crypto/build/Release/sshcrypto.node')")) {
@@ -280,25 +294,34 @@ function stubNativeModules(): void {
 
   // Remove .node files so bun build --compile can't try to embed them
   try {
-    execSync('find node_modules -name "*.node" -delete 2>/dev/null', { stdio: 'ignore' });
+    execSync(`find "${join(workspaceDir, 'node_modules')}" -name "*.node" -delete 2>/dev/null`, { stdio: 'ignore' });
     console.log('removed .node files');
   } catch {
     // ignore
   }
 }
 
-async function packageBinary(target: Target): Promise<void> {
+async function packageBinary(target: Target, workspaceDir?: string): Promise<void> {
   const outPath = join(DIST_DIR, target.out);
+  const buildDir = workspaceDir ?? ROOT;
 
   // Stage in temp dir, then atomic move
   const stagingDir = join(tmpdir(), `airlinkd-build-${Date.now()}`);
   mkdirSync(stagingDir, { recursive: true });
   const stagingOut = join(stagingDir, target.out);
 
+  // Get version from package.json for compile-time injection
+  const pkgVersion = getVersion();
+
   console.log(`packaging ${target.out}...`);
   const proc = Bun.spawn(
-    ['bun', 'build', '--compile', '--target', target.target, '--outfile', stagingOut, 'src/app.ts'],
-    { stdout: 'inherit', stderr: 'inherit', cwd: ROOT },
+    [
+      'bun', 'build', '--compile', '--target', target.target,
+      '--define', `BUN_VERSION="${BUN_VERSION}"`,
+      '--define', `PKG_VERSION="${pkgVersion}"`,
+      '--outfile', stagingOut, 'src/app.ts',
+    ],
+    { stdout: 'inherit', stderr: 'inherit', cwd: buildDir },
   );
   const code = await proc.exited;
   if (code !== 0) {
@@ -313,9 +336,9 @@ async function packageBinary(target: Target): Promise<void> {
     fail(`built binary is empty: ${target.out}`);
   }
 
-  // Atomic move to dist/
+  // Move to dist/ — use copy+delete since /tmp may be a different filesystem
   mkdirSync(DIST_DIR, { recursive: true });
-  rename(stagingOut, outPath);
+  copyFileSync(stagingOut, outPath);
   rmSync(stagingDir, { recursive: true, force: true });
   ok(`built ${target.out} (${(stat.size / 1024 / 1024).toFixed(1)} MB)`);
 }
@@ -414,7 +437,7 @@ function generateManifest(): void {
   const dirty = isDirtyTree();
   const artifacts: Record<string, { sha256: string; size: number }> = {};
 
-  for (const entry of nodeReaddirSync(DIST_DIR)) {
+  for (const entry of readdirSync(DIST_DIR)) {
     const fullPath = join(DIST_DIR, entry);
     if (entry === 'manifest.json' || entry.endsWith('.sha256')) continue;
     const stat = statSync(fullPath);
@@ -464,7 +487,6 @@ function generateManifest(): void {
 
 async function fullBuild(dev: boolean): Promise<void> {
   const startTime = Date.now();
-  const pkgJson = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 
   // 1. Verify Bun version
   const bunVersion = execSync('bun --version', { encoding: 'utf8' }).trim();
@@ -473,7 +495,7 @@ async function fullBuild(dev: boolean): Promise<void> {
   }
   ok(`bun version: ${bunVersion}`);
 
-  // 2. TypeScript check
+  // 2. TypeScript check (on source)
   console.log('running TypeScript check...');
   const tscProc = Bun.spawn(['bunx', 'tsc', '--noEmit'], { stdout: 'inherit', stderr: 'inherit', cwd: ROOT });
   if ((await tscProc.exited) !== 0) {
@@ -481,73 +503,79 @@ async function fullBuild(dev: boolean): Promise<void> {
   }
   ok('TypeScript check passed');
 
-  // 3. Generate embedded assets
+  // 3. Generate embedded assets (on source)
   generateEmbedded(false);
 
-  // 4. Ensure cross-target platform packages (skip for dev builds)
-  if (!dev) {
-    await ensurePlatformPackages();
-  }
+  // 4. Create isolated build workspace (no mutation of node_modules)
+  console.log('creating isolated build workspace...');
+  const workspaceDir = await createBuildWorkspace();
+  ok(`build workspace created: ${workspaceDir}`);
 
-  // 5. Stub native modules
-  stubNativeModules();
-
-  // 6. Clean dist/
-  mkdirSync(DIST_DIR, { recursive: true });
   try {
-  for (const entry of nodeReaddirSync(DIST_DIR)) {
-    if (entry === 'manifest.json') continue;
-    rmSync(join(DIST_DIR, entry), { force: true });
-    }
-  } catch {
-    // dist/ may not exist yet
-  }
+    // 5. Apply platform patches in workspace (not in source)
+    await applyPlatformPatches(workspaceDir);
 
-  // 7. Build targets
-  const targets = dev
-    ? [{ platform: 'linux' as const, arch: 'x64' as const, target: 'bun-linux-x64' as const, out: 'airlinkd' as const }]
-    : ALL_TARGETS;
-
-  let built = 0;
-  for (const t of targets) {
+    // 6. Clean dist/
+    mkdirSync(DIST_DIR, { recursive: true });
     try {
-      await packageBinary(t);
-      built++;
-    } catch (e) {
-      console.error(`target ${t.target} failed: ${e}`);
-      fail(`build failed — ${built}/${targets.length} targets succeeded`);
+      for (const entry of readdirSync(DIST_DIR)) {
+        if (entry === 'manifest.json') continue;
+        rmSync(join(DIST_DIR, entry), { force: true });
+      }
+    } catch {
+      // dist/ may not exist yet
     }
-  }
 
-  // 8. Copy native target as `airlinkd` (full builds only)
-  if (!dev) {
-    const nativeTarget = ALL_TARGETS.find(
-      (t) =>
-        t.platform ===
-          (process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux') &&
-        t.arch === process.arch,
-    );
-    if (nativeTarget) {
-      const src = join(DIST_DIR, nativeTarget.out);
-      const dst = join(DIST_DIR, 'airlinkd');
-      await copyFile(src, dst);
-      console.log(`copied ${nativeTarget.out} -> airlinkd`);
+    // 7. Build targets from workspace
+    const targets = dev
+      ? [{ platform: 'linux' as const, arch: 'x64' as const, target: 'bun-linux-x64' as const, out: 'airlinkd' as const }]
+      : ALL_TARGETS;
+
+    let built = 0;
+    for (const t of targets) {
+      try {
+        await packageBinary(t, workspaceDir);
+        built++;
+      } catch (e) {
+        console.error(`target ${t.target} failed: ${e}`);
+        fail(`build failed — ${built}/${targets.length} targets succeeded`);
+      }
     }
-  }
 
-  // 9. Verify native binary
-  const nativeBin = join(DIST_DIR, 'airlinkd');
-  if (existsSync(nativeBin)) {
-    await verifyBinary(nativeBin);
-  }
+    // 8. Copy native target as `airlinkd` (full builds only)
+    if (!dev) {
+      const nativeTarget = ALL_TARGETS.find(
+        (t) =>
+          t.platform ===
+            (process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux') &&
+          t.arch === process.arch,
+      );
+      if (nativeTarget) {
+        const src = join(DIST_DIR, nativeTarget.out);
+        const dst = join(DIST_DIR, 'airlinkd');
+        await copyFile(src, dst);
+        console.log(`copied ${nativeTarget.out} -> airlinkd`);
+      }
+    }
 
-  // 10. Generate manifest + checksums (full builds only)
-  if (!dev) {
-    generateManifest();
-  }
+    // 9. Verify native binary
+    const nativeBin = join(DIST_DIR, 'airlinkd');
+    if (existsSync(nativeBin)) {
+      await verifyBinary(nativeBin);
+    }
 
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  console.log(`\nbuild complete in ${elapsed}s (${built} targets)`);
+    // 10. Generate manifest + checksums (full builds only)
+    if (!dev) {
+      generateManifest();
+    }
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\nbuild complete in ${elapsed}s (${built} targets)`);
+  } finally {
+    // Cleanup workspace
+    console.log('cleaning up build workspace...');
+    rmSync(workspaceDir, { recursive: true, force: true });
+  }
 }
 
 // ── CLI Router ───────────────────────────────────────────────────────────────

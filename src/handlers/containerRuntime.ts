@@ -50,10 +50,8 @@ export interface RuntimeCapabilities {
 }
 
 // ── ContainerRuntime interface ──────────────────────────────────────────────
-// All container operations go through this interface. The single implementation
-// wraps Dockerode; a Podman-specific adapter is only added when observed
-// semantic/API differences require it (currently none — Podman's compat API
-// matches Docker's).
+// All container operations go through this interface. Implementations exist
+// for Docker and Podman, with Podman handling its specific quirks.
 
 export interface ContainerRuntime {
   name: string;
@@ -84,6 +82,7 @@ const DOCKER_ENDPOINTS: EndpointCandidate[] = [
 
 const PODMAN_ENDPOINTS: EndpointCandidate[] = [
   { path: '/run/podman/podman.sock', platform: 'linux' },
+  { path: '/run/user/1000/podman/podman.sock', platform: 'linux' }, // rootless
 ];
 
 function validateSocket(socketPath: string): { valid: boolean; reason?: string } {
@@ -110,17 +109,16 @@ function selectEndpoint(runtime: 'docker' | 'podman'): string {
   return runtime === 'docker' ? '/var/run/docker.sock' : '/run/podman/podman.sock';
 }
 
-// ── Single Dockerode-backed implementation ──────────────────────────────────
+// ── Docker Runtime Implementation ──────────────────────────────────────────
 
-class DockerodeRuntime implements ContainerRuntime {
+class DockerRuntime implements ContainerRuntime {
   private docker: Docker;
-  readonly name: 'docker' | 'podman';
+  readonly name: 'docker' = 'docker';
   private _socketPath: string;
   private _capabilities: RuntimeCapabilities | null = null;
 
-  constructor(socketPath: string, runtimeName: 'docker' | 'podman') {
+  constructor(socketPath: string) {
     this._socketPath = socketPath;
-    this.name = runtimeName;
     this.docker = new Docker({ socketPath });
   }
 
@@ -159,17 +157,15 @@ class DockerodeRuntime implements ContainerRuntime {
   capabilities(): RuntimeCapabilities {
     if (this._capabilities) return this._capabilities;
 
-    const isDocker = this.name === 'docker';
-
     this._capabilities = {
       version: 1,
-      runtime: this.name,
+      runtime: 'docker',
       apiVersion: 'unknown', // populated lazily by pingRuntime
       rootless: false,
       socketValid: validateSocket(this._socketPath).valid,
       socketPath: this._socketPath,
       cgroupVersion: 2,
-      storageDriver: isDocker ? 'overlay2' : 'overlay',
+      storageDriver: 'overlay2',
       limits: {
         memory: { enforced: true, enforcement: 'enforced' },
         cpu: { enforced: true, enforcement: 'enforced' },
@@ -178,14 +174,12 @@ class DockerodeRuntime implements ContainerRuntime {
         storage: {
           enforced: false,
           enforcement: 'advisory',
-          reason: isDocker
-            ? 'StorageOpt is overlay2-only; fallback is soft directory-size polling'
-            : 'Podman does not support Docker StorageOpt; fallback is soft directory-size polling',
+          reason: 'StorageOpt is overlay2-only; fallback is soft directory-size polling',
         },
         networkRate: {
           enforced: false,
           enforcement: 'advisory',
-          reason: 'requires NET_ADMIN capability + tc binary in image; not supported on Podman rootless',
+          reason: 'requires NET_ADMIN capability + tc binary in image',
         },
         blkioWeight: { enforced: true, enforcement: 'enforced' },
         oomKillDisable: { enforced: true, enforcement: 'enforced' },
@@ -225,6 +219,169 @@ class DockerodeRuntime implements ContainerRuntime {
   }
 }
 
+// ── Podman Runtime Implementation ──────────────────────────────────────────
+// Handles Podman-specific differences:
+// 1. No StorageOpt support (uses overlay, not overlay2)
+// 2. Rootless mode with different cgroup handling
+// 3. No NET_ADMIN capability in rootless mode
+// 4. Different socket paths (including rootless user socket)
+// 5. cgroup v2 only (no cgroup v1 support)
+
+class PodmanRuntime implements ContainerRuntime {
+  private docker: Docker;
+  readonly name: 'podman' = 'podman';
+  private _socketPath: string;
+  private _capabilities: RuntimeCapabilities | null = null;
+  private _isRootless: boolean = false;
+
+  constructor(socketPath: string) {
+    this._socketPath = socketPath;
+    this.docker = new Docker({ socketPath });
+  }
+
+  get socketPath(): string {
+    return this._socketPath;
+  }
+
+  getContainer(id: string): Docker.Container {
+    return this.docker.getContainer(id);
+  }
+
+  listContainers(opts?: Docker.ContainerListOptions): Promise<Docker.ContainerInfo[]> {
+    return this.docker.listContainers(opts);
+  }
+
+  getEvents(opts?: Docker.GetEventsOptions): Promise<NodeJS.ReadableStream> {
+    return this.docker.getEvents(opts);
+  }
+
+  pull(image: string, opts?: object): Promise<NodeJS.ReadableStream> {
+    // Podman pull has slightly different options; Dockerode handles the compat layer
+    return this.docker.pull(image, opts);
+  }
+
+  createContainer(opts: Docker.ContainerCreateOptions): Promise<Docker.Container> {
+    // Podman doesn't support StorageOpt; remove it if present
+    if (opts.HostConfig?.StorageOpt) {
+      logger.debug('removing StorageOpt from container create options (not supported by Podman)');
+      const { StorageOpt, ...restHostConfig } = opts.HostConfig;
+      opts = { ...opts, HostConfig: restHostConfig };
+    }
+
+    // In rootless mode, Podman doesn't support NET_ADMIN capability
+    if (this._isRootless && opts.HostConfig?.CapAdd) {
+      const filteredCaps = opts.HostConfig.CapAdd.filter((cap: string) => cap !== 'NET_ADMIN');
+      if (filteredCaps.length !== opts.HostConfig.CapAdd.length) {
+        logger.debug('removing NET_ADMIN capability (not supported in Podman rootless mode)');
+        opts = {
+          ...opts,
+          HostConfig: {
+            ...opts.HostConfig,
+            CapAdd: filteredCaps,
+          },
+        };
+      }
+    }
+
+    return this.docker.createContainer(opts);
+  }
+
+  getImage(name: string): Docker.Image {
+    return this.docker.getImage(name);
+  }
+
+  get modem(): Docker['modem'] {
+    return this.docker.modem;
+  }
+
+  capabilities(): RuntimeCapabilities {
+    if (this._capabilities) return this._capabilities;
+
+    this._capabilities = {
+      version: 1,
+      runtime: 'podman',
+      apiVersion: 'unknown', // populated lazily by pingRuntime
+      rootless: this._isRootless,
+      socketValid: validateSocket(this._socketPath).valid,
+      socketPath: this._socketPath,
+      cgroupVersion: 2, // Podman only supports cgroup v2
+      storageDriver: 'overlay', // Podman uses overlay, not overlay2
+      limits: {
+        memory: { enforced: true, enforcement: 'enforced' },
+        cpu: { enforced: true, enforcement: 'enforced' },
+        pids: { enforced: true, enforcement: 'enforced' },
+        swap: { enforced: true, enforcement: 'enforced' },
+        storage: {
+          enforced: false,
+          enforcement: 'advisory',
+          reason: 'Podman does not support Docker StorageOpt; fallback is soft directory-size polling',
+        },
+        networkRate: {
+          enforced: false,
+          enforcement: this._isRootless ? 'unsupported' : 'advisory',
+          reason: this._isRootless
+            ? 'not supported in Podman rootless mode'
+            : 'requires NET_ADMIN capability + tc binary in image',
+        },
+        blkioWeight: {
+          enforced: !this._isRootless,
+          enforcement: this._isRootless ? 'unsupported' : 'enforced',
+          reason: this._isRootless ? 'not supported in Podman rootless mode' : undefined,
+        },
+        oomKillDisable: {
+          enforced: true,
+          enforcement: 'enforced',
+          // Podman uses --oom-score-adj instead of --oom-kill-disable
+          reason: 'Podman uses --oom-score-adj instead of --oom-kill-disable',
+        },
+      },
+      operations: {
+        pull: true,
+        create: true,
+        start: true,
+        stop: true,
+        kill: true,
+        delete: true,
+        exec: true,
+        logs: true,
+        events: true,
+        stats: true,
+        ports: true,
+        mounts: true,
+      },
+    };
+
+    return this._capabilities;
+  }
+
+  /** Ping the runtime and populate apiVersion/cgroupVersion from live data. */
+  async ping(): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const info = await this.docker.info();
+      const caps = this.capabilities();
+      caps.apiVersion = info.ApiVersion ?? 'unknown';
+      caps.cgroupVersion = info.CgroupVersion ?? 2;
+      caps.storageDriver = info.Driver ?? caps.storageDriver;
+
+      // Detect rootless mode from security options
+      this._isRootless = info.SecurityOptions?.some((o: string) => o.includes('rootless')) ?? false;
+      caps.rootless = this._isRootless;
+
+      // Update capabilities based on rootless detection
+      if (this._isRootless) {
+        caps.limits.networkRate.enforcement = 'unsupported';
+        caps.limits.networkRate.reason = 'not supported in Podman rootless mode';
+        caps.limits.blkioWeight.enforcement = 'unsupported';
+        caps.limits.blkioWeight.reason = 'not supported in Podman rootless mode';
+      }
+
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+}
+
 // ── Factory ─────────────────────────────────────────────────────────────────
 
 export function createRuntime(type: 'docker' | 'podman' = 'docker'): ContainerRuntime {
@@ -237,12 +394,18 @@ export function createRuntime(type: 'docker' | 'podman' = 'docker'): ContainerRu
 
   logger.info('container runtime initialized', { runtime: type, socketPath, socketValid: socketCheck.valid });
 
-  const runtime = new DockerodeRuntime(socketPath, type);
+  const runtime = type === 'podman'
+    ? new PodmanRuntime(socketPath)
+    : new DockerRuntime(socketPath);
 
   // Lazy ping — log the result but don't block startup
   runtime.ping().then((result) => {
     if (result.ok) {
-      logger.info('runtime ping succeeded', { runtime: type, apiVersion: runtime.capabilities().apiVersion });
+      logger.info('runtime ping succeeded', {
+        runtime: type,
+        apiVersion: runtime.capabilities().apiVersion,
+        rootless: runtime.capabilities().rootless,
+      });
     } else {
       logger.warn('runtime ping failed', { runtime: type, error: result.error });
     }

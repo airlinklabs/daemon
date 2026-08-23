@@ -67,7 +67,11 @@ function loadEnv(dir: string): Record<string, string> {
   return out;
 }
 
+declare const PKG_VERSION: string | undefined;
+
 function readVersion(dir: string): string {
+  // Compile-time embedded version (bun build --define)
+  if (typeof PKG_VERSION !== 'undefined' && PKG_VERSION) return PKG_VERSION;
   for (const root of [dir, resolve(dir, '..')]) {
     try {
       const pkg = JSON.parse(readFileSync(`${root}/package.json`, 'utf8')) as { version?: string };

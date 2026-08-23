@@ -2,6 +2,10 @@
 // Contains the contents of the git-tracked storage/ directory so the
 // standalone binary can extract its defaults on first run (see
 // src/bootstrap.ts). Regenerated on every build.
+//
+// Generator: build.ts generate-embedded
+// Bun version: 1.3.14
+// Git commit: c38aa0877dcb7d8831bfef6eb547b7a0b9711ff2
 
 export interface EmbeddedAsset {
   path: string;
@@ -11,7 +15,7 @@ export interface EmbeddedAsset {
 export const EMBEDDED_STORAGE: EmbeddedAsset[] = [
   {
     path: 'storage/config.json',
-    contents: '{\n    \"meta\": {\n        \"version\": \"1.0.1\",\n        \"codename\": \"Pneuma\"\n    }\n}',
+    contents: '{\n    \"meta\": {\n        \"version\": \"3.0.0\",\n        \"codename\": \"Pneuma\"\n    }\n}\n',
   },
   {
     path: 'storage/fileSpecifier.json',
