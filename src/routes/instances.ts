@@ -7,11 +7,9 @@ import {
   deleteContainerAndVolume,
   docker,
   getContainerStats,
-  initContainer,
   isContainerRunning,
   killContainer,
   sendCommandToContainer,
-  setContainerRunning,
   startContainer,
   stopContainer,
 } from '../handlers/docker';

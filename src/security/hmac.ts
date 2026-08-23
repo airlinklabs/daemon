@@ -26,7 +26,7 @@ function sign(key: string, method: string, path: string, bodyRepr: string, ts: n
 }
 
 function rememberNonce(ts: number, nonceValue: string): Response | null {
-  const now = Math.floor(Date.now() / 1000);
+  const _now = Math.floor(Date.now() / 1000);
 
   // Enforce storage cap — reject new nonces if we've tracked too many.
   // This prevents memory exhaustion under high request volume.
@@ -150,7 +150,7 @@ export async function verifyHmac(req: Request, key: string, routeKey: string): P
   // request that makes it here with duplicate keys is either tampered or from
   // an incompatible panel version. Either way, reject to be safe.
   if (url.search) {
-    const keys = url.searchParams.getAll.bind(url.searchParams);
+    const _keys = url.searchParams.getAll.bind(url.searchParams);
     const uniqueKeys = new Set<string>();
     for (const [key] of url.searchParams) {
       if (uniqueKeys.has(key)) {

@@ -3,9 +3,16 @@ import { isIP } from 'node:net';
 import config from './config';
 import { apiError } from './errors';
 import { docker } from './handlers/docker';
-import { shutdownOperations } from './handlers/operationManager';
 import { maxBodyBytesFor } from './limits';
 import logger from './logger';
+import {
+  handleContainerBackup,
+  handleContainerBackupDelete,
+  handleContainerBackupDownload,
+  handleContainerBackupDownloadToken,
+  handleContainerBackupUpload,
+  handleContainerRestore,
+} from './routes/backups';
 import { handleHostInfo, handleRoot, handleStats } from './routes/core';
 import {
   handleDownloadToken,
@@ -28,6 +35,12 @@ import {
   handleFsZip,
 } from './routes/filesystem';
 import {
+  handleContainerInstall,
+  handleContainerInstaller,
+  handleContainerInstallStatus,
+  handleContainerReinstall,
+} from './routes/install';
+import {
   handleContainerCommand,
   handleContainerDelete,
   handleContainerKill,
@@ -38,14 +51,6 @@ import {
   handleContainerStop,
 } from './routes/instances';
 import {
-  handleContainerBackup,
-  handleContainerBackupDelete,
-  handleContainerBackupDownload,
-  handleContainerBackupDownloadToken,
-  handleContainerBackupUpload,
-  handleContainerRestore,
-} from './routes/backups';
-import {
   handleContainerLogArchiveDownload,
   handleContainerLogArchiveDownloadToken,
   handleContainerLogArchiveRead,
@@ -53,12 +58,6 @@ import {
   handleContainerLogHistory,
   handleContainerLogs,
 } from './routes/logs';
-import {
-  handleContainerInstall,
-  handleContainerInstaller,
-  handleContainerInstallStatus,
-  handleContainerReinstall,
-} from './routes/install';
 import { handleMinecraftPlayers } from './routes/minecraft';
 import { handleRadarScan, handleRadarZip } from './routes/radar';
 import { handleSftpActivity, handleSftpCreate, handleSftpRevoke, handleSftpStatus } from './routes/sftp';

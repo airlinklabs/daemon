@@ -1,5 +1,5 @@
-import { statfsSync } from 'fs';
-import { cpus, freemem, totalmem, uptime } from 'os';
+import { statfsSync } from 'node:fs';
+import { cpus, freemem, totalmem, uptime } from 'node:os';
 import config from '../config';
 import { getTotalStats } from '../handlers/stats';
 

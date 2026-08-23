@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs';
 import {
-  clearLogBuffer,
   getLogBuffer,
   getLogHistory,
   listLogArchives,
@@ -13,7 +12,6 @@ import {
   json,
   logArchiveDownloadBodyCodes,
   logArchiveDownloadBodySchema,
-  logger,
   parseJsonBody,
   validateContainerId,
 } from './instancesShared';

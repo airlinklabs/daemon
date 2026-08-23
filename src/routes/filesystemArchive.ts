@@ -1,13 +1,7 @@
 import { apiError } from '../errors';
 import { unzipPath, zipPaths } from '../handlers/fs';
 import logger from '../logger';
-import {
-  fsUnzipBodyCodes,
-  fsUnzipBodySchema,
-  fsZipBodyCodes,
-  fsZipBodySchema,
-  parseJsonBody,
-} from '../schemas';
+import { fsUnzipBodyCodes, fsUnzipBodySchema, fsZipBodyCodes, fsZipBodySchema, parseJsonBody } from '../schemas';
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {

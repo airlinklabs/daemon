@@ -1,10 +1,19 @@
 // Re-export everything from split modules for backward compatibility.
-export { containerIdSchema } from './schemas/container';
+
+export {
+  backupBodyCodes,
+  backupBodySchema,
+  backupDeleteBodyCodes,
+  backupDeleteBodySchema,
+  restoreBodyCodes,
+  restoreBodySchema,
+} from './schemas/backup';
 export {
   commandBodyCodes,
   commandBodySchema,
   containerIdBodyCodes,
   containerIdBodySchema,
+  containerIdSchema,
   installBodyCodes,
   installBodySchema,
   installerBodyCodes,
@@ -18,15 +27,6 @@ export {
   startBodyCodes,
   startBodySchema,
 } from './schemas/container';
-export {
-  backupBodyCodes,
-  backupBodySchema,
-  backupDeleteBodyCodes,
-  backupDeleteBodySchema,
-  restoreBodyCodes,
-  restoreBodySchema,
-} from './schemas/backup';
-export { logArchiveDownloadBodyCodes, logArchiveDownloadBodySchema } from './schemas/logs';
 export {
   fsAppendBodyCodes,
   fsAppendBodySchema,
@@ -51,6 +51,7 @@ export {
   fsZipBodyCodes,
   fsZipBodySchema,
 } from './schemas/filesystem';
+export { logArchiveDownloadBodyCodes, logArchiveDownloadBodySchema } from './schemas/logs';
 
 import { z } from 'zod';
 import { apiError } from './errors';

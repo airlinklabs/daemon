@@ -466,6 +466,7 @@ export async function createInstaller(
         const payload = buf.slice(8, 8 + frameSize).toString('utf8');
         buf = buf.slice(8 + frameSize);
         for (const line of payload.split('\n')) {
+          // biome-ignore lint/suspicious/noControlCharactersInRegex: Docker stream output contains control characters that must be stripped
           const clean = line.replace(/[\u0000-\u0008\u000b-\u001f]/g, '').trim();
           if (clean) {
             installerLines.push(clean);

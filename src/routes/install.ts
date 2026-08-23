@@ -1,21 +1,19 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import config from '../config';
-import { applyConfigFiles, type ConfigFileEntry } from '../handlers/configFiles';
 import {
   createInstaller,
   deleteContainer,
   deleteContainerAndVolume,
   docker,
-  pullImageWithProgress,
   initContainer,
+  pullImageWithProgress,
 } from '../handlers/docker';
 import { copyIntoVolume, downloadToVolume } from '../handlers/fs';
 import { getInstallStatus, setServerState } from '../handlers/installState';
 import { enqueueOperation } from '../handlers/operationManager';
 import {
-  apiError,
   config as _config,
+  apiError,
   getPaths,
   installBodyCodes,
   installBodySchema,

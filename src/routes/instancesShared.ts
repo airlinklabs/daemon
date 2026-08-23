@@ -1,4 +1,3 @@
-import { existsSync, mkdirSync } from 'node:fs';
 import config from '../config';
 import { apiError } from '../errors';
 import logger from '../logger';
@@ -38,14 +37,17 @@ export function json(data: unknown, status = 200): Response {
 }
 
 export {
+  apiError,
   backupBodyCodes,
   backupBodySchema,
   backupDeleteBodyCodes,
   backupDeleteBodySchema,
   commandBodyCodes,
   commandBodySchema,
+  config,
   containerIdBodyCodes,
   containerIdBodySchema,
+  getPaths,
   installBodyCodes,
   installBodySchema,
   installerBodyCodes,
@@ -54,6 +56,7 @@ export {
   killDeleteBodySchema,
   logArchiveDownloadBodyCodes,
   logArchiveDownloadBodySchema,
+  logger,
   parseJsonBody,
   reinstallBodyCodes,
   reinstallBodySchema,
@@ -61,13 +64,8 @@ export {
   restoreBodySchema,
   startBodyCodes,
   startBodySchema,
+  validateContainerId,
 };
-
-export { validateContainerId };
-export { apiError };
-export { logger };
-export { config };
-export { getPaths };
 
 export function globToRegExp(glob: string): RegExp {
   let pattern = '^';

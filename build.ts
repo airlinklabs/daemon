@@ -145,7 +145,7 @@ function collectStorageFiles(): string[] {
     const found: string[] = [];
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
-      const rel = path.replace(ROOT + '/', '');
+      const rel = path.replace(`${ROOT}/`, '');
       if (RUNTIME_STORAGE.has(entry.name)) continue;
       if (entry.isDirectory()) {
         found.push(...walk(path));
@@ -163,7 +163,7 @@ function generateEmbeddedCode(files: string[]): string {
 
   const entries = files.map((file) => {
     const contents = readFileSync(file, 'utf8');
-    const relPath = file.replace(ROOT + '/', '');
+    const relPath = file.replace(`${ROOT}/`, '');
     return `  {\n    path: '${esc(relPath)}',\n    contents: '${esc(contents)}',\n  },`;
   });
 
@@ -193,7 +193,7 @@ function generateEmbedded(checkOnly: boolean): void {
 
   // Validate against allowlist
   for (const file of files) {
-    const rel = file.replace(ROOT + '/', '');
+    const rel = file.replace(`${ROOT}/`, '');
     if (!EMBEDDED_ALLOWLIST.has(rel)) {
       fail(`storage file '${rel}' is not in the embedded allowlist. Add it to EMBEDDED_ALLOWLIST or exclude it.`);
     }
@@ -478,7 +478,7 @@ function generateManifest(): void {
     artifacts,
   };
 
-  writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n');
+  writeFileSync(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`);
   ok(`manifest written: ${MANIFEST_PATH}`);
 
   // Verify manifest checksums match
@@ -607,7 +607,7 @@ async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
 
 const args = process.argv.slice(2);
 const command = args[0] ?? 'build';
-const isDev = args.includes('--dev') || command === 'build:dev';
+const _isDev = args.includes('--dev') || command === 'build:dev';
 const targetArg = args.find((a) => a.startsWith('--target='));
 const targetFilter = targetArg ? targetArg.split('=')[1] : undefined;
 

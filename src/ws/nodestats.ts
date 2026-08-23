@@ -1,6 +1,6 @@
+import { statfsSync } from 'node:fs';
+import { cpus, freemem, totalmem, uptime } from 'node:os';
 import type { ServerWebSocket } from 'bun';
-import { statfsSync } from 'fs';
-import { cpus, freemem, totalmem, uptime } from 'os';
 import { getTotalStats } from '../handlers/stats';
 import logger from '../logger';
 import type { WsData } from './server';

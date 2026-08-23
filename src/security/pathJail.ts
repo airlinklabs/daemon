@@ -123,7 +123,7 @@ export async function jailRename(base: string, oldRel: string, newRel: string): 
 // container's backup file. Both throw BackupPathError on any escape, so the
 // coordinator can trust the returned absolute path.
 
-const BACKUPS_DIR = 'backups';
+const _BACKUPS_DIR = 'backups';
 
 function backupsRoot(): string {
   return getPaths(config.paths).backupsRoot;
