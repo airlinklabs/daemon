@@ -46,7 +46,7 @@ The Airlink Daemon is a lightweight agent that runs on each node server. It list
 cd /etc/
 git clone https://github.com/AirlinkLabs/daemon.git
 cd daemon
-curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
+curl -fsSL https://bun.sh/install | bash -s "bun-v3.0.54
 ```
 
 ### Step 2 — Set permissions
