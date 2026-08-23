@@ -73,6 +73,9 @@ const SECRET_KEY_PATTERN =
 // password, or Authorization header can never reach a log.
 function redactSecrets(input: string): string {
   let out = input;
+  // Strip ANSI escape sequences to prevent terminal control char injection
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC char is intentional for ANSI stripping
+  out = out.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
   // Header style first: "Authorization: Basic <b64>". The bare-value matcher
   // below would only scrub the scheme word and leak the credential.
   out = out.replace(/(authorization|proxy-authorization):\s*(?:basic|bearer)\s+[^\s,;]+/gi, `$1: ${REDACTED}`);

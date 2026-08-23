@@ -162,4 +162,4 @@ bun.lock
 *.backup
 *.tmp
 *.temp
-*.bun-build
+*.bun-build__pycache__/

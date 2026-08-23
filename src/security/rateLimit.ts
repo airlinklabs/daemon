@@ -34,3 +34,7 @@ export function checkRateLimit(ip: string, limit = 300): Response | null {
 
   return null;
 }
+
+export function clearRateLimit(): void {
+  hits.clear();
+}

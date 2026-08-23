@@ -1,12 +1,12 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
 import config from '../config';
 import { type ApiErrorCode, apiError } from '../errors';
 import { maxBodyBytesFor } from '../limits';
 import logger from '../logger';
 
 const HMAC_WINDOW_SECS = 30;
-const seenNonces = new Set<string>();
-const MAX_NONCE_SET_SIZE = 10_000;
+const seenNonces = new Map<string, number>(); // key -> inserted timestamp
+const MAX_NONCE_MAP_SIZE = 10_000;
 const MAX_NONCE_LENGTH = 128;
 
 // Must match HMAC_PAYLOAD_VERSION in the panel's daemonRequest.ts.
@@ -20,7 +20,9 @@ const MAX_NONCE_LENGTH = 128;
 // - bodyRepr: 'digest:<sha256 hex of the exact request body bytes>', or '' for empty bodies
 function sign(key: string, method: string, path: string, bodyRepr: string, ts: number, nonce: string): string {
   const payload = `${ts}:${nonce}:${method.toUpperCase()}:${path}:${bodyRepr}`;
-  return createHmac('sha256', key).update(payload).digest('hex');
+  const hasher = new Bun.CryptoHasher('sha256', key);
+  hasher.update(payload);
+  return hasher.digest('hex');
 }
 
 function rememberNonce(ts: number, nonceValue: string): Response | null {
@@ -28,23 +30,27 @@ function rememberNonce(ts: number, nonceValue: string): Response | null {
 
   // Enforce storage cap — reject new nonces if we've tracked too many.
   // This prevents memory exhaustion under high request volume.
-  if (seenNonces.size >= MAX_NONCE_SET_SIZE) {
+  if (seenNonces.size >= MAX_NONCE_MAP_SIZE) {
     return apiError('nonce_storage_full', 'nonce storage exhausted, retry later', 503);
   }
 
-  for (const nonce of seenNonces) {
-    const nonceTs = parseInt(nonce.split(':', 1)[0], 10);
-    if (Number.isNaN(nonceTs) || Math.abs(now - nonceTs) > HMAC_WINDOW_SECS) seenNonces.delete(nonce);
-  }
-
+  // O(1) check instead of O(n) scan
   const cacheKey = `${ts}:${nonceValue}`;
   if (seenNonces.has(cacheKey)) {
     return apiError('nonce_replayed', 'replayed request', 401);
   }
 
-  seenNonces.add(cacheKey);
+  seenNonces.set(cacheKey, Date.now());
   return null;
 }
+
+// Background sweep: evict expired nonces every 5s (O(n) but infrequent)
+setInterval(() => {
+  const cutoff = Date.now() - HMAC_WINDOW_SECS * 1000;
+  for (const [key, insertedAt] of seenNonces) {
+    if (insertedAt < cutoff) seenNonces.delete(key);
+  }
+}, 5_000);
 
 // Streams the request body through a sha256 hash, enforcing the per-route byte
 // cap while reading. The body is never buffered, so multi-GiB backup uploads
@@ -57,7 +63,7 @@ async function bodyDigestAndSize(
   const stream = req.body;
   if (!stream) return { digest: EMPTY_BODY_DIGEST, byteLength: 0 };
 
-  const hash = createHash('sha256');
+  const hash = new Bun.CryptoHasher('sha256');
   const reader = stream.getReader();
   let total = 0;
   try {
@@ -267,3 +273,7 @@ export function withSecurityHeaders(res: Response): Response {
 }
 
 export type { ApiErrorCode };
+
+export function clearNonceCache(): void {
+  seenNonces.clear();
+}

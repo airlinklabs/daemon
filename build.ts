@@ -19,7 +19,6 @@
 //   bun run build.ts build
 //   bun run build.ts build:dev
 
-import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   copyFileSync,
@@ -42,12 +41,14 @@ const DIST_DIR = join(ROOT, 'dist');
 const STORAGE_DIR = join(ROOT, 'storage');
 const EMBEDDED_PATH = join(ROOT, 'src', 'embedded.ts');
 const MANIFEST_PATH = join(DIST_DIR, 'manifest.json');
-const BUN_VERSION = '1.3.14';
+const BUN_VERSION = '1.4.0';
 
 // Supported target matrix
 const ALL_TARGETS = [
   { platform: 'linux', arch: 'x64', target: 'bun-linux-x64', out: 'airlinkd-linux-x64' },
   { platform: 'linux', arch: 'arm64', target: 'bun-linux-arm64', out: 'airlinkd-linux-arm64' },
+  { platform: 'linux', arch: 'x64', target: 'bun-linux-x64-musl', out: 'airlinkd-linux-x64-musl' },
+  { platform: 'linux', arch: 'arm64', target: 'bun-linux-arm64-musl', out: 'airlinkd-linux-arm64-musl' },
   { platform: 'windows', arch: 'x64', target: 'bun-windows-x64', out: 'airlinkd-windows-x64.exe' },
   { platform: 'windows', arch: 'arm64', target: 'bun-windows-arm64', out: 'airlinkd-windows-arm64.exe' },
   { platform: 'macos', arch: 'x64', target: 'bun-darwin-x64', out: 'airlinkd-macos-x64' },
@@ -80,7 +81,8 @@ function fileSha256(filePath: string): string {
 
 function getGitCommit(): string {
   try {
-    return execSync('git rev-parse HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const result = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { stdout: 'pipe', stderr: 'ignore' });
+    return result.stdout.toString().trim();
   } catch {
     return 'unknown';
   }
@@ -88,10 +90,9 @@ function getGitCommit(): string {
 
 function getGitTag(): string | undefined {
   try {
-    return execSync('git describe --tags --exact-match 2>/dev/null', {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    const result = Bun.spawnSync(['git', 'describe', '--tags', '--exact-match'], { stdout: 'pipe', stderr: 'ignore' });
+    const text = result.stdout.toString().trim();
+    return text || undefined;
   } catch {
     return undefined;
   }
@@ -99,8 +100,8 @@ function getGitTag(): string | undefined {
 
 function isDirtyTree(): boolean {
   try {
-    const status = execSync('git status --porcelain', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    return status.length > 0;
+    const result = Bun.spawnSync(['git', 'status', '--porcelain'], { stdout: 'pipe', stderr: 'ignore' });
+    return result.stdout.toString().trim().length > 0;
   } catch {
     return false;
   }
@@ -129,10 +130,9 @@ interface EmbeddedAsset {
 
 function collectStorageFiles(): string[] {
   try {
-    const listed = execSync('git ls-files storage/', {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
+    const result = Bun.spawnSync(['git', 'ls-files', 'storage/'], { stdout: 'pipe', stderr: 'ignore' });
+    const listed = result.stdout
+      .toString()
       .split('\n')
       .map((f) => f.trim())
       .filter(Boolean);
@@ -230,19 +230,19 @@ async function createBuildWorkspace(): Promise<string> {
 
   // Copy source files
   const srcDir = join(stagingDir, 'src');
-  execSync(`cp -r "${join(ROOT, 'src')}" "${srcDir}"`, { stdio: 'ignore' });
+  Bun.spawnSync(['cp', '-r', join(ROOT, 'src'), srcDir], { stdio: ['ignore', 'ignore', 'ignore'] });
 
   // Copy storage files
   const storageDir = join(stagingDir, 'storage');
   if (existsSync(STORAGE_DIR)) {
-    execSync(`cp -r "${STORAGE_DIR}" "${storageDir}"`, { stdio: 'ignore' });
+    Bun.spawnSync(['cp', '-r', STORAGE_DIR, storageDir], { stdio: ['ignore', 'ignore', 'ignore'] });
   }
 
   // Copy package.json, lock files, and example.env (imported by bootstrap.ts)
   for (const file of ['package.json', 'bun.lock', 'tsconfig.json', 'example.env']) {
     const src = join(ROOT, file);
     if (existsSync(src)) {
-      execSync(`cp "${src}" "${stagingDir}"`, { stdio: 'ignore' });
+      Bun.spawnSync(['cp', src, stagingDir], { stdio: ['ignore', 'ignore', 'ignore'] });
     }
   }
 
@@ -255,47 +255,6 @@ async function createBuildWorkspace(): Promise<string> {
   });
   if ((await installProc.exited) !== 0) {
     fail('failed to install dependencies in build workspace');
-  }
-
-  // Ensure all @opentui platform packages are available for cross-compilation.
-  // bun install only installs optional deps for the current platform, but the
-  // bundler needs to resolve imports for every target platform at bundle time.
-  const OPENUIT_PLATFORMS = [
-    '@opentui/core-linux-x64',
-    '@opentui/core-linux-x64-musl',
-    '@opentui/core-linux-arm64',
-    '@opentui/core-linux-arm64-musl',
-    '@opentui/core-darwin-x64',
-    '@opentui/core-darwin-arm64',
-    '@opentui/core-win32-x64',
-    '@opentui/core-win32-arm64',
-  ];
-  const wsOpenTuiDir = join(stagingDir, 'node_modules', '@opentui');
-  const missing = OPENUIT_PLATFORMS.filter((p) => !existsSync(join(stagingDir, 'node_modules', p)));
-  if (missing.length > 0) {
-    // Copy from root node_modules first (faster than downloading)
-    if (existsSync(join(ROOT, 'node_modules', '@opentui'))) {
-      mkdirSync(wsOpenTuiDir, { recursive: true });
-      for (const entry of readdirSync(join(ROOT, 'node_modules', '@opentui'))) {
-        const dst = join(wsOpenTuiDir, entry);
-        if (!existsSync(dst)) {
-          execSync(`cp -r "${join(ROOT, 'node_modules', '@opentui', entry)}" "${dst}"`, { stdio: 'ignore' });
-        }
-      }
-    }
-    // Install any still-missing packages
-    const stillMissing = missing.filter((p) => !existsSync(join(stagingDir, 'node_modules', p)));
-    if (stillMissing.length > 0) {
-      console.log(`installing cross-platform @opentui packages...`);
-      const addProc = Bun.spawn(['bun', 'add', '--no-save', ...stillMissing], {
-        cwd: stagingDir,
-        stdout: 'inherit',
-        stderr: 'inherit',
-      });
-      if ((await addProc.exited) !== 0) {
-        console.error('warning: failed to install some cross-platform @opentui packages');
-      }
-    }
   }
 
   return stagingDir;
@@ -329,7 +288,9 @@ async function applyPlatformPatches(workspaceDir: string): Promise<void> {
 
   // Remove .node files so bun build --compile can't try to embed them
   try {
-    execSync(`find "${join(workspaceDir, 'node_modules')}" -name "*.node" -delete 2>/dev/null`, { stdio: 'ignore' });
+    Bun.spawnSync(['find', join(workspaceDir, 'node_modules'), '-name', '*.node', '-delete'], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
     console.log('removed .node files');
   } catch {
     // ignore
@@ -356,6 +317,9 @@ async function packageBinary(target: Target, workspaceDir?: string): Promise<voi
       '--compile',
       '--target',
       target.target,
+      '--bytecode',
+      '--minify',
+      '--sourcemap',
       '--define',
       `BUN_VERSION="${BUN_VERSION}"`,
       '--define',
@@ -398,7 +362,8 @@ async function verifyBinary(binaryPath: string): Promise<void> {
 
   // Version check
   try {
-    const version = execSync(`${binaryPath} version`, { encoding: 'utf8', timeout: 10000 }).trim();
+    const result = Bun.spawnSync([binaryPath, 'version'], { stdout: 'pipe', stderr: 'pipe', timeout: 10000 });
+    const version = result.stdout.toString().trim();
     const pkgVersion = getVersion();
     if (!version.includes(pkgVersion)) {
       fail(`version mismatch: expected ${pkgVersion}, got ${version}`);
@@ -410,7 +375,8 @@ async function verifyBinary(binaryPath: string): Promise<void> {
 
   // --help check
   try {
-    const help = execSync(`${binaryPath} --help`, { encoding: 'utf8', timeout: 10000 });
+    const result = Bun.spawnSync([binaryPath, '--help'], { stdout: 'pipe', stderr: 'pipe', timeout: 10000 });
+    const help = result.stdout.toString();
     if (!help.includes('airlinkd')) {
       fail('--help output missing "airlinkd"');
     }
@@ -531,7 +497,8 @@ async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
   const startTime = Date.now();
 
   // 1. Verify Bun version
-  const bunVersion = execSync('bun --version', { encoding: 'utf8' }).trim();
+  const bunResult = Bun.spawnSync(['bun', '--version'], { stdout: 'pipe', stderr: 'ignore' });
+  const bunVersion = bunResult.stdout.toString().trim();
   if (bunVersion !== BUN_VERSION) {
     fail(`Bun version mismatch: expected ${BUN_VERSION}, got ${bunVersion}`);
   }

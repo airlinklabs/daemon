@@ -1,7 +1,13 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import chalk from 'chalk';
 import { parseEnvFile } from './utils/parseEnv';
+
+const ESC = '\x1b';
+const RED = `${ESC}[31m`;
+const GRN = `${ESC}[32m`;
+const BLU = `${ESC}[34m`;
+const CYN = `${ESC}[36m`;
+const RESET = `${ESC}[0m`;
 
 export function printConfigureHelp(): void {
   const bin = process.argv[1]?.split('/').pop() || 'airlinkd';
@@ -86,31 +92,31 @@ export async function runConfigure(args: string[]): Promise<void> {
   const { panelUrl: rawPanelUrl, key } = parseArguments(filteredArgs);
 
   if (!rawPanelUrl || !key) {
-    console.error(chalk.red('missing --panel or --key'));
+    console.error(`${RED}missing --panel or --key${RESET}`);
     printConfigureHelp();
     process.exit(1);
   }
 
   const panelUrl = rawPanelUrl.replace(/\/$/, '');
 
-  console.log(chalk.blue('checking the panel...'));
+  console.log(`${BLU}checking the panel...${RESET}`);
   const isValid = await validatePanelUrl(panelUrl);
 
   if (!isValid) {
-    console.error(chalk.red('could not reach the panel. is it running?'));
+    console.error(`${RED}could not reach the panel. is it running?${RESET}`);
     process.exit(1);
   }
 
-  console.log(chalk.green('panel answered'));
-  console.log(chalk.blue('writing .env...'));
+  console.log(`${GRN}panel answered${RESET}`);
+  console.log(`${BLU}writing .env...${RESET}`);
 
   try {
     await updateEnvFile(panelUrl, key);
-    console.log(chalk.green('daemon configured'));
-    console.log(chalk.blue('Panel URL:'), chalk.cyan(panelUrl));
-    console.log(chalk.blue('Daemon Key:'), chalk.cyan(key));
+    console.log(`${GRN}daemon configured${RESET}`);
+    console.log(`${BLU}Panel URL:${RESET} ${CYN}${panelUrl}${RESET}`);
+    console.log(`${BLU}Daemon Key:${RESET} ${CYN}${key}${RESET}`);
   } catch (err) {
-    console.error(chalk.red('could not write .env:'), err);
+    console.error(`${RED}could not write .env:${RESET}`, err);
     process.exit(1);
   }
 }
@@ -122,7 +128,7 @@ if (import.meta.main) {
     process.exit(0);
   }
   runConfigure(filteredArgs).catch((err) => {
-    console.error(chalk.red('configure crashed:'), err);
+    console.error(`${RED}configure crashed:${RESET}`, err);
     process.exit(1);
   });
 }

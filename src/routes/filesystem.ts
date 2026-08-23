@@ -12,9 +12,7 @@ import {
   listDir,
   renameFile,
   rmPath,
-  unzipPath,
   writeFileContent,
-  zipPaths,
 } from '../handlers/fs';
 import logger from '../logger';
 import { getPaths } from '../paths';
@@ -34,14 +32,10 @@ import {
   fsPullBodySchema,
   fsRenameBodyCodes,
   fsRenameBodySchema,
-  fsUnzipBodyCodes,
-  fsUnzipBodySchema,
   fsUploadBodyCodes,
   fsUploadBodySchema,
   fsWriteBodyCodes,
   fsWriteBodySchema,
-  fsZipBodyCodes,
-  fsZipBodySchema,
   parseJsonBody,
 } from '../schemas';
 import { consumeDownloadToken, createDownloadToken } from '../security/downloadTokens';
@@ -157,7 +151,6 @@ export function handleFsDownload(req: Request): Response {
 
   try {
     const filePath = getFilePath(id, path);
-    // streams the file without loading it into memory — Bun handles this
     return new Response(Bun.file(filePath), {
       headers: {
         'Content-Type': 'application/octet-stream',
@@ -170,9 +163,6 @@ export function handleFsDownload(req: Request): Response {
   }
 }
 
-// Signed (HMAC) mint endpoint. Called by the panel when a user asks for a file.
-// Returns a one-time URL the browser is redirected to — the panel never proxies
-// the file bytes itself.
 export async function handleFsDownloadToken(req: Request): Promise<Response> {
   const parsed = await parseJsonBody(req, fsPathOptionalBodySchema, fsPathOptionalBodyCodes);
   if ('response' in parsed) return parsed.response;
@@ -201,11 +191,6 @@ export async function handleFsDownloadToken(req: Request): Promise<Response> {
   }
 }
 
-// Browser-facing route (GET /dl/<token>). No Basic/HMAC auth — the token itself
-// is the credential — but it is single-use, short-lived, rate-limited, and IP
-// allowlisted (enforced by the router before this handler runs). Serves the
-// already-jailed file directly to the browser, cross-origin so the panel's
-// <img> previews can render it.
 export async function handleDownloadToken(_req: Request, token: string): Promise<Response> {
   const entry = consumeDownloadToken(token);
   if (!entry) return apiError('not_found', 'download link is invalid or expired', 404);
@@ -243,9 +228,6 @@ export async function handleFsPull(req: Request): Promise<Response> {
   if ('response' in parsed) return parsed.response;
   const { id, url, path } = parsed.data;
 
-  // SSRF gate: reject loopback/private/link-local targets and non-http(s)
-  // schemes up front, and resolve hostnames so DNS-rebinding to a private
-  // address is caught before any bytes move.
   let safeUrl: URL;
   try {
     safeUrl = await validatePublicUrl(url);
@@ -284,7 +266,7 @@ export async function handleFsPull(req: Request): Promise<Response> {
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
-  const MAX_PULL_BYTES = 512 * 1024 * 1024; // 512MB
+  const MAX_PULL_BYTES = 512 * 1024 * 1024;
   let total = 0;
 
   try {
@@ -314,8 +296,6 @@ export async function handleFsPull(req: Request): Promise<Response> {
       throw new Error('download interrupted');
     }
   } catch (err) {
-    // a redirect hop or second-stage resolution may still land on a private
-    // address — surface it with the same stable code/message as the upfront gate
     if (err instanceof PublicUrlError) return pullUrlError(err);
     logger.error(`failed to pull ${url} for container ${id}`, err);
     return apiError('internal_error', 'failed to download file from URL', 502);
@@ -343,36 +323,6 @@ export async function handleFsRm(req: Request): Promise<Response> {
   } catch (err) {
     logger.error(`failed to remove path for container ${id}`, err);
     return apiError('internal_error', 'failed to remove path', 500);
-  }
-}
-
-export async function handleFsZip(req: Request): Promise<Response> {
-  const parsed = await parseJsonBody(req, fsZipBodySchema, fsZipBodyCodes);
-  if ('response' in parsed) return parsed.response;
-  const { id, path, zipname } = parsed.data;
-
-  const paths = Array.isArray(path) ? path : [path ?? '/'];
-
-  try {
-    const zipPath = await zipPaths(id, paths, zipname ?? 'archive');
-    return json({ message: 'archive created', zipPath });
-  } catch (err) {
-    logger.error(`failed to create archive for container ${id}`, err);
-    return apiError('internal_error', 'failed to create archive', 500);
-  }
-}
-
-export async function handleFsUnzip(req: Request): Promise<Response> {
-  const parsed = await parseJsonBody(req, fsUnzipBodySchema, fsUnzipBodyCodes);
-  if ('response' in parsed) return parsed.response;
-  const { id, path, zipname } = parsed.data;
-
-  try {
-    await unzipPath(id, path ?? '/', zipname ?? '');
-    return json({ message: 'file successfully unzipped' });
-  } catch (err) {
-    logger.error(`failed to extract archive for container ${id}`, err);
-    return apiError('internal_error', 'failed to extract archive', 500);
   }
 }
 
@@ -410,9 +360,6 @@ export async function handleFsCopy(req: Request): Promise<Response> {
   if (newPath && !validatePath(newPath)) return apiError('path_traversal', 'invalid target path', 400);
 
   try {
-    // getFilePath jails the source into the container's volume (no arbitrary
-    // host reads); copyIntoVolume jails the destination. If newPath is omitted,
-    // derive a same-basename "-copy" target.
     const destRelative = newPath?.trim() ? newPath.trim() : defaultCopyTarget(source);
     await copyIntoVolume(id, getFilePath(id, source), destRelative);
     return json({ message: 'file successfully copied', path: destRelative });
@@ -537,3 +484,5 @@ export async function handleFsAppend(req: Request): Promise<Response> {
     return apiError('internal_error', 'failed to append to file', 500);
   }
 }
+
+export { handleFsUnzip, handleFsZip } from './filesystemArchive';

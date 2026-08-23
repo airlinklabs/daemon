@@ -6,8 +6,8 @@ import { shutdownOperations } from './handlers/operationManager';
 import { getCurrentStats, initStatsCollection, saveStats } from './handlers/stats';
 import logger, { drawHeader } from './logger';
 import { handleHttpRequest, isPrivateIp } from './router';
-import { getAllowedIpCheck } from './security/hmac';
-import { checkRateLimit } from './security/rateLimit';
+import { clearNonceCache, getAllowedIpCheck } from './security/hmac';
+import { checkRateLimit, clearRateLimit } from './security/rateLimit';
 import { validateContainerId } from './validation';
 import type { WsData } from './ws/server';
 import { buildWsData, openConnections, wsClose, wsMessage, wsOpen } from './ws/server';
@@ -106,6 +106,14 @@ try {
   );
 }
 initStatsCollection();
+
+// Bun v1.4 memory pressure: clear in-memory caches to reduce footprint
+process.on('memoryPressure', () => {
+  logger.warn('memory pressure detected — clearing caches');
+  clearNonceCache();
+  clearRateLimit();
+});
+
 startBackgroundLogCollector(docker).catch((err) => {
   logger.error('failed to start background log collector', err instanceof Error ? err : new Error(String(err)));
 });
@@ -133,6 +141,7 @@ export const server = (() => {
     return Bun.serve<WsData>({
       port: config.port,
       hostname: '0.0.0.0',
+      idleTimeout: 30,
 
       fetch(req, server) {
         const upgradeResult = attemptUpgrade(req, server);
@@ -167,9 +176,6 @@ export const server = (() => {
 })();
 
 logger.ok(`ready on port ${config.port}`);
-
-if (process.env.DAEMON_WORKER_MODE === '1')
-  (self as unknown as Worker).postMessage({ type: 'ready', port: config.port });
 
 setInterval(async () => {
   try {

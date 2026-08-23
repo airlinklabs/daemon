@@ -1,5 +1,7 @@
-// Re-export everything from split modules for backward compatibility.
-export { containerIdSchema } from './schemas/container';
+import { z } from 'zod';
+import { apiError } from '../errors';
+
+export { containerIdSchema } from './container';
 export {
   commandBodyCodes,
   commandBodySchema,
@@ -17,7 +19,7 @@ export {
   sftpBodySchema,
   startBodyCodes,
   startBodySchema,
-} from './schemas/container';
+} from './container';
 export {
   backupBodyCodes,
   backupBodySchema,
@@ -25,8 +27,8 @@ export {
   backupDeleteBodySchema,
   restoreBodyCodes,
   restoreBodySchema,
-} from './schemas/backup';
-export { logArchiveDownloadBodyCodes, logArchiveDownloadBodySchema } from './schemas/logs';
+} from './backup';
+export { logArchiveDownloadBodyCodes, logArchiveDownloadBodySchema } from './logs';
 export {
   fsAppendBodyCodes,
   fsAppendBodySchema,
@@ -50,10 +52,7 @@ export {
   fsWriteBodySchema,
   fsZipBodyCodes,
   fsZipBodySchema,
-} from './schemas/filesystem';
-
-import { z } from 'zod';
-import { apiError } from './errors';
+} from './filesystem';
 
 export const errorEnvelopeSchema = z.object({
   error: z.string(),

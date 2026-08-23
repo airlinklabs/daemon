@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { collectDaemon, collectHost, type DaemonCtx } from './tui/stats';
+import { collectDaemon, collectHost, type DaemonCtx } from './stats';
 import { parseEnvFile } from './utils/parseEnv';
 
 function printHelp(): void {
@@ -8,29 +8,32 @@ function printHelp(): void {
   console.log(`Airlink daemon
 
 Usage:
-  ${bin}                  Run the supervised TUI (starts the daemon, shows logs)
-  ${bin} start            Run the daemon headless. This is the default command.
-  ${bin} status           Print daemon status as JSON and exit.
-  ${bin} version          Print the daemon version and exit.
-  ${bin} configure --panel <url> --key <key>
-  ${bin} --help
+  ${bin} [command] [options]
 
 Commands:
-  start       Run the daemon. This is the default when a command is given.
+  start       Run the daemon (default).
   status      Print status as JSON (online, pid, mode, port, uptime, errors).
   version     Print the installed version.
   configure   Write .env values for the panel host and daemon key.
+  health      Quick health check (exit 0 = healthy, 1 = unhealthy).
+  validate    Validate .env and config without starting.
+  logs        Tail daemon logs (combined.log).
 
 Options:
-  -h, --help  Show this help.
-  --no-tui    Run headless even when no command is given (or NO_TUI=1).
-  --json-logs Emit structured JSON log lines to stdout.
+  -h, --help            Show this help.
+  -v, --version         Show version.
+  --json-logs           Emit structured JSON log lines to stdout.
+  --port <port>         Override listening port.
+  --no-color            Disable colored output.
+  --verbose             Debug-level logging.
+  --quiet               Errors only.
 
 Examples:
   ${bin}
   ${bin} start
   ${bin} status
   ${bin} start --json-logs
+  ${bin} health
   ${bin} configure --panel http://panel.example.com:3000 --key your-node-key
   ${bin} configure -p http://localhost:3000 -k your-node-key`);
 }
@@ -136,7 +139,26 @@ async function cmdVersion(): Promise<void> {
 
 export async function runDaemon(cliArgs: string[]): Promise<void> {
   if (cliArgs.includes('--json-logs')) process.env.AIRLINK_JSON_LOGS = '1';
-  const args = cliArgs.filter((a) => a !== '--json-logs' && a !== '--no-tui');
+  if (cliArgs.includes('--no-color')) process.env.NO_COLOR = '1';
+  if (cliArgs.includes('--verbose')) process.env.LOG_LEVEL = 'debug';
+  if (cliArgs.includes('--quiet')) process.env.LOG_LEVEL = 'error';
+
+  const portFlag = cliArgs.find((a, i) => a === '--port' && cliArgs[i + 1]);
+  if (portFlag) {
+    const idx = cliArgs.indexOf(portFlag);
+    const portVal = cliArgs[idx + 1];
+    if (portVal && /^\d+$/.test(portVal)) process.env.PORT = portVal;
+  }
+
+  const args = cliArgs.filter(
+    (a) =>
+      a !== '--json-logs' &&
+      a !== '--no-color' &&
+      a !== '--verbose' &&
+      a !== '--quiet' &&
+      a !== '--port' &&
+      !/^\d+$/.test(a),
+  );
   const first = args[0];
 
   if (first === 'help' || args.includes('-help') || args.includes('--help') || args.includes('-h')) {
@@ -165,6 +187,21 @@ export async function runDaemon(cliArgs: string[]): Promise<void> {
     process.exit(0);
   }
 
+  if (first === 'health') {
+    await cmdHealth();
+    process.exit(0);
+  }
+
+  if (first === 'validate') {
+    await cmdValidate();
+    process.exit(0);
+  }
+
+  if (first === 'logs') {
+    await cmdLogs();
+    process.exit(0);
+  }
+
   if (first && first !== 'start') {
     console.error(`Unknown command: ${first}`);
     console.log('Run with --help to see the available commands.');
@@ -176,13 +213,64 @@ export async function runDaemon(cliArgs: string[]): Promise<void> {
   await import('./server');
 }
 
+async function cmdHealth(): Promise<void> {
+  const dir = findDaemonDir();
+  const env = loadEnv(dir);
+  const port = Number(env.port || '3002');
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+    if (res.ok) {
+      console.log('healthy');
+      process.exit(0);
+    }
+    console.log('unhealthy');
+    process.exit(1);
+  } catch {
+    console.log('unhealthy');
+    process.exit(1);
+  }
+}
+
+async function cmdValidate(): Promise<void> {
+  const dir = findDaemonDir();
+  const env = loadEnv(dir);
+  const errors: string[] = [];
+  if (!env.DAEMON_KEY) errors.push('DAEMON_KEY is not set');
+  if (!env.remote) errors.push('remote (panel URL) is not set');
+  const port = Number(env.port || '3002');
+  if (port < 1 || port > 65535) errors.push(`port ${port} is out of range`);
+  if (errors.length > 0) {
+    for (const e of errors) console.error(`  - ${e}`);
+    process.exit(1);
+  }
+  console.log('configuration OK');
+  process.exit(0);
+}
+
+async function cmdLogs(): Promise<void> {
+  const dir = findDaemonDir();
+  const logPath = `${dir}/logs/combined.log`;
+  try {
+    const file = Bun.file(logPath);
+    if (!(await file.exists())) {
+      console.error(`log file not found: ${logPath}`);
+      process.exit(1);
+    }
+    const stream = file.stream();
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      process.stdout.write(decoder.decode(value, { stream: true }));
+    }
+  } catch {
+    console.error(`unable to read log file: ${logPath}`);
+    process.exit(1);
+  }
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
-  const noTui = args.includes('--no-tui') || process.env.NO_TUI === '1';
-  if (args.length === 0 && !noTui) {
-    const { runTui } = await import('./tui');
-    await runTui();
-  } else {
-    await runDaemon(args);
-  }
+  await runDaemon(args);
 }

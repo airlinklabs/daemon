@@ -28,3 +28,8 @@ export function validateUrl(url: string): boolean {
 export function validatePort(port: number): boolean {
   return Number.isInteger(port) && port >= 1 && port <= 65535;
 }
+
+export function requireContainerId(id: string | undefined): string | null {
+  if (!id || !validateContainerId(id)) return null;
+  return id;
+}

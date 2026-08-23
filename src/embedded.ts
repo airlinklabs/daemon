@@ -5,7 +5,7 @@
 //
 // Generator: build.ts generate-embedded
 // Bun version: 1.3.14
-// Git commit: 201922dc0216d52eded1253f50539fa31f2cd350
+// Git commit: f23ed241093140aab9edcbd95fddf1c7dbf5dbb9
 
 export interface EmbeddedAsset {
   path: string;

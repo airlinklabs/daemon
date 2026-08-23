@@ -3,7 +3,7 @@
 // volume dir. not as low-level but works cross-platform and doesn't need gcc.
 
 import type { Stats } from 'node:fs';
-import { existsSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync } from 'node:fs';
 import { rename } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import config from '../config';
@@ -16,6 +16,9 @@ export class BackupPathError extends Error {
   }
 }
 
+const MAX_PATH_LENGTH = 4096;
+const MAX_SYMLINK_DEPTH = 10;
+
 // true when `p` is `base` itself or lives strictly beneath it
 function isInside(base: string, p: string): boolean {
   return p === base || p.startsWith(base + sep);
@@ -23,6 +26,15 @@ function isInside(base: string, p: string): boolean {
 
 // throws if resolvedPath escapes base. returns the safe resolved path.
 export function jailPath(base: string, relative: string): string {
+  // Reject null bytes — they can truncate paths at the C level
+  if (relative.includes('\0')) {
+    throw new Error('path contains null byte');
+  }
+  // Reject paths exceeding PATH_MAX
+  if (relative.length > MAX_PATH_LENGTH) {
+    throw new Error('path exceeds maximum length');
+  }
+
   const realBase = realpathSync(base);
 
   // build the full target path before resolving
@@ -69,9 +81,22 @@ export function jailPath(base: string, relative: string): string {
       throw new Error(`symlink escapes volume boundary: ${relative}`);
     }
   } else if (st) {
-    const real = realpathSync(safePath);
-    if (!isInside(realBase, real)) {
-      throw new Error(`symlink escapes volume boundary: ${relative}`);
+    // Walk symlink chain with depth limit to prevent loops
+    let current = safePath;
+    for (let depth = 0; depth < MAX_SYMLINK_DEPTH; depth++) {
+      const real = realpathSync(current);
+      if (!isInside(realBase, real)) {
+        throw new Error(`symlink escapes volume boundary: ${relative}`);
+      }
+      let currentSt: Stats | undefined;
+      try {
+        currentSt = lstatSync(real);
+      } catch {
+        break;
+      }
+      if (!currentSt?.isSymbolicLink()) break;
+      const target = readlinkSync(real);
+      current = resolve(dirname(real), target);
     }
   }
 
@@ -85,10 +110,7 @@ export async function jailRename(base: string, oldRel: string, newRel: string): 
 
   // make sure dest parent exists
   const destParent = dirname(safeDest);
-  await Bun.spawn(['mkdir', '-p', destParent], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-  }).exited;
+  mkdirSync(destParent, { recursive: true });
 
   await rename(safeSrc, safeDest);
 }

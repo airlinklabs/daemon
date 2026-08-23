@@ -147,6 +147,10 @@ export class MockContainerRuntime implements ContainerRuntime {
     return this._capabilities;
   }
 
+  async ping(): Promise<{ ok: boolean; error?: string }> {
+    return { ok: true };
+  }
+
   // ── Test Helpers ─────────────────────────────────────────────────────────
 
   /** Add a mock container for testing */
@@ -162,6 +166,88 @@ export class MockContainerRuntime implements ContainerRuntime {
   /** Clear all mock containers */
   clearContainers(): void {
     this.containers.clear();
+  }
+}
+
+/**
+ * Mock Podman Runtime — simulates Podman-specific behavior:
+ * - Strips StorageOpt from create options
+ * - Filters NET_ADMIN capability in rootless mode
+ * - Reports Podman capability profile
+ */
+export class MockPodmanRuntime extends MockContainerRuntime {
+  override readonly name: 'podman' = 'podman';
+  private _isRootless: boolean;
+  /** Tracks the last createContainer opts after Podman transformations */
+  lastCreateOpts: any = null;
+
+  constructor(rootless: boolean = false) {
+    super();
+    this._isRootless = rootless;
+  }
+
+  override get socketPath(): string {
+    return this._isRootless
+      ? `/run/user/1000/podman/podman.sock`
+      : '/run/podman/podman.sock';
+  }
+
+  override capabilities(): RuntimeCapabilities {
+    const base = super.capabilities();
+    return {
+      ...base,
+      runtime: 'podman',
+      rootless: this._isRootless,
+      socketPath: this.socketPath,
+      storageDriver: 'overlay',
+      limits: {
+        ...base.limits,
+        storage: {
+          enforced: false,
+          enforcement: 'advisory',
+          reason: 'Podman does not support Docker StorageOpt; fallback is soft directory-size polling',
+        },
+        networkRate: {
+          enforced: false,
+          enforcement: this._isRootless ? 'unsupported' : 'advisory',
+          reason: this._isRootless
+            ? 'not supported in Podman rootless mode'
+            : 'requires NET_ADMIN capability + tc binary in image',
+        },
+        blkioWeight: {
+          enforced: !this._isRootless,
+          enforcement: this._isRootless ? 'unsupported' : 'enforced',
+          reason: this._isRootless ? 'not supported in Podman rootless mode' : undefined,
+        },
+        oomKillDisable: {
+          enforced: true,
+          enforcement: 'enforced',
+          reason: 'Podman uses --oom-score-adj instead of --oom-kill-disable',
+        },
+      },
+    };
+  }
+
+  override async createContainer(opts: any) {
+    // Simulate Podman behavior: strip StorageOpt
+    if (opts.HostConfig?.StorageOpt) {
+      const { StorageOpt, ...restHostConfig } = opts.HostConfig;
+      opts = { ...opts, HostConfig: restHostConfig };
+    }
+
+    // Simulate Podman rootless: strip NET_ADMIN
+    if (this._isRootless && opts.HostConfig?.CapAdd) {
+      const filtered = opts.HostConfig.CapAdd.filter((c: string) => c !== 'NET_ADMIN');
+      if (filtered.length !== opts.HostConfig.CapAdd.length) {
+        opts = {
+          ...opts,
+          HostConfig: { ...opts.HostConfig, CapAdd: filtered },
+        };
+      }
+    }
+
+    this.lastCreateOpts = opts;
+    return super.createContainer(opts);
   }
 }
 

@@ -28,31 +28,37 @@ import {
   handleFsZip,
 } from './routes/filesystem';
 import {
+  handleContainerCommand,
+  handleContainerDelete,
+  handleContainerKill,
+  handleContainerRestart,
+  handleContainerStart,
+  handleContainerStats,
+  handleContainerStatus,
+  handleContainerStop,
+} from './routes/instances';
+import {
   handleContainerBackup,
   handleContainerBackupDelete,
   handleContainerBackupDownload,
   handleContainerBackupDownloadToken,
   handleContainerBackupUpload,
-  handleContainerCommand,
-  handleContainerDelete,
-  handleContainerInstall,
-  handleContainerInstaller,
-  handleContainerInstallStatus,
-  handleContainerKill,
+  handleContainerRestore,
+} from './routes/backups';
+import {
   handleContainerLogArchiveDownload,
   handleContainerLogArchiveDownloadToken,
   handleContainerLogArchiveRead,
   handleContainerLogArchives,
   handleContainerLogHistory,
   handleContainerLogs,
+} from './routes/logs';
+import {
+  handleContainerInstall,
+  handleContainerInstaller,
+  handleContainerInstallStatus,
   handleContainerReinstall,
-  handleContainerRestart,
-  handleContainerRestore,
-  handleContainerStart,
-  handleContainerStats,
-  handleContainerStatus,
-  handleContainerStop,
-} from './routes/instances';
+} from './routes/install';
 import { handleMinecraftPlayers } from './routes/minecraft';
 import { handleRadarScan, handleRadarZip } from './routes/radar';
 import { handleSftpActivity, handleSftpCreate, handleSftpRevoke, handleSftpStatus } from './routes/sftp';

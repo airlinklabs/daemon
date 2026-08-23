@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import config from '../config';
 import logger from '../logger';
@@ -166,7 +166,7 @@ export async function applyConfigFiles(
 
     let content: string;
     try {
-      content = readFileSync(target, 'utf8');
+      content = await Bun.file(target).text();
     } catch (err) {
       logger.error(`failed to read config file ${filePath}:`, err);
       continue;
@@ -191,7 +191,7 @@ export async function applyConfigFiles(
         default:
           content = applyPlain(content, find, env);
       }
-      writeFileSync(target, content);
+      await Bun.write(target, content);
       logger.info(`applied config file ${filePath} for container ${containerId}`);
     } catch (err) {
       logger.error(`failed to apply config file ${filePath}:`, err);
