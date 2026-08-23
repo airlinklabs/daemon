@@ -27,7 +27,7 @@ The daemon runs on each node server and handles the work the Panel delegates to 
 
 ## Prerequisites
 
-- Bun v3.0.59
+- Bun v1.4.0
 - Git
 - Docker (running and accessible to the daemon process)
 
