@@ -39,9 +39,17 @@ export interface ApiError {
 // Type-safe error factory. Uses `satisfies` to ensure the shape matches
 // without widening the type. The panel can match on `code` to display
 // contextual error messages instead of raw daemon strings.
+function sanitizeDetail(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const lines = raw.split('\n');
+  const clean = lines.filter((line) => !/^\s+at\s+/.test(line) && !/node_modules|\.ts:\d+:\d+/.test(line));
+  return clean.join('\n').trim() || undefined;
+}
+
 export function apiError(code: ApiErrorCode, message: string, status: number, detail?: string): Response {
   const body: ApiError = { error: message, code, status };
-  if (detail) body.detail = detail;
+  const safeDetail = sanitizeDetail(detail);
+  if (safeDetail) body.detail = safeDetail;
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'Content-Type': 'application/json' },
