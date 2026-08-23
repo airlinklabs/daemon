@@ -4,8 +4,8 @@
 // src/bootstrap.ts). Regenerated on every build.
 //
 // Generator: build.ts generate-embedded
-// Bun version: 1.3.14
-// Git commit: f23ed241093140aab9edcbd95fddf1c7dbf5dbb9
+// Bun version: 1.4.0
+// Git commit: 5327eb1b8e07c8299c5d28a84ac30a2cfb2058e6
 
 export interface EmbeddedAsset {
   path: string;

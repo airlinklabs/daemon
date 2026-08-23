@@ -6,15 +6,18 @@ import { getTotalStats } from '../handlers/stats';
 // read the meta version from storage/config.json at startup, fall back to env
 let daemonVersion = config.version || '3.0.0';
 let daemonCodename = '';
-try {
-  const cfg = (await Bun.file('storage/config.json').json()) as {
-    meta?: { version?: string; codename?: string };
-  };
-  daemonVersion = cfg?.meta?.version ?? daemonVersion;
-  daemonCodename = cfg?.meta?.codename ?? '';
-} catch {
-  /* file missing or malformed — use env or default */
-}
+(async () => {
+  try {
+    const cfgText = await Bun.file('storage/config.json').text();
+    const cfg = JSON.parse(cfgText) as {
+      meta?: { version?: string; codename?: string };
+    };
+    daemonVersion = cfg?.meta?.version ?? daemonVersion;
+    daemonCodename = cfg?.meta?.codename ?? '';
+  } catch {
+    /* file missing or malformed — use env or default */
+  }
+})();
 
 function formatUptime(s: number): string {
   const d = Math.floor(s / 86400);

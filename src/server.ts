@@ -95,17 +95,19 @@ process.on('unhandledRejection', (reason) => {
 
 drawHeader(config.version, config.port);
 
-try {
-  await checkDocker();
-  await checkDockerRunning();
-  await initContainerStateMap();
-} catch (err) {
-  logger.error(
-    'docker is not ready, so container actions are paused for now',
-    err instanceof Error ? err : new Error(String(err)),
-  );
-}
-initStatsCollection();
+(async () => {
+  try {
+    await checkDocker();
+    await checkDockerRunning();
+    await initContainerStateMap();
+  } catch (err) {
+    logger.error(
+      'docker is not ready, so container actions are paused for now',
+      err instanceof Error ? err : new Error(String(err)),
+    );
+  }
+  initStatsCollection();
+})();
 
 // Bun v1.4 memory pressure: clear in-memory caches to reduce footprint
 process.on('memoryPressure', () => {

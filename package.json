@@ -45,5 +45,8 @@
   "engines": {
     "bun": ">=1.1.0"
   },
-  "packageManager": "bun@1.4.0"
+  "packageManager": "bun@1.4.0",
+  "trustedDependencies": [
+    "protobufjs"
+  ]
 }

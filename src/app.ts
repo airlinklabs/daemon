@@ -272,5 +272,8 @@ async function cmdLogs(): Promise<void> {
 
 if (import.meta.main) {
   const args = process.argv.slice(2);
-  await runDaemon(args);
+  runDaemon(args).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }
