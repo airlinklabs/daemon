@@ -97,8 +97,8 @@ function makeFakeWs(route: WsData['route'], containerId = 'ctn'): FakeWs {
     publishBinary(): number {
       return 0;
     },
-    subscribe(): void {},
-    unsubscribe(): void {},
+    subscribe(_topic: string): boolean { return true; },
+    unsubscribe(_topic: string): boolean { return true; },
     isSubscribed(): boolean {
       return false;
     },
