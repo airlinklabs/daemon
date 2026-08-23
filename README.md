@@ -27,7 +27,7 @@ The daemon runs on each node server and handles the work the Panel delegates to 
 
 ## Prerequisites
 
-- Bun v1.4.0
+- Bun v3.0.57
 - Git
 - Docker (running and accessible to the daemon process)
 
@@ -39,7 +39,7 @@ Clone and build:
 cd /etc/
 git clone https://github.com/AirlinkLabs/daemon.git
 cd daemon
-curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.0"
+curl -fsSL https://bun.sh/install | bash -s "bun-v3.0.57
 ```
 
 Set permissions:

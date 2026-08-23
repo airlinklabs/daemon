@@ -1,6 +1,6 @@
 {
   "name": "airlinkd",
-  "version": "3.0.56",
+  "version": "3.0.57",
   "module": "src/app.ts",
   "type": "module",
   "scripts": {
