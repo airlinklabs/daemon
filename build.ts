@@ -260,6 +260,22 @@ async function createBuildWorkspace(): Promise<string> {
     fail('failed to install dependencies in build workspace');
   }
 
+  // Copy all @opentui platform packages from root node_modules.
+  // bun install only installs optional deps for the current platform,
+  // but we need all platform packages available for cross-compilation.
+  const rootOpenTuiDir = join(ROOT, 'node_modules', '@opentui');
+  const wsOpenTuiDir = join(stagingDir, 'node_modules', '@opentui');
+  if (existsSync(rootOpenTuiDir)) {
+    mkdirSync(wsOpenTuiDir, { recursive: true });
+    for (const entry of readdirSync(rootOpenTuiDir)) {
+      const srcPkg = join(rootOpenTuiDir, entry);
+      const dstPkg = join(wsOpenTuiDir, entry);
+      if (!existsSync(dstPkg)) {
+        execSync(`cp -r "${srcPkg}" "${dstPkg}"`, { stdio: 'ignore' });
+      }
+    }
+  }
+
   return stagingDir;
 }
 
