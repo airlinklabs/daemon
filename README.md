@@ -32,7 +32,7 @@ The Airlink Daemon is a lightweight agent that runs on each node server. It list
 
 ## Prerequisites
 
-- Bun v1.0 or later
+- Bun v1.3.14 exactly
 - Git
 - Docker (running and accessible to the daemon process)
 
