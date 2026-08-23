@@ -98,6 +98,10 @@ The panel signs every request. The daemon verifies every signature. No signature
 
 See the [API Specsheet](../panel/docs/specsheet.md#hmac-protocol) for the full HMAC protocol details.
 
+### CVE resolved
+
+A path traversal vulnerability (symlink + `path.join` bypass) was fixed in the filesystem handler. The `sanitizePath` function now uses `path.resolve` for correct normalization and rejects symbolic links via `lstat` before resolving the path.
+
 ## API reference
 
 The daemon exposes 37 HTTP routes and 3 WebSocket endpoints. See the [API Specsheet](../panel/docs/specsheet.md#daemon-routes) for the complete route catalog.
