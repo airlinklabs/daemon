@@ -598,8 +598,8 @@ async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
       }
     }
 
-    // 8. Copy native target as `airlinkd` (full builds only)
-    if (!dev) {
+    // 8. Copy native target as `airlinkd` (full builds only, skip when targeting a single platform)
+    if (!dev && !targetFilter) {
       const nativeTarget = ALL_TARGETS.find(
         (t) =>
           t.platform ===
@@ -614,14 +614,16 @@ async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
       }
     }
 
-    // 9. Verify native binary
-    const nativeBin = join(DIST_DIR, 'airlinkd');
-    if (existsSync(nativeBin)) {
-      await verifyBinary(nativeBin);
+    // 9. Verify native binary (full builds only)
+    if (!targetFilter) {
+      const nativeBin = join(DIST_DIR, 'airlinkd');
+      if (existsSync(nativeBin)) {
+        await verifyBinary(nativeBin);
+      }
     }
 
     // 10. Generate manifest + checksums (full builds only)
-    if (!dev) {
+    if (!dev && !targetFilter) {
       generateManifest();
     }
 
