@@ -46,6 +46,7 @@ The Airlink Daemon is a lightweight agent that runs on each node server. It list
 cd /etc/
 git clone https://github.com/AirlinkLabs/daemon.git
 cd daemon
+curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
 ```
 
 ### Step 2 — Set permissions
@@ -60,6 +61,9 @@ sudo chmod -R 755 /etc/daemon
 ```bash
 bun install
 bun run build
+cd dist
+./airlinkd configure --panel "<paneluri>" --key "<panel-key>"
+./airlinkd start
 ```
 
 ### Step 4 — Register with the panel
