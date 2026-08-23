@@ -5,8 +5,8 @@ import { sendCommandToContainer } from '../handlers/docker';
 import logger from '../logger';
 import { attachToContainer } from './attach';
 import { subscribe } from './events';
-import { startStatusPolling, stopStatusPolling } from './status';
 import { startNodeStatsPolling, stopNodeStatsPolling } from './nodestats';
+import { startStatusPolling, stopStatusPolling } from './status';
 
 // ---------------------------------------------------------------------------
 // WS in-band auth threat model (Ledger F-005).
@@ -254,7 +254,9 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
       // DEPRECATED: will be removed in a future version. The panel should
       // always send capability tokens. Log a deprecation warning.
       if (timingSafeKeyEquals(key, config.key)) {
-        logger.warn(`ws legacy raw-key auth used for ${ws.data.route}/${ws.data.containerId} — deprecated, upgrade panel`);
+        logger.warn(
+          `ws legacy raw-key auth used for ${ws.data.route}/${ws.data.containerId} — deprecated, upgrade panel`,
+        );
         ws.data.authed = true;
         ws.data.authFailures = 0;
         clearAuthTimer(ws);
@@ -332,6 +334,9 @@ export function wsClose(ws: ServerWebSocket<WsData>, _code: number, _reason: str
 }
 
 // builds the data object attached to each WS upgrade
-export function buildWsData(route: 'container' | 'containerstatus' | 'containerevents' | 'nodestats', containerId: string): WsData {
+export function buildWsData(
+  route: 'container' | 'containerstatus' | 'containerevents' | 'nodestats',
+  containerId: string,
+): WsData {
   return { route, containerId, authed: false, authFailures: 0 };
 }

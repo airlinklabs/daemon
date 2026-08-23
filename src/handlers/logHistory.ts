@@ -16,8 +16,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { create as tarCreate, extract as tarExtract } from 'tar';
 import config from '../config';
-import { getPaths } from '../paths';
 import logger from '../logger';
+import { getPaths } from '../paths';
 import type { ContainerRuntime } from './containerRuntime';
 
 // ── Tunable limits ───────────────────────────────────────────────────────────

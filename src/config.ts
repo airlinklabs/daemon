@@ -27,9 +27,15 @@ const DaemonConfigSchema = z.object({
   version: z.string().default('3.0.0'),
   statsInterval: z.coerce.number().int().min(1000).default(10000),
   containerRuntime: z.enum(['docker', 'podman']).default('docker'),
-  allowedIps: z.string().default('').transform((val) =>
-    val.split(',').map((s) => s.trim()).filter(Boolean)
-  ),
+  allowedIps: z
+    .string()
+    .default('')
+    .transform((val) =>
+      val
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
   tlsCertPath: z.string().nullable().default(null),
   tlsKeyPath: z.string().nullable().default(null),
   sftpPort: z.coerce.number().int().min(1).max(65535).default(3004),
@@ -86,7 +92,9 @@ function parseConfig(): DaemonConfig {
     }
 
     if (!config.requireHmac && process.env.NODE_ENV === 'production') {
-      console.error('[config] FATAL: REQUIRE_HMAC=false is not allowed in production. Remove it or set NODE_ENV=development.');
+      console.error(
+        '[config] FATAL: REQUIRE_HMAC=false is not allowed in production. Remove it or set NODE_ENV=development.',
+      );
       process.exit(1);
     }
 

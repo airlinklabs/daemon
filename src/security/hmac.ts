@@ -88,14 +88,15 @@ export async function verifyHmac(req: Request, key: string, routeKey: string): P
     if (Bun.env.REQUIRE_HMAC === 'false') {
       // In development mode only: allow unsigned requests from loopback.
       // Production must NEVER set REQUIRE_HMAC=false.
-      const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-        ?? req.headers.get('x-real-ip')
-        ?? '';
-      const isLoopback = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === '::ffff:127.0.0.1' || clientIp === '';
+      const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? req.headers.get('x-real-ip') ?? '';
+      const isLoopback =
+        clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === '::ffff:127.0.0.1' || clientIp === '';
       if (!isLoopback) {
         return apiError('missing_hmac_headers', 'missing HMAC headers', 401);
       }
-      logger.warn(`unsigned request allowed from loopback (REQUIRE_HMAC=false): ${req.method} ${new URL(req.url).pathname}`);
+      logger.warn(
+        `unsigned request allowed from loopback (REQUIRE_HMAC=false): ${req.method} ${new URL(req.url).pathname}`,
+      );
       return null;
     }
     return apiError('missing_hmac_headers', 'missing HMAC headers', 401);

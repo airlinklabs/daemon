@@ -58,7 +58,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: build binaries
-        run: bun run build
+        run: bun run build --target=${{ matrix.target }}
 
       - name: zip binaries
         if: matrix.windows == false

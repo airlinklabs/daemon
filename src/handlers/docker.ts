@@ -4,8 +4,8 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, st
 import { join, resolve } from 'node:path';
 import type Docker from 'dockerode';
 import config from '../config';
-import { getPaths } from '../paths';
 import logger from '../logger';
+import { getPaths } from '../paths';
 import { emit } from '../ws/events';
 import { normalizeConsoleCommand } from './consoleCommand';
 import { createRuntime } from './containerRuntime';

@@ -1,7 +1,7 @@
+import { statfsSync } from 'fs';
+import { cpus, freemem, totalmem, uptime } from 'os';
 import config from '../config';
 import { getTotalStats } from '../handlers/stats';
-import { totalmem, freemem, cpus, uptime } from 'os';
-import { statfsSync } from 'fs';
 
 // read the meta version from storage/config.json at startup, fall back to env
 let daemonVersion = config.version || '3.0.0';
@@ -71,14 +71,19 @@ export function handleHostInfo(_req: Request): Response {
         used: (fs.blocks - fs.bfree) * fs.bsize,
         available: fs.bavail * fs.bsize,
       };
-    } catch { /* statfs not available */ }
+    } catch {
+      /* statfs not available */
+    }
 
-    return new Response(JSON.stringify({
-      ram: { total: totalRam, used: usedRam, free: freeRam },
-      cpu: { cores: cpuCount, model: cpus()[0]?.model || 'unknown' },
-      disk,
-      uptime: uptimeSec,
-    }), { headers: { 'Content-Type': 'application/json' } });
+    return new Response(
+      JSON.stringify({
+        ram: { total: totalRam, used: usedRam, free: freeRam },
+        cpu: { cores: cpuCount, model: cpus()[0]?.model || 'unknown' },
+        disk,
+        uptime: uptimeSec,
+      }),
+      { headers: { 'Content-Type': 'application/json' } },
+    );
   } catch (_err) {
     return new Response(JSON.stringify({ error: 'failed to fetch host info' }), {
       status: 500,

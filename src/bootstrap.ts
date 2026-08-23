@@ -12,8 +12,8 @@ import { dirname, join } from 'node:path';
 import envTemplate from '../example.env' with { type: 'text' };
 import config from './config';
 import { EMBEDDED_STORAGE } from './embedded';
-import { parseEnvFile } from './utils/parseEnv';
 import { resolveDaemonPaths } from './paths';
+import { parseEnvFile } from './utils/parseEnv';
 
 const envPath = join(process.cwd(), '.env');
 

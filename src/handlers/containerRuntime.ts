@@ -394,9 +394,7 @@ export function createRuntime(type: 'docker' | 'podman' = 'docker'): ContainerRu
 
   logger.info('container runtime initialized', { runtime: type, socketPath, socketValid: socketCheck.valid });
 
-  const runtime = type === 'podman'
-    ? new PodmanRuntime(socketPath)
-    : new DockerRuntime(socketPath);
+  const runtime = type === 'podman' ? new PodmanRuntime(socketPath) : new DockerRuntime(socketPath);
 
   // Lazy ping — log the result but don't block startup
   runtime.ping().then((result) => {

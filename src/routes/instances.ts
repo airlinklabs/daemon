@@ -4,7 +4,6 @@ import fs from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { create as tarCreate, extract as tarExtract } from 'tar';
 import config from '../config';
-import { getPaths } from '../paths';
 import { apiError } from '../errors';
 import { applyConfigFiles, type ConfigFileEntry } from '../handlers/configFiles';
 import {
@@ -34,6 +33,7 @@ import {
 } from '../handlers/logHistory';
 import { enqueueOperation, getOperation } from '../handlers/operationManager';
 import logger from '../logger';
+import { getPaths } from '../paths';
 import {
   backupBodyCodes,
   backupBodySchema,

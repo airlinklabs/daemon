@@ -1,9 +1,9 @@
 import type { ServerWebSocket } from 'bun';
-import { totalmem, freemem, cpus, uptime } from 'os';
 import { statfsSync } from 'fs';
+import { cpus, freemem, totalmem, uptime } from 'os';
 import { getTotalStats } from '../handlers/stats';
-import type { WsData } from './server';
 import logger from '../logger';
+import type { WsData } from './server';
 
 const POLL_MS = 3000;
 
@@ -34,14 +34,21 @@ function sendNodeStats(ws: ServerWebSocket<WsData>): void {
     const totalStats = getTotalStats();
     const latest = totalStats.length ? totalStats[totalStats.length - 1] : null;
 
-    ws.send(JSON.stringify({
-      event: 'nodestats',
-      data: {
-        host: { ram: { total: totalRam, used: usedRam, free: freeRam }, cpu: { cores: cpuCount, model: cpuModel }, disk, uptime: uptimeSec },
-        stats: { totalStats: totalStats.slice(-30), uptime: formatUptime(uptimeSec) },
-        current: latest,
-      },
-    }));
+    ws.send(
+      JSON.stringify({
+        event: 'nodestats',
+        data: {
+          host: {
+            ram: { total: totalRam, used: usedRam, free: freeRam },
+            cpu: { cores: cpuCount, model: cpuModel },
+            disk,
+            uptime: uptimeSec,
+          },
+          stats: { totalStats: totalStats.slice(-30), uptime: formatUptime(uptimeSec) },
+          current: latest,
+        },
+      }),
+    );
   } catch (err) {
     logger.warn('nodestats send failed', err);
   }

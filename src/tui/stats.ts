@@ -465,11 +465,7 @@ export async function collectDocker(): Promise<DockerStats> {
   const running = infos.filter((c: DockerContainerInfo) => c.State === 'running').slice(0, 8);
   const stats = await Promise.allSettled(
     running.map((c: DockerContainerInfo) =>
-      withTimeout(
-        dockerFetch(`/v1.41/containers/${c.Id}/stats?stream=false`, socket, 3000),
-        3500,
-        null,
-      ),
+      withTimeout(dockerFetch(`/v1.41/containers/${c.Id}/stats?stream=false`, socket, 3000), 3500, null),
     ),
   );
   const perId = new Map<string, { cpu: number; memUsed: number; memLimit: number }>();
@@ -506,8 +502,14 @@ export async function collectDocker(): Promise<DockerStats> {
     containers: containersOut,
     images: results[1].status === 'fulfilled' ? ((results[1].value?.json as { length?: number })?.length ?? 0) : 0,
     networks: results[2].status === 'fulfilled' ? ((results[2].value?.json as { length?: number })?.length ?? 0) : 0,
-    volumes: results[3].status === 'fulfilled' ? ((results[3].value?.json as { Volumes?: unknown[] })?.Volumes?.length ?? 0) : 0,
-    dockerDiskGb: results[4].status === 'fulfilled' ? ((results[4].value?.json as { LayersSize?: number })?.LayersSize ?? 0) / 1e9 : 0,
+    volumes:
+      results[3].status === 'fulfilled'
+        ? ((results[3].value?.json as { Volumes?: unknown[] })?.Volumes?.length ?? 0)
+        : 0,
+    dockerDiskGb:
+      results[4].status === 'fulfilled'
+        ? ((results[4].value?.json as { LayersSize?: number })?.LayersSize ?? 0) / 1e9
+        : 0,
   };
 }
 
@@ -595,11 +597,7 @@ function countErrors24h(logsDir: string): number {
 export async function collectDaemon(ctx: DaemonCtx): Promise<DaemonInfo> {
   let online = false;
   try {
-    const res = await withTimeout(
-      fetch(`http://127.0.0.1:${ctx.port}/healthz`),
-      1500,
-      null,
-    );
+    const res = await withTimeout(fetch(`http://127.0.0.1:${ctx.port}/healthz`), 1500, null);
     online = !!res && res.ok;
   } catch {
     online = false;

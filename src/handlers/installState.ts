@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import config from '../config';
-import { getPaths } from '../paths';
 import logger from '../logger';
+import { getPaths } from '../paths';
 
 const defaultLogsPath = join(getPaths(config.paths).storageRoot, 'install_logs.json');
 let logsPath = defaultLogsPath;

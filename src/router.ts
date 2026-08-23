@@ -1,12 +1,12 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import config from './config';
-import { docker } from './handlers/docker';
 import { apiError } from './errors';
+import { docker } from './handlers/docker';
+import { shutdownOperations } from './handlers/operationManager';
 import { maxBodyBytesFor } from './limits';
 import logger from './logger';
-import { shutdownOperations } from './handlers/operationManager';
-import { handleRoot, handleStats, handleHostInfo } from './routes/core';
+import { handleHostInfo, handleRoot, handleStats } from './routes/core';
 import {
   handleDownloadToken,
   handleFsAppend,
@@ -65,12 +65,15 @@ const exactRoutes = new Map<string, Handler>([
   ['GET /', handleRoot],
   ['GET /stats', handleStats],
   ['GET /host', handleHostInfo],
-  ['GET /capabilities', (_req) => {
-    const caps = docker.capabilities();
-    return new Response(JSON.stringify(caps), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }],
+  [
+    'GET /capabilities',
+    (_req) => {
+      const caps = docker.capabilities();
+      return new Response(JSON.stringify(caps), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  ],
   ['POST /container/installer', handleContainerInstaller],
   ['POST /container/install', handleContainerInstall],
   ['POST /container/reinstall', handleContainerReinstall],

@@ -1,7 +1,7 @@
 import config from './config';
 import { checkDocker, checkDockerRunning, docker, initContainerStateMap } from './handlers/docker';
-import { startNativeSftpServer } from './handlers/nativeSftp';
 import { startBackgroundLogCollector } from './handlers/logHistory';
+import { startNativeSftpServer } from './handlers/nativeSftp';
 import { shutdownOperations } from './handlers/operationManager';
 import { getCurrentStats, initStatsCollection, saveStats } from './handlers/stats';
 import logger, { drawHeader } from './logger';
@@ -100,7 +100,10 @@ try {
   await checkDockerRunning();
   await initContainerStateMap();
 } catch (err) {
-  logger.error('docker is not ready, so container actions are paused for now', err instanceof Error ? err : new Error(String(err)));
+  logger.error(
+    'docker is not ready, so container actions are paused for now',
+    err instanceof Error ? err : new Error(String(err)),
+  );
 }
 initStatsCollection();
 startBackgroundLogCollector(docker).catch((err) => {

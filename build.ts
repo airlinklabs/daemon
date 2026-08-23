@@ -25,8 +25,8 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -57,10 +57,7 @@ const ALL_TARGETS = [
 type Target = { platform: string; arch: string; target: string; out: string };
 
 // Files to embed from storage/ — the allowlist
-const EMBEDDED_ALLOWLIST = new Set([
-  'storage/config.json',
-  'storage/fileSpecifier.json',
-]);
+const EMBEDDED_ALLOWLIST = new Set(['storage/config.json', 'storage/fileSpecifier.json']);
 
 // Runtime state — never bundled
 const RUNTIME_STORAGE = new Set([
@@ -260,18 +257,43 @@ async function createBuildWorkspace(): Promise<string> {
     fail('failed to install dependencies in build workspace');
   }
 
-  // Copy all @opentui platform packages from root node_modules.
-  // bun install only installs optional deps for the current platform,
-  // but we need all platform packages available for cross-compilation.
-  const rootOpenTuiDir = join(ROOT, 'node_modules', '@opentui');
+  // Ensure all @opentui platform packages are available for cross-compilation.
+  // bun install only installs optional deps for the current platform, but the
+  // bundler needs to resolve imports for every target platform at bundle time.
+  const OPENUIT_PLATFORMS = [
+    '@opentui/core-linux-x64',
+    '@opentui/core-linux-x64-musl',
+    '@opentui/core-linux-arm64',
+    '@opentui/core-linux-arm64-musl',
+    '@opentui/core-darwin-x64',
+    '@opentui/core-darwin-arm64',
+    '@opentui/core-win32-x64',
+    '@opentui/core-win32-arm64',
+  ];
   const wsOpenTuiDir = join(stagingDir, 'node_modules', '@opentui');
-  if (existsSync(rootOpenTuiDir)) {
-    mkdirSync(wsOpenTuiDir, { recursive: true });
-    for (const entry of readdirSync(rootOpenTuiDir)) {
-      const srcPkg = join(rootOpenTuiDir, entry);
-      const dstPkg = join(wsOpenTuiDir, entry);
-      if (!existsSync(dstPkg)) {
-        execSync(`cp -r "${srcPkg}" "${dstPkg}"`, { stdio: 'ignore' });
+  const missing = OPENUIT_PLATFORMS.filter((p) => !existsSync(join(stagingDir, 'node_modules', p)));
+  if (missing.length > 0) {
+    // Copy from root node_modules first (faster than downloading)
+    if (existsSync(join(ROOT, 'node_modules', '@opentui'))) {
+      mkdirSync(wsOpenTuiDir, { recursive: true });
+      for (const entry of readdirSync(join(ROOT, 'node_modules', '@opentui'))) {
+        const dst = join(wsOpenTuiDir, entry);
+        if (!existsSync(dst)) {
+          execSync(`cp -r "${join(ROOT, 'node_modules', '@opentui', entry)}" "${dst}"`, { stdio: 'ignore' });
+        }
+      }
+    }
+    // Install any still-missing packages
+    const stillMissing = missing.filter((p) => !existsSync(join(stagingDir, 'node_modules', p)));
+    if (stillMissing.length > 0) {
+      console.log(`installing cross-platform @opentui packages...`);
+      const addProc = Bun.spawn(['bun', 'add', '--no-save', ...stillMissing], {
+        cwd: stagingDir,
+        stdout: 'inherit',
+        stderr: 'inherit',
+      });
+      if ((await addProc.exited) !== 0) {
+        console.error('warning: failed to install some cross-platform @opentui packages');
       }
     }
   }
@@ -286,10 +308,7 @@ async function applyPlatformPatches(workspaceDir: string): Promise<void> {
   // Stub cpu-features (required by ssh2, never actually called)
   const cpuFeaturesPath = join(workspaceDir, 'node_modules/cpu-features/lib/index.js');
   if (existsSync(cpuFeaturesPath)) {
-    writeFileSync(
-      cpuFeaturesPath,
-      'module.exports = function() { return { flags: [], models: [] }; };\n',
-    );
+    writeFileSync(cpuFeaturesPath, 'module.exports = function() { return { flags: [], models: [] }; };\n');
     console.log('patched cpu-features');
   }
 
@@ -332,10 +351,18 @@ async function packageBinary(target: Target, workspaceDir?: string): Promise<voi
   console.log(`packaging ${target.out}...`);
   const proc = Bun.spawn(
     [
-      'bun', 'build', '--compile', '--target', target.target,
-      '--define', `BUN_VERSION="${BUN_VERSION}"`,
-      '--define', `PKG_VERSION="${pkgVersion}"`,
-      '--outfile', stagingOut, 'src/app.ts',
+      'bun',
+      'build',
+      '--compile',
+      '--target',
+      target.target,
+      '--define',
+      `BUN_VERSION="${BUN_VERSION}"`,
+      '--define',
+      `PKG_VERSION="${pkgVersion}"`,
+      '--outfile',
+      stagingOut,
+      'src/app.ts',
     ],
     { stdout: 'inherit', stderr: 'inherit', cwd: buildDir },
   );
@@ -425,8 +452,7 @@ async function smokeTest(): Promise<void> {
     // Fall back to the host-platform binary
     const hostTarget = ALL_TARGETS.find(
       (t) =>
-        t.platform ===
-          (process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux') &&
+        t.platform === (process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux') &&
         t.arch === process.arch,
     );
     if (!hostTarget) {
@@ -501,7 +527,7 @@ function generateManifest(): void {
 
 // ── Command: build ───────────────────────────────────────────────────────────
 
-async function fullBuild(dev: boolean): Promise<void> {
+async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
   const startTime = Date.now();
 
   // 1. Verify Bun version
@@ -543,9 +569,23 @@ async function fullBuild(dev: boolean): Promise<void> {
     }
 
     // 7. Build targets from workspace
-    const targets = dev
-      ? [{ platform: 'linux' as const, arch: 'x64' as const, target: 'bun-linux-x64' as const, out: 'airlinkd' as const }]
-      : ALL_TARGETS;
+    let targets: readonly Target[];
+    if (dev) {
+      targets = [
+        {
+          platform: 'linux' as const,
+          arch: 'x64' as const,
+          target: 'bun-linux-x64' as const,
+          out: 'airlinkd' as const,
+        },
+      ];
+    } else if (targetFilter) {
+      const filtered = ALL_TARGETS.find((t) => t.target === targetFilter);
+      if (!filtered) fail(`unknown target: ${targetFilter}. Available: ${ALL_TARGETS.map((t) => t.target).join(', ')}`);
+      targets = [filtered];
+    } else {
+      targets = ALL_TARGETS;
+    }
 
     let built = 0;
     for (const t of targets) {
@@ -599,6 +639,8 @@ async function fullBuild(dev: boolean): Promise<void> {
 const args = process.argv.slice(2);
 const command = args[0] ?? 'build';
 const isDev = args.includes('--dev') || command === 'build:dev';
+const targetArg = args.find((a) => a.startsWith('--target='));
+const targetFilter = targetArg ? targetArg.split('=')[1] : undefined;
 
 switch (command) {
   case 'generate-embedded': {
@@ -628,11 +670,13 @@ switch (command) {
     generateManifest();
     break;
   case 'build':
-    fullBuild(false).catch((e) => fail(String(e)));
+    fullBuild(false, targetFilter).catch((e) => fail(String(e)));
     break;
   case 'build:dev':
-    fullBuild(true).catch((e) => fail(String(e)));
+    fullBuild(true, targetFilter).catch((e) => fail(String(e)));
     break;
   default:
-    fail(`unknown command: ${command}\nAvailable: generate-embedded, package, verify, smoke, release-manifest, build, build:dev`);
+    fail(
+      `unknown command: ${command}\nAvailable: generate-embedded, package, verify, smoke, release-manifest, build, build:dev`,
+    );
 }

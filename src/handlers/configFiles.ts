@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import config from '../config';
-import { getPaths } from '../paths';
 import logger from '../logger';
+import { getPaths } from '../paths';
 
 // Applies Wings/PTDL-v2 style egg config files before a container starts.
 // Format (stored in the image's config_files column):

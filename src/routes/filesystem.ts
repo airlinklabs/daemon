@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import config from '../config';
-import { getPaths } from '../paths';
 import { apiError } from '../errors';
 import {
   appendChunk,
@@ -18,6 +17,7 @@ import {
   zipPaths,
 } from '../handlers/fs';
 import logger from '../logger';
+import { getPaths } from '../paths';
 import { PublicUrlError, validatePublicUrl } from '../router';
 import {
   fsAppendBodyCodes,

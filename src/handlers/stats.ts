@@ -3,8 +3,8 @@ import { rename } from 'node:fs/promises';
 import { cpus, freemem, totalmem } from 'node:os';
 import { join } from 'node:path';
 import config from '../config';
-import { getPaths } from '../paths';
 import logger from '../logger';
+import { getPaths } from '../paths';
 
 // ── Tunable limits ───────────────────────────────────────────────────────────
 // Overridable through env so operators can tune behavior without a rebuild and

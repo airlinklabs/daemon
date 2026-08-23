@@ -31,8 +31,8 @@ import { dirname, join, resolve, sep } from 'node:path';
 import type { Attributes, Connection, FileEntry, Session, SFTPWrapper } from 'ssh2';
 import { Server, utils } from 'ssh2';
 import config from '../config';
-import { getPaths } from '../paths';
 import logger from '../logger';
+import { getPaths } from '../paths';
 import { jailPath } from '../security/pathJail';
 
 // ---------------------------------------------------------------------------
