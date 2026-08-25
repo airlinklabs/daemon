@@ -78,6 +78,19 @@ export async function startNativeSftpServer(): Promise<void> {
         return;
       }
 
+      // Enforce session TTL on active connections
+      const ttl = session.expiresAt - Date.now();
+      if (ttl <= 0) {
+        client.end();
+        return;
+      }
+      const ttlTimer = setTimeout(() => {
+        logger.info(`SFTP session expired for ${session.serverId}, closing connection`);
+        client.end();
+      }, ttl);
+      ttlTimer.unref();
+      client.on('close', () => clearTimeout(ttlTimer));
+
       client.on('session', (accept: () => Session) => {
         const channel = accept();
         channel.on('sftp', (sftpAccept: () => SFTPWrapper) => {

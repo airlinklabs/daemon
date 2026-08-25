@@ -105,9 +105,9 @@ export async function listDir(id: string, relativePath = '/', filter?: string): 
     }),
   );
 
-  const limited = results.slice(0, 256);
-  const filtered = filter ? limited.filter((i) => i.name.includes(filter)) : limited;
-  rateData.cache = filtered;
+  const filtered = filter ? results.filter((i) => i.name.includes(filter)) : results;
+  const limited = filtered.slice(0, 256);
+  rateData.cache = limited;
   return filtered;
 }
 
@@ -222,13 +222,16 @@ export async function downloadToVolume(
   await mkdir(dirname(filePath), { recursive: true });
 
   if (env) {
-    let content = await response.text();
-    content = content.replace(/\$ALVKT\((\w+)\)/g, (_, varName: string) => {
-      if (env[varName] !== undefined) return env[varName];
-      return '';
-    });
+    const raw = await response.arrayBuffer();
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(raw);
+    const substituted = text.includes('$ALVKT(')
+      ? text.replace(/\$ALVKT\((\w+)\)/g, (_, varName: string) => {
+          if (env[varName] !== undefined) return env[varName];
+          return '';
+        })
+      : text;
     // Use secure write to prevent TOCTOU symlink races
-    secureWriteFile(baseDirectory, relativePath, content);
+    secureWriteFile(baseDirectory, relativePath, substituted);
   } else {
     const buffer = await response.arrayBuffer();
     // Use secure write to prevent TOCTOU symlink races
@@ -264,6 +267,8 @@ export async function zipPaths(id: string, filePaths: string[], zipname: string)
       const fullPath = jailPath(baseDirectory, cleanPath);
       return { cleanPath, fullPath };
     });
+
+  if (files.length === 0) throw new Error('no files specified for zip');
 
   const firstFileRel = files[0].cleanPath.split('/').slice(0, -1).join('/');
   const zipPath = jailPath(baseDirectory, join(firstFileRel, `${zipname}.zip`));

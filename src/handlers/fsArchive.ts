@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { readdir, rename, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, sep } from 'node:path';
 import { extract as tarExtract, list as tarList } from 'tar';
@@ -28,12 +28,24 @@ function assertSafeArchiveEntry(entry: string, archiveName: string): void {
 }
 
 async function listArchiveMembers(kind: 'zip' | 'rar' | '7z', archivePath: string): Promise<string[]> {
-  const argv =
-    kind === 'zip'
-      ? ['unzip', '-Z1', archivePath]
-      : kind === 'rar'
-        ? ['unrar', 'lb', archivePath]
-        : ['7z', 'l', '-ba', archivePath];
+  if (kind === '7z') {
+    // -slt gives machine-readable output with "Path = <name>" lines
+    const proc = Bun.spawn(['7z', 'l', '-ba', '-slt', archivePath], { stdout: 'pipe', stderr: 'pipe' });
+    const [code, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    if (code !== 0) throw new Error(`7z listing failed (exit ${code}): ${stderr.trim()}`);
+    const paths: string[] = [];
+    for (const line of stdout.split('\n')) {
+      const m = line.match(/^Path = (.+)$/);
+      if (m) paths.push(m[1].trim());
+    }
+    return paths;
+  }
+
+  const argv = kind === 'zip' ? ['unzip', '-Z1', archivePath] : ['unrar', 'lb', archivePath];
 
   const proc = Bun.spawn(argv, { stdout: 'pipe', stderr: 'pipe' });
   const [code, stdout, stderr] = await Promise.all([
@@ -166,7 +178,7 @@ interface ChunkSession {
   received: Set<number>;
   total: number;
   timer: ReturnType<typeof setTimeout>;
-  chain: Promise<void>;
+  finalizing: boolean;
 }
 
 const chunkSessions = new Map<string, ChunkSession>();
@@ -193,6 +205,7 @@ export async function appendChunk(
   if (totalChunks <= 1) {
     const baseDirectory = volumeRoot(id);
     const filePath = jailPath(baseDirectory, relativePath);
+    mkdirSync(dirname(filePath), { recursive: true });
     // Use secure write to prevent TOCTOU symlink races
     secureWriteFile(baseDirectory, relativePath, chunk);
     return;
@@ -202,10 +215,6 @@ export async function appendChunk(
   let session = chunkSessions.get(key);
 
   if (!session) {
-    let resolveFirst: () => void = () => {};
-    const firstChain = new Promise<void>((resolve) => {
-      resolveFirst = resolve;
-    });
     const timer = setTimeout(() => cleanupSession(key), 60_000);
     timer.unref?.();
     session = {
@@ -213,10 +222,9 @@ export async function appendChunk(
       received: new Set(),
       total: totalChunks,
       timer,
-      chain: firstChain,
+      finalizing: false,
     };
     chunkSessions.set(key, session);
-    resolveFirst();
   } else {
     clearTimeout(session.timer);
     session.timer = setTimeout(() => cleanupSession(key), 60_000);
@@ -224,7 +232,7 @@ export async function appendChunk(
     session.total = Math.max(session.total, totalChunks);
   }
 
-  await session.chain;
+  await undefined; // yield to event loop
 
   if (chunkIndex < 0 || chunkIndex >= session.total) {
     throw new Error('chunk index out of range');
@@ -234,7 +242,8 @@ export async function appendChunk(
   session.received.add(chunkIndex);
 
   const done = session.received.size >= session.total && session.chunks.every((c) => c instanceof Buffer);
-  if (!done) return;
+  if (!done || session.finalizing) return;
+  session.finalizing = true;
 
   try {
     const baseDirectory = volumeRoot(id);

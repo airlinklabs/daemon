@@ -366,17 +366,14 @@ export function beginCapture(containerId: string): void {
   if (isCapturing(containerId)) return;
   if (!runtimeRef) return;
 
+  // Set a sentinel synchronously to prevent double-begin races
+  activeStreams.set(containerId, null as unknown as NodeJS.ReadableStream);
+
   const runtime = runtimeRef;
   runtime
     .getContainer(containerId)
     .logs({ follow: true, stdout: true, stderr: true, tail: 0 })
     .then((logStream) => {
-      if (isCapturing(containerId)) {
-        // double-begin race — close the duplicate
-        destroyStream(logStream);
-        return;
-      }
-
       activeStreams.set(containerId, logStream);
 
       logStream.on('data', (chunk: Buffer) => {
@@ -393,6 +390,7 @@ export function beginCapture(containerId: string): void {
       });
     })
     .catch((err: unknown) => {
+      activeStreams.delete(containerId);
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn(`could not begin log capture for ${containerId}: ${msg}`);
     });
@@ -418,17 +416,24 @@ async function subscribeToContainerEvents(): Promise<void> {
     });
 
     stream.on('data', (chunk: Buffer) => {
-      const parsed: { Action?: string; id?: string; Actor?: { Attributes?: { name?: string } } } = JSON.parse(
-        chunk.toString(),
-      );
-      const id = parsed.id;
-      const name = parsed.Actor?.Attributes?.name ?? '';
-      const target = name || id || '';
+      // Docker may deliver multiple events per chunk, separated by newlines
+      for (const line of chunk.toString().split('\n')) {
+        if (!line.trim()) continue;
+        let parsed: { Action?: string; id?: string; Actor?: { Attributes?: { name?: string } } };
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          logger.warn(`docker event stream: could not parse line: ${line.slice(0, 100)}`);
+          continue;
+        }
+        const id = parsed.id;
+        if (!id) continue;
 
-      if (parsed.Action === 'start') {
-        beginCapture(target);
-      } else if (parsed.Action === 'die' || parsed.Action === 'stop' || parsed.Action === 'destroy') {
-        endCapture(target);
+        if (parsed.Action === 'start') {
+          beginCapture(id);
+        } else if (parsed.Action === 'die' || parsed.Action === 'stop' || parsed.Action === 'destroy') {
+          endCapture(id);
+        }
       }
     });
 
@@ -461,9 +466,8 @@ export async function startBackgroundLogCollector(runtime: ContainerRuntime): Pr
   try {
     const containers = await runtime.listContainers({ all: false });
     for (const c of containers) {
-      const name = (c.Names?.[0] || '').replace(/^\//, '');
-      const target = name || c.Id;
-      beginCapture(target);
+      const id = c.Id;
+      if (id) beginCapture(id);
     }
     logger.info(`background log collector started for ${containers.length} running containers`);
   } catch (err) {

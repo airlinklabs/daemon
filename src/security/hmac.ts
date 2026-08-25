@@ -277,3 +277,10 @@ export type { ApiErrorCode };
 export function clearNonceCache(): void {
   seenNonces.clear();
 }
+
+export function clearExpiredNonces(): void {
+  const cutoff = Date.now() - HMAC_WINDOW_SECS * 1000;
+  for (const [key, insertedAt] of seenNonces) {
+    if (insertedAt < cutoff) seenNonces.delete(key);
+  }
+}

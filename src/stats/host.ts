@@ -37,17 +37,18 @@ function readCpu(): { time: number; perCore: number[] } {
 export function cpuPct(now: number): { total: number; perCore: number[] } {
   const cur = readCpu();
   if (!prevCpu) {
-    prevCpu = { time: now, perCore: cur.perCore.slice() };
+    prevCpu = { time: cur.time, perCore: cur.perCore.slice() };
     return { total: 0, perCore: cur.perCore.map(() => 0) };
   }
-  const dt = (cur.time - prevCpu.time) / (now - prevCpu.time);
-  const total = Math.max(0, Math.min(100, dt * 100));
+  const dTotal = cur.time - prevCpu.time;
+  // Use the previous perCore snapshots as idle baseline — both are busy ticks
   const perCore = cur.perCore.map((v, i) => {
     const p = prevCpu?.perCore[i] ?? v;
-    const d = (v - p) / (now - (prevCpu?.time ?? now));
-    return Math.max(0, Math.min(100, d * 100));
+    const d = v - p;
+    return dTotal <= 0 ? 0 : Math.max(0, Math.min(100, (d / dTotal) * 100));
   });
-  prevCpu = { time: now, perCore: cur.perCore.slice() };
+  const total = dTotal <= 0 ? 0 : Math.max(0, Math.min(100, (dTotal / (dTotal + 1)) * 100));
+  prevCpu = { time: cur.time, perCore: cur.perCore.slice() };
   return { total, perCore };
 }
 

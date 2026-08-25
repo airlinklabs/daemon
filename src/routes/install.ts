@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -154,7 +155,7 @@ async function performInstall(
       }
 
       const alcEntry = alc.find((e) => e.Name === fileName);
-      const cachedFileId = `${fileName.replace(/\W+/g, '_')}_${alcEntry?.lasts ?? 0}_${Math.floor(Math.random() * 100000) + 1}`;
+      const cachedFileId = createHash('sha256').update(`${fileName}:${resolvedUrl}`).digest('hex').slice(0, 32);
       const existingLoc = locations.find((l) => l.Name === fileName && l.url === resolvedUrl);
       const cachedFilePath = existingLoc?.id ? join(filesDir, existingLoc.id) : '';
 

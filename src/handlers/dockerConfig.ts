@@ -6,7 +6,24 @@ const PIDS_LIMIT = 256;
 const BLKIO_WEIGHT = 500;
 const CPU_NANO_FACTOR = 1e9;
 
+// Mount sources that must never be passed through from the panel.
+const FORBIDDEN_MOUNT_PREFIXES = ['/proc', '/sys', '/dev', '/run'];
+
 export type MountSpec = { source: string; target: string; readOnly?: boolean };
+
+export function validateMounts(mounts: MountSpec[] | undefined, daemonStorageRoot: string): void {
+  if (!mounts || mounts.length === 0) return;
+  for (const mount of mounts) {
+    for (const prefix of FORBIDDEN_MOUNT_PREFIXES) {
+      if (mount.source.startsWith(prefix)) {
+        throw new Error(`mount source ${mount.source} is not allowed (matches forbidden prefix ${prefix})`);
+      }
+    }
+    if (mount.source.startsWith(daemonStorageRoot)) {
+      throw new Error(`mount source ${mount.source} is not allowed (inside daemon storage)`);
+    }
+  }
+}
 
 // Parse "hostPort:containerPort,hostPort:containerPort/udp" into Docker
 // port bindings and exposed ports.

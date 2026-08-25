@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import config from '../config';
@@ -60,9 +60,7 @@ export function hashPassword(password: string): Buffer {
 
 export function timingSafeEq(a: Buffer, b: Buffer): boolean {
   if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
-  return diff === 0;
+  return timingSafeEqual(a, b);
 }
 
 export function volumePathFor(serverId: string): string {

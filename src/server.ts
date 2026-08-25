@@ -6,8 +6,8 @@ import { shutdownOperations } from './handlers/operationManager';
 import { getCurrentStats, initStatsCollection, saveStats } from './handlers/stats';
 import logger, { drawHeader } from './logger';
 import { handleHttpRequest, isPrivateIp } from './router';
-import { clearNonceCache, getAllowedIpCheck } from './security/hmac';
-import { checkRateLimit, clearRateLimit } from './security/rateLimit';
+import { clearExpiredNonces, getAllowedIpCheck } from './security/hmac';
+import { checkRateLimit, clearExpiredRateLimit } from './security/rateLimit';
 import { validateContainerId } from './validation';
 import type { WsData } from './ws/server';
 import { buildWsData, openConnections, wsClose, wsMessage, wsOpen } from './ws/server';
@@ -17,7 +17,15 @@ function resolveEffectiveIp(req: Request, server: ReturnType<typeof Bun.serve>):
   const socketIp = rawIp?.address.replace(/^::ffff:/, '') ?? 'unknown';
 
   if (Bun.env.BEHIND_PROXY === 'true') {
-    if (isPrivateIp(socketIp)) {
+    const trustedProxies = (Bun.env.TRUSTED_PROXY_IPS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (trustedProxies.length > 0 && trustedProxies.includes(socketIp)) {
+      return req.headers.get('x-forwarded-for')?.split(',')[0].trim() || socketIp;
+    }
+    if (trustedProxies.length === 0 && isPrivateIp(socketIp)) {
+      // Legacy fallback: trust any private IP when no explicit list configured
       return req.headers.get('x-forwarded-for')?.split(',')[0].trim() || socketIp;
     }
     logger.warn(`BEHIND_PROXY=true but ${socketIp} is not a trusted proxy`);
@@ -109,11 +117,12 @@ drawHeader(config.version, config.port);
   initStatsCollection();
 })();
 
-// Bun v1.4 memory pressure: clear in-memory caches to reduce footprint
+// Bun v1.4 memory pressure: evict only expired entries to reduce footprint
+// while preserving replay protection and rate limiting for active entries.
 process.on('memoryPressure', () => {
-  logger.warn('memory pressure detected — clearing caches');
-  clearNonceCache();
-  clearRateLimit();
+  logger.warn('memory pressure detected — evicting expired cache entries');
+  clearExpiredNonces();
+  clearExpiredRateLimit();
 });
 
 startBackgroundLogCollector(docker).catch((err) => {

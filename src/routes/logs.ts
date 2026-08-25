@@ -50,6 +50,10 @@ export async function handleContainerLogArchiveRead(req: Request): Promise<Respo
   return json({ lines });
 }
 
+function safeFileName(name: string): string {
+  return name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+}
+
 export async function handleContainerLogArchiveDownload(req: Request): Promise<Response> {
   const params = new URL(req.url).searchParams;
   const id = params.get('id');
@@ -63,7 +67,7 @@ export async function handleContainerLogArchiveDownload(req: Request): Promise<R
   return new Response(Bun.file(archivePath), {
     headers: {
       'Content-Type': 'application/gzip',
-      'Content-Disposition': `attachment; filename="${file}"`,
+      'Content-Disposition': `attachment; filename="${safeFileName(file)}"`,
     },
   });
 }

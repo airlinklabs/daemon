@@ -75,22 +75,32 @@ async function writeState(data: Record<string, InstallStatus>): Promise<void> {
   await Bun.write(logsPath, JSON.stringify(data, null, 2));
 }
 
+// Serialize all writes through a promise chain to prevent read-modify-write races
+// when multiple concurrent operations update install state.
+let writeChain: Promise<void> = Promise.resolve();
+
 export async function setServerState(containerId: string, state: string, error?: string): Promise<void> {
-  const logs = await readState();
-  const current = logs[containerId]?.state;
+  // Capture any error from within the chain without rejecting the chain itself,
+  // so subsequent calls aren't blocked by a prior rejection.
+  let thrownError: Error | undefined;
+  writeChain = writeChain
+    .catch(() => {}) // recover from prior chain errors
+    .then(async () => {
+      const logs = await readState();
+      const current = logs[containerId]?.state;
 
-  if (!isValidStateTransition(current, state)) {
-    // Refuse to persist a contradictory install state. The coordinator must
-    // route through the legal transitions (installed -> reinstalling, failed
-    // -> installing); throwing surfaces the programming error loudly instead
-    // of letting the panel show two states at once.
-    const message = `refusing invalid install state transition ${current ?? '(none)'} -> ${state} for ${containerId}`;
-    logger.error(message);
-    throw new Error(message);
-  }
+      if (!isValidStateTransition(current, state)) {
+        const message = `refusing invalid install state transition ${current ?? '(none)'} -> ${state} for ${containerId}`;
+        logger.error(message);
+        thrownError = new Error(message);
+        return;
+      }
 
-  logs[containerId] = error ? { state, error } : { state };
-  await writeState(logs);
+      logs[containerId] = error ? { state, error } : { state };
+      await writeState(logs);
+    });
+  await writeChain;
+  if (thrownError) throw thrownError;
 }
 
 export async function getServerState(containerId: string): Promise<string | undefined> {

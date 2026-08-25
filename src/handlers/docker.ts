@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type Docker from 'dockerode';
 import config from '../config';
@@ -8,7 +8,7 @@ import { emit } from '../ws/events';
 import { normalizeConsoleCommand } from './consoleCommand';
 import { createRuntime } from './containerRuntime';
 import type { MountSpec } from './dockerConfig';
-import { buildHostConfig, parseEnvironmentVariables, parsePortBindings } from './dockerConfig';
+import { buildHostConfig, parseEnvironmentVariables, parsePortBindings, validateMounts } from './dockerConfig';
 import { buildInitScript } from './dockerInit';
 import {
   initContainerStateMap as _initContainerStateMap,
@@ -172,23 +172,26 @@ export type ContainerStats = {
 async function getStorageUsageMb(id: string): Promise<number> {
   const volumePath = join(getPaths(config.paths).volumesRoot, id);
   if (!existsSync(volumePath)) return 0;
-  const { readdir, lstat } = await import('node:fs/promises');
-  async function walk(dir: string): Promise<number> {
+  function walk(dir: string): number {
     let total = 0;
-    const entries = await readdir(dir);
-    for (const entry of entries) {
-      const p = join(dir, entry);
-      const st = await lstat(p);
-      if (st.isSymbolicLink()) continue;
-      if (st.isDirectory()) {
-        total += await walk(p);
-      } else if (st.isFile()) {
-        total += st.size;
+    try {
+      const entries = readdirSync(dir);
+      for (const entry of entries) {
+        const p = join(dir, entry);
+        try {
+          const st = lstatSync(p);
+          if (st.isSymbolicLink()) continue;
+          if (st.isDirectory()) {
+            total += walk(p);
+          } else if (st.isFile()) {
+            total += st.size;
+          }
+        } catch {}
       }
-    }
+    } catch {}
     return total;
   }
-  return (await walk(volumePath)) / 1024 / 1024;
+  return walk(volumePath) / 1024 / 1024;
 }
 
 export async function getContainerStats(id: string): Promise<ContainerStats | null> {
@@ -331,6 +334,14 @@ export async function startContainer(
     .map(([c, h]) => `${h[0].HostPort} -> ${c}`)
     .join(', ');
   if (portSummary) emit(id, { type: 'pulling', message: `port bindings: ${portSummary}` });
+
+  // Validate mount sources before any Docker operations
+  try {
+    validateMounts(mounts, getPaths(config.paths).base);
+  } catch (err) {
+    throw new Error(`invalid mount: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   let imageExists = false;
   try {
     await docker.getImage(image).inspect();
@@ -636,7 +647,7 @@ export async function sendCommandToContainer(id: string, command: string): Promi
 }
 
 export type { MountSpec } from './dockerConfig';
-export { buildHostConfig, parseEnvironmentVariables, parsePortBindings } from './dockerConfig';
+export { buildHostConfig, parseEnvironmentVariables, parsePortBindings, validateMounts } from './dockerConfig';
 // Re-export everything from split modules so existing imports keep working.
 export { buildInitScript } from './dockerInit';
 export { applyContainerEvent, applyContainerList, isContainerRunning, setContainerRunning } from './dockerState';

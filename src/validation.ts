@@ -6,6 +6,7 @@ export function validateContainerId(id: string): boolean {
 export function validatePath(relativePath: string): boolean {
   if (!relativePath) return false;
   if (relativePath.includes('..') || relativePath.includes('\\')) return false;
+  if (relativePath.includes('\0')) return false;
   return true;
 }
 

@@ -38,3 +38,10 @@ export function checkRateLimit(ip: string, limit = 300): Response | null {
 export function clearRateLimit(): void {
   hits.clear();
 }
+
+export function clearExpiredRateLimit(): void {
+  const now = Date.now();
+  for (const [ip, data] of hits) {
+    if (data.resetAt < now) hits.delete(ip);
+  }
+}

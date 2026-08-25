@@ -212,6 +212,10 @@ export async function handleContainerBackupDelete(req: Request): Promise<Respons
   }
 }
 
+function safeFileName(name: string): string {
+  return name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+}
+
 export function handleContainerBackupDownload(req: Request): Response {
   const params = new URL(req.url).searchParams;
   const backupPath = params.get('backupPath');
@@ -226,7 +230,7 @@ export function handleContainerBackupDownload(req: Request): Response {
   }
   if (!existsSync(fullPath)) return apiError('not_found', 'backup file not found', 404);
 
-  const fileName = basename(fullPath);
+  const fileName = safeFileName(basename(fullPath));
 
   return new Response(Bun.file(fullPath), {
     headers: {

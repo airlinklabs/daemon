@@ -141,6 +141,10 @@ export async function handleFsFileWrite(req: Request): Promise<Response> {
   }
 }
 
+function safeFileName(name: string): string {
+  return name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+}
+
 export function handleFsDownload(req: Request): Response {
   const params = new URL(req.url).searchParams;
   const id = params.get('id');
@@ -154,7 +158,7 @@ export function handleFsDownload(req: Request): Response {
     return new Response(Bun.file(filePath), {
       headers: {
         'Content-Type': 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${basename(filePath)}"`,
+        'Content-Disposition': `attachment; filename="${safeFileName(basename(filePath))}"`,
       },
     });
   } catch (err) {
@@ -200,7 +204,7 @@ export async function handleDownloadToken(_req: Request, token: string): Promise
     return apiError('not_found', 'file not found', 404);
   }
 
-  const disposition = `${entry.disposition}; filename="${entry.fileName}"`;
+  const disposition = `${entry.disposition}; filename="${safeFileName(entry.fileName)}"`;
   return new Response(Bun.file(entry.filePath), {
     headers: {
       'Content-Type': entry.contentType,
