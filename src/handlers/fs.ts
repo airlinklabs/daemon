@@ -5,7 +5,7 @@ import { dirname, extname, join, resolve } from 'node:path';
 import config from '../config';
 import { getPaths } from '../paths';
 import { validatePublicUrl } from '../router';
-import { jailPath, jailRename } from '../security/pathJail';
+import { jailPath, jailRename, secureReadFile, secureUnlink, secureWriteFile } from '../security/pathJail';
 import fileSpecifier from '../utils/fileSpecifier';
 
 function volumeRoot(id: string): string {
@@ -125,7 +125,9 @@ export async function getFileContent(id: string, relativePath = '/'): Promise<st
     const s = await stat(filePath);
     if (!s.isFile()) return null;
     if (s.size > MAX_FILE_CONTENT_BYTES) return null;
-    return await readFile(filePath, 'utf-8');
+    // Use secure read to prevent TOCTOU symlink races
+    const buf = secureReadFile(baseDirectory, relativePath);
+    return buf.toString('utf-8');
   } catch {
     return null;
   }
@@ -136,8 +138,8 @@ export async function writeFileContent(id: string, relativePath: string, content
   await mkdir(baseDirectory, { recursive: true });
   const filePath = jailPath(baseDirectory, relativePath);
   await mkdir(dirname(filePath), { recursive: true });
-  if (typeof content === 'string') await writeFile(filePath, content, 'utf-8');
-  else await writeFile(filePath, content);
+  // Use secure write to prevent TOCTOU symlink races
+  secureWriteFile(baseDirectory, relativePath, content);
 }
 
 export function getFilePath(id: string, relativePath = '/'): string {
@@ -151,8 +153,10 @@ export async function rmPath(id: string, relativePath: string): Promise<void> {
   const targetPath = jailPath(baseDirectory, relativePath);
   const s = await lstat(targetPath);
   if (s.isDirectory()) await rm(targetPath, { recursive: true, force: true });
-  else if (s.isFile()) await unlink(targetPath);
-  else throw new Error('path is neither a file nor a directory');
+  else if (s.isFile()) {
+    // Use secure unlink to prevent TOCTOU symlink races
+    secureUnlink(baseDirectory, relativePath);
+  } else throw new Error('path is neither a file nor a directory');
 }
 
 export async function renameFile(id: string, oldPath: string, newPath: string): Promise<void> {
@@ -223,10 +227,12 @@ export async function downloadToVolume(
       if (env[varName] !== undefined) return env[varName];
       return '';
     });
-    await writeFile(filePath, content, 'utf-8');
+    // Use secure write to prevent TOCTOU symlink races
+    secureWriteFile(baseDirectory, relativePath, content);
   } else {
     const buffer = await response.arrayBuffer();
-    await writeFile(filePath, Buffer.from(buffer));
+    // Use secure write to prevent TOCTOU symlink races
+    secureWriteFile(baseDirectory, relativePath, Buffer.from(buffer));
   }
 }
 

@@ -4,7 +4,7 @@ import { basename, dirname, extname, join, sep } from 'node:path';
 import { extract as tarExtract, list as tarList } from 'tar';
 import config from '../config';
 import { getPaths } from '../paths';
-import { jailPath } from '../security/pathJail';
+import { jailPath, secureWriteFile } from '../security/pathJail';
 
 function volumeRoot(id: string): string {
   return join(getPaths(config.paths).volumesRoot, id);
@@ -193,7 +193,8 @@ export async function appendChunk(
   if (totalChunks <= 1) {
     const baseDirectory = volumeRoot(id);
     const filePath = jailPath(baseDirectory, relativePath);
-    await writeFile(filePath, chunk);
+    // Use secure write to prevent TOCTOU symlink races
+    secureWriteFile(baseDirectory, relativePath, chunk);
     return;
   }
 
@@ -241,6 +242,7 @@ export async function appendChunk(
     const tmpPath = `${filePath}.part-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const ordered = session.chunks as Buffer[];
+    // Use secure write for the temp file, then atomic rename
     await writeFile(tmpPath, Buffer.concat(ordered));
     await rename(tmpPath, filePath);
   } finally {
