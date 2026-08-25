@@ -41,6 +41,9 @@ const DaemonConfigSchema = z.object({
   sftpPort: z.coerce.number().int().min(1).max(65535).default(3004),
   networkRateMbps: z.coerce.number().int().min(0).default(0),
   requireHmac: z.coerce.boolean().default(true),
+  installerMemoryMb: z.coerce.number().int().min(256).default(2048),
+  installerCpuPercent: z.coerce.number().int().min(100).default(100),
+  tmpfsSizeMb: z.coerce.number().int().min(0).default(0),
 });
 
 type DaemonConfig = z.infer<typeof DaemonConfigSchema> & {
@@ -72,6 +75,9 @@ function parseConfig(): DaemonConfig {
     sftpPort: env('SFTP_PORT'),
     networkRateMbps: env('NETWORK_RATE_MBPS'),
     requireHmac: env('REQUIRE_HMAC'),
+    installerMemoryMb: env('INSTALLER_MEMORY_MB'),
+    installerCpuPercent: env('INSTALLER_CPU_PERCENT'),
+    tmpfsSizeMb: env('TMPFS_SIZE_MB'),
   });
 
   if (!result.success) {

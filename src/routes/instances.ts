@@ -9,6 +9,7 @@ import {
   getContainerStats,
   isContainerRunning,
   killContainer,
+  onContainerCrash,
   sendCommandToContainer,
   startContainer,
   stopContainer,
@@ -28,6 +29,46 @@ import {
   startBodySchema,
 } from '../schemas';
 import { validateContainerId } from '../validation';
+
+const CRASH_RESTART_DELAY_MS = 5_000;
+const crashUnsubscribers = new Map<string, () => void>();
+
+function registerCrashHandler(id: string): void {
+  // Clean up any previous handler
+  const prev = crashUnsubscribers.get(id);
+  if (prev) prev();
+  const unsub = onContainerCrash(id, async (crashedId, exitCode) => {
+    logger.warn(`crash detected for ${crashedId} (exit ${exitCode}), scheduling restart`);
+    await new Promise((r) => setTimeout(r, CRASH_RESTART_DELAY_MS));
+    const cached = await loadStartConfig(crashedId);
+    if (!cached) {
+      logger.warn(`no cached start config for ${crashedId}, cannot auto-restart`);
+      return;
+    }
+    try {
+      clearLogBuffer(crashedId);
+      if (cached.configFiles && typeof cached.configFiles === 'object') {
+        await applyConfigFiles(crashedId, cached.configFiles, cached.env ?? {});
+      }
+      await startContainer(
+        crashedId,
+        cached.image,
+        cached.env ?? {},
+        cached.ports ?? '',
+        cached.Memory ?? 512,
+        cached.Cpu ?? 100,
+        cached.Storage ?? 0,
+        cached.Swap ?? 0,
+        cached.mounts ?? [],
+      );
+      registerCrashHandler(crashedId);
+      logger.info(`auto-restarted ${crashedId} after crash`);
+    } catch (err) {
+      logger.error(`failed to auto-restart ${crashedId} after crash: ${err}`);
+    }
+  });
+  crashUnsubscribers.set(id, unsub);
+}
 
 export type CachedStartConfig = {
   id: string;
@@ -133,6 +174,8 @@ export async function handleContainerStart(req: Request): Promise<Response> {
       configFiles: configFiles ?? undefined,
       savedAt: new Date().toISOString(),
     });
+    // Crash detection: if the container exits unexpectedly, attempt a restart.
+    registerCrashHandler(id);
     return json({ message: `container ${id} started successfully` });
   } catch (error) {
     logger.error('error starting container', error);
@@ -171,6 +214,7 @@ export async function handleContainerRestart(req: Request): Promise<Response> {
       cached.Swap ?? 0,
       cached.mounts ?? [],
     );
+    registerCrashHandler(body.id);
     return json({ message: `container ${body.id} restarted successfully` });
   } catch (error) {
     logger.error('error restarting container', error);
@@ -189,6 +233,11 @@ export async function handleContainerStop(req: Request): Promise<Response> {
 
   try {
     await stopContainer(body.id, body.stopCmd);
+    const unsub = crashUnsubscribers.get(body.id);
+    if (unsub) {
+      unsub();
+      crashUnsubscribers.delete(body.id);
+    }
     return json({ message: `container ${body.id} stopped successfully` });
   } catch (err) {
     logger.error('error stopping container', err);
@@ -203,6 +252,11 @@ export async function handleContainerKill(req: Request): Promise<Response> {
 
   try {
     await killContainer(id);
+    const unsub = crashUnsubscribers.get(id);
+    if (unsub) {
+      unsub();
+      crashUnsubscribers.delete(id);
+    }
     return json({ message: `container ${id} killed` });
   } catch (err) {
     logger.error('error killing container', err);

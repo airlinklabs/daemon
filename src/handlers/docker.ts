@@ -8,7 +8,13 @@ import { emit } from '../ws/events';
 import { normalizeConsoleCommand } from './consoleCommand';
 import { createRuntime } from './containerRuntime';
 import type { MountSpec } from './dockerConfig';
-import { buildHostConfig, parseEnvironmentVariables, parsePortBindings, validateMounts } from './dockerConfig';
+import {
+  buildHostConfig,
+  buildInstallerHostConfig,
+  parseEnvironmentVariables,
+  parsePortBindings,
+  validateMounts,
+} from './dockerConfig';
 import { buildInitScript } from './dockerInit';
 import {
   initContainerStateMap as _initContainerStateMap,
@@ -400,6 +406,11 @@ export async function startContainer(
     AttachStdin: true,
     OpenStdin: true,
     Tty: true,
+    Labels: {
+      Service: 'airlinkd',
+      ContainerType: 'server',
+      ServerId: id,
+    },
   });
   emit(id, { type: 'starting', message: `starting ${id}` });
   try {
@@ -426,6 +437,7 @@ export async function createInstaller(
   script: string,
   env: Record<string, string> = {},
   entrypoint = 'bash',
+  serverLimits?: { Memory: number; Cpu: number },
 ): Promise<void> {
   try {
     await docker.getContainer(`installer_${id}`).remove({ force: true });
@@ -456,6 +468,11 @@ export async function createInstaller(
     });
   }
   emit(id, { type: 'installing', message: 'running install script' });
+  const hostConfig = buildInstallerHostConfig({
+    volumePath,
+    Memory: serverLimits?.Memory ?? 512,
+    Cpu: serverLimits?.Cpu ?? 100,
+  });
   const container = await docker.createContainer({
     name: `installer_${id}`,
     Image: image,
@@ -463,7 +480,12 @@ export async function createInstaller(
     Env: Object.entries(modifiedEnv).map(([k, v]) => `${k}=${v}`),
     AttachStdout: true,
     AttachStderr: true,
-    HostConfig: { Binds: [`${volumePath}:/mnt/server`], AutoRemove: false, NetworkMode: 'host' },
+    Labels: {
+      Service: 'airlinkd',
+      ContainerType: 'server_installer',
+      ServerId: id,
+    },
+    HostConfig: hostConfig,
   });
   const attachStream = await container.attach({ stream: true, stdout: true, stderr: true });
   const installerLines: string[] = [];
@@ -494,10 +516,26 @@ export async function createInstaller(
   if (result.StatusCode !== 0) {
     logger.warn(`installer for ${id} exited with code ${result.StatusCode}`);
     for (const l of installerLines.slice(-20)) logger.warn(`  ${l}`);
+    const logPath = join(volumePath, '.airlinkd', 'install.log');
+    try {
+      const logDir = join(volumePath, '.airlinkd');
+      if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
+      writeFileSync(logPath, installerLines.join('\n'), 'utf8');
+    } catch (err) {
+      logger.warn(`could not persist install log for ${id}: ${getErrorMessage(err)}`);
+    }
     await container.remove({ force: true }).catch((err) => {
       logger.warn(`could not remove failed installer container for ${id}: ${getErrorMessage(err)}`);
     });
     throw new Error(`install script failed with exit code ${result.StatusCode}`);
+  }
+  const logPath = join(volumePath, '.airlinkd', 'install.log');
+  try {
+    const logDir = join(volumePath, '.airlinkd');
+    if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
+    writeFileSync(logPath, installerLines.join('\n'), 'utf8');
+  } catch (err) {
+    logger.warn(`could not persist install log for ${id}: ${getErrorMessage(err)}`);
   }
   emit(id, { type: 'installed', message: 'installation complete' });
   await container.remove({ force: true }).catch((err) => {
@@ -647,8 +685,21 @@ export async function sendCommandToContainer(id: string, command: string): Promi
 }
 
 export type { MountSpec } from './dockerConfig';
-export { buildHostConfig, parseEnvironmentVariables, parsePortBindings, validateMounts } from './dockerConfig';
+export {
+  buildHostConfig,
+  buildInstallerHostConfig,
+  memoryOverheadMultiplier,
+  parseEnvironmentVariables,
+  parsePortBindings,
+  validateMounts,
+} from './dockerConfig';
 // Re-export everything from split modules so existing imports keep working.
 export { buildInitScript } from './dockerInit';
-export { applyContainerEvent, applyContainerList, isContainerRunning, setContainerRunning } from './dockerState';
+export {
+  applyContainerEvent,
+  applyContainerList,
+  isContainerRunning,
+  onContainerCrash,
+  setContainerRunning,
+} from './dockerState';
 export const initContainerStateMap = () => _initContainerStateMap(runtime);

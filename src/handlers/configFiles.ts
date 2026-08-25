@@ -17,6 +17,7 @@ import { getPaths } from '../paths';
 export type ConfigFileEntry = {
   parser?: string;
   find?: Record<string, string>;
+  ifValue?: Record<string, string>;
 };
 
 function escapeRegExp(s: string): string {
@@ -139,6 +140,42 @@ function applyPlain(content: string, find: Record<string, string>, env: Record<s
   return result;
 }
 
+// Wings-compatible INI parser: handles [section] and key=value pairs.
+function applyIni(content: string, find: Record<string, string>, env: Record<string, string>): string {
+  const lines = content.split('\n');
+  let currentSection = '';
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    const sectionMatch = trimmed.match(/^\[([^\]]+)\]/);
+    if (sectionMatch) {
+      currentSection = sectionMatch[1].trim();
+      continue;
+    }
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    // Build dotted key if section present
+    const fullKey = currentSection ? `${currentSection}.${key}` : key;
+    if (fullKey in find) {
+      const value = resolveToken(find[fullKey], env);
+      lines[i] = `${key}=${value}`;
+    }
+  }
+  return lines.join('\n');
+}
+
+// Wings-compatible XML parser: handles <key>value</key> patterns.
+function applyXml(content: string, find: Record<string, string>, env: Record<string, string>): string {
+  let result = content;
+  for (const [key, rawValue] of Object.entries(find)) {
+    const value = resolveToken(rawValue, env);
+    const regex = new RegExp(`(<${escapeRegExp(key)}>)([^<]*)(</${escapeRegExp(key)}>)`, 'g');
+    result = result.replace(regex, `$1${value.replace(/\$/g, '$$$')}$3`);
+  }
+  return result;
+}
+
 export async function applyConfigFiles(
   containerId: string,
   files: Record<string, ConfigFileEntry>,
@@ -188,8 +225,25 @@ export async function applyConfigFiles(
         case 'json':
           content = applyJson(content, find, env);
           break;
+        case 'ini':
+          content = applyIni(content, find, env);
+          break;
+        case 'xml':
+          content = applyXml(content, find, env);
+          break;
         default:
           content = applyPlain(content, find, env);
+      }
+      // Wings-compatible IfValue: only replace when a matching env var is set.
+      const ifValue = entry?.ifValue;
+      if (ifValue && Object.keys(ifValue).length > 0) {
+        for (const [key, rawCond] of Object.entries(ifValue)) {
+          const cond = resolveToken(rawCond, env);
+          // If the condition token resolved to a non-empty value, set the key
+          if (cond) {
+            content = content.split(key).join(cond);
+          }
+        }
       }
       await Bun.write(target, content);
       logger.info(`applied config file ${filePath} for container ${containerId}`);

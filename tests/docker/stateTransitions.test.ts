@@ -86,15 +86,17 @@ describe('buildHostConfig (resource limits reach HostConfig)', () => {
 
   test('converts MB memory to bytes and CPU % to NanoCPUs', () => {
     const hc = buildHostConfig(base) as { Memory: number; NanoCpus: number };
-    expect(hc.Memory).toBe(2048 * 1024 * 1024);
+    // 2048 MB <= 2GB tier → overhead 1.15, boundedMemory = ceil(2048 * 1.15) = 2356
+    expect(hc.Memory).toBe(2356 * 1024 * 1024);
     expect(hc.NanoCpus).toBe(1_500_000_000); // 150% of one CPU
     expect(buildHostConfig({ ...base, Cpu: 100 }).NanoCpus).toBe(1_000_000_000); // 100% = one CPU
   });
 
   test('maps Swap semantics (0 → equal to Memory, -1 → unlimited, >0 → memory+swap)', () => {
-    expect(buildHostConfig({ ...base, Swap: 0 }).MemorySwap).toBe(2048 * 1024 * 1024);
+    // With overhead: boundedMemory = ceil(2048 * 1.15) = 2356
+    expect(buildHostConfig({ ...base, Swap: 0 }).MemorySwap).toBe(2356 * 1024 * 1024);
     expect(buildHostConfig({ ...base, Swap: -1 }).MemorySwap).toBe(-1);
-    expect(buildHostConfig({ ...base, Swap: 512 }).MemorySwap).toBe((2048 + 512) * 1024 * 1024);
+    expect(buildHostConfig({ ...base, Swap: 512 }).MemorySwap).toBe((2356 + 512) * 1024 * 1024);
   });
 
   test('mounts are bound and read-only mounts carry :ro', () => {

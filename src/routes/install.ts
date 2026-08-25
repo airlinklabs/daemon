@@ -40,12 +40,18 @@ export async function handleContainerInstaller(req: Request): Promise<Response> 
   try {
     await initContainer(id);
     await setServerState(id, 'installing');
-    await createInstaller(id, container, script, envVars, entrypoint || 'bash');
+    await createInstaller(id, container, script, envVars, entrypoint || 'bash', {
+      Memory: Number(envVars.SERVER_MEMORY ?? '512'),
+      Cpu: Number(envVars.SERVER_CPU ?? '100'),
+    });
     await setServerState(id, 'installed');
+    await reportInstallStatus(id, 'installed');
     return json({ message: `container ${id} installed successfully` });
   } catch (error) {
     logger.error('error installing container', error);
-    await setServerState(id, 'failed', error instanceof Error ? error.message : String(error));
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    await setServerState(id, 'failed', errorMsg);
+    await reportInstallStatus(id, 'failed', errorMsg);
     return apiError('internal_error', `failed to install container ${id}`, 500);
   }
 }
@@ -72,6 +78,20 @@ export async function handleContainerInstall(req: Request): Promise<Response> {
   return json({ message: 'install started' });
 }
 
+// Report install status back to Panel via WebSocket or HTTP callback.
+async function reportInstallStatus(id: string, status: 'installed' | 'failed', error?: string): Promise<void> {
+  try {
+    const url = `http://${_config.remote}/api/daemon/install/status`;
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status, error: error ?? null }),
+    });
+  } catch (err) {
+    logger.warn(`could not report install status for ${id} to panel: ${err}`);
+  }
+}
+
 export async function handleContainerReinstall(req: Request): Promise<Response> {
   const parsed = await parseJsonBody(req, reinstallBodySchema, reinstallBodyCodes);
   if ('response' in parsed) return parsed.response;
@@ -93,6 +113,7 @@ export async function handleContainerReinstall(req: Request): Promise<Response> 
 
   if (!accepted) {
     await setServerState(id, 'failed', message);
+    await reportInstallStatus(id, 'failed', message);
     return apiError('internal_error', message, 409);
   }
 

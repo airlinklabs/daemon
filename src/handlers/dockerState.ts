@@ -5,6 +5,10 @@ import logger from '../logger';
 
 const stateMap = new Map<string, boolean>();
 
+// Crash detection: maps container ID to a callback invoked when the container
+// exits unexpectedly (non-zero exit, not a stop/kill by daemon).
+const crashCallbacks = new Map<string, (id: string, exitCode: number) => void>();
+
 const DOCKER_EVENT_RECONNECT_ERROR_MS = 5_000;
 const DOCKER_EVENT_RECONNECT_END_MS = 2_000;
 
@@ -59,6 +63,16 @@ export function setContainerRunning(id: string, running: boolean): void {
 
 export function forgetContainer(id: string): void {
   stateMap.delete(id);
+  crashCallbacks.delete(id);
+}
+
+// Register a callback for when a container exits unexpectedly.
+// Returns an unsubscribe function.
+export function onContainerCrash(id: string, cb: (id: string, exitCode: number) => void): () => void {
+  crashCallbacks.set(id, cb);
+  return () => {
+    crashCallbacks.delete(id);
+  };
 }
 
 // The runtime is passed in to avoid a circular dependency between docker.ts
@@ -93,9 +107,24 @@ export function initContainerStateMap(runtime: Runtime): Promise<void> {
           const event = JSON.parse(chunk.toString()) as {
             Action: string;
             id: string;
-            Actor?: { Attributes?: { name?: string } };
+            Actor?: { Attributes?: { name?: string; exitCode?: string } };
+            status?: string;
           };
           applyContainerEvent(stateMap, event.Action, event.id, event.Actor?.Attributes?.name ?? '');
+
+          // Crash detection: die event with non-zero exit code means unexpected exit.
+          // The daemon-initiated stop events (stop/kill) are handled separately.
+          if (event.Action === 'die' && crashCallbacks.has(event.id)) {
+            // Parse exit code from Docker event attributes if available
+            const exitCode = Number(event.Actor?.Attributes?.exitCode ?? event.status ?? '1');
+            if (exitCode !== 0) {
+              const cb = crashCallbacks.get(event.id);
+              if (cb) {
+                logger.warn(`container ${event.id} crashed with exit code ${exitCode}`);
+                cb(event.id, exitCode);
+              }
+            }
+          }
         } catch (err) {
           logger.debug(`dropped malformed docker event: ${getErrorMessage(err)}`);
         }
