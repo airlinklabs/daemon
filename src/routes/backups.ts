@@ -34,12 +34,11 @@ export async function handleContainerBackup(req: Request): Promise<Response> {
   if (!existsSync(volumePath)) return apiError('container_not_found', 'container volume not found', 404);
 
   try {
-    const backupsDir = join(getPaths(config.paths).backupsRoot, body.id);
-    mkdirSync(backupsDir, { recursive: true });
-
     const backupUuid = crypto.randomUUID();
     const backupFileName = `${backupUuid}.tar.gz`;
-    const backupPath = join(backupsDir, backupFileName);
+    const backupPath = resolveBackupPath(body.id, `backups/${body.id}/${backupFileName}`);
+    const backupsDir = resolve(getPaths(config.paths).backupsRoot, body.id);
+    mkdirSync(backupsDir, { recursive: true });
 
     const ignoreMatchers = buildIgnoreMatchers(body.ignore ?? []);
 
@@ -235,7 +234,7 @@ export function handleContainerBackupDownload(req: Request): Response {
   return new Response(Bun.file(fullPath), {
     headers: {
       'Content-Type': 'application/gzip',
-      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'Content-Disposition': `attachment; filename=\"${fileName}\"`,
     },
   });
 }
@@ -277,11 +276,10 @@ export async function handleContainerBackupUpload(req: Request): Promise<Respons
   }
 
   try {
-    const backupsDir = join(getPaths(config.paths).backupsRoot, id);
-    mkdirSync(backupsDir, { recursive: true });
-
     const backupFileName = `${backupUuid}.tar.gz`;
-    const backupPath = join(backupsDir, backupFileName);
+    const backupPath = resolveBackupPath(id, `backups/${id}/${backupFileName}`);
+    const backupsDir = resolve(getPaths(config.paths).backupsRoot, id);
+    mkdirSync(backupsDir, { recursive: true });
 
     if (!req.body) return apiError('invalid_request', 'request body is required', 400);
     await Bun.write(backupPath, new Response(req.body));
