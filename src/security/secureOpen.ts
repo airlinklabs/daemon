@@ -1,15 +1,11 @@
-// Secure file open via openat2(2) FFI — prevents TOCTOU symlink races.
-//
-// openat2 with RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH atomically opens a file
-// without following symlinks and ensures the path stays beneath the dirfd.
-// This eliminates the race window between path validation and file open.
+// Secure file open via an anchored directory FD.
+// Linux/openat2 path resolution is constrained with RESOLVE_BENEATH and
+// RESOLVE_NO_SYMLINKS. Older platforms use O_NOFOLLOW as a weaker fallback.
 
 import { closeSync, constants, fstatSync, openSync, readSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Only load FFI on Linux where openat2 is available (kernel >= 5.6)
 const isLinux = process.platform === 'linux';
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let libc: any = null;
 let libcLoaded = false;
@@ -19,7 +15,6 @@ function getLibc() {
   libcLoaded = true;
   if (!isLinux) return null;
   try {
-    // Bun.dlopen exists at runtime but TypeScript doesn't know about it
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const bunFfi = require('bun:ffi');
     libc = bunFfi.dlopen('libc.so.6', {
@@ -34,22 +29,20 @@ function getLibc() {
   }
 }
 
-const AT_FDCWD = -100;
+const SYS_OPENAT2 = 437;
 const O_RDONLY = 0;
 const O_CLOEXEC = 0x80000;
-const RESOLVE_NO_SYMLINKS = 0x04;
-// NOTE: RESOLVE_BENEATH (0x08) intentionally omitted — requires path under cwd,
-// which fails for volume roots under /tmp. jailPath() already validates containment.
-
 const O_WRONLY = constants.O_WRONLY ?? 1;
 const O_CREAT = constants.O_CREAT ?? 64;
 const O_TRUNC = constants.O_TRUNC ?? 512;
+const O_DIRECTORY = constants.O_DIRECTORY ?? 0x10000;
+const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0x20000;
 
-// Linux errno values
-const ENOSYS = 38; // kernel doesn't support openat2
-const ELOOP = 40; // symlink detected
+const RESOLVE_NO_SYMLINKS = 0x04;
+const RESOLVE_BENEATH = 0x08;
+const ENOSYS = 38;
+const ELOOP = 40;
 
-// struct open_how: { u64 flags; u64 mode; u64 resolve; } = 24 bytes
 function buildOpenHow(flags: number, mode: number, resolve: number): ArrayBuffer {
   const buf = new ArrayBuffer(24);
   const view = new DataView(buf);
@@ -61,10 +54,8 @@ function buildOpenHow(flags: number, mode: number, resolve: number): ArrayBuffer
 
 function openat2Syscall(dirfd: number, path: string, how: ArrayBuffer): number {
   const lib = getLibc();
-  if (!lib) return -1;
-
-  const fd = Number(lib.symbols.syscall(BigInt(437), dirfd, path, how, BigInt(24)));
-  return fd;
+  if (!lib) return -ENOSYS;
+  return Number(lib.symbols.syscall(BigInt(SYS_OPENAT2), dirfd, path, how, BigInt(24)));
 }
 
 export interface SecureOpenResult {
@@ -72,82 +63,52 @@ export interface SecureOpenResult {
   path: string;
 }
 
-/**
- * Atomically open a file for reading without following symlinks.
- * Uses openat2 with RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH on Linux.
- * Falls back to regular open with O_NOFOLLOW on other platforms.
- *
- * @throws if the path contains a symlink or escapes the base directory
- */
+function openJailRoot(base: string): number {
+  return openSync(base, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+}
+
+function tryOpenat2(base: string, relative: string, flags: number, mode = 0): number {
+  const rootFd = openJailRoot(base);
+  try {
+    return openat2Syscall(rootFd, relative, buildOpenHow(flags, mode, RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS));
+  } finally {
+    closeSync(rootFd);
+  }
+}
+
 export function secureOpenRead(base: string, relative: string): SecureOpenResult {
-  const full = join(base, relative);
-
   if (isLinux) {
-    const how = buildOpenHow(O_RDONLY | O_CLOEXEC, 0, RESOLVE_NO_SYMLINKS);
-    const fd = openat2Syscall(AT_FDCWD, full, how);
-    if (fd >= 0) return { fd, path: full };
-
-    const errno = -fd;
-    if (errno === ELOOP) {
-      throw new Error(`symlink detected in path: ${relative}`);
-    }
-    if (errno === ENOSYS || errno === 1) {
-      // ENOSYS = kernel too old; EPERM = openat2 denied (e.g. container env), fall through
-    } else {
-      throw new Error(`openat2 failed for ${relative} (errno ${errno})`);
-    }
-    // Fall through to O_NOFOLLOW fallback
+    const fd = tryOpenat2(base, relative, O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) return { fd, path: join(base, relative) };
+    if (-fd === ELOOP) throw new Error(`symlink detected in path: ${relative}`);
+    if (-fd !== ENOSYS && -fd !== 1) throw new Error(`openat2 failed for ${relative} (errno ${-fd})`);
   }
 
-  // Fallback: open with O_NOFOLLOW
-  const O_NOFOLLOW = 0x100000;
+  const full = join(base, relative);
   const fd = openSync(full, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
   return { fd, path: full };
 }
 
-/**
- * Atomically open a file for writing without following symlinks.
- * Creates the file if it doesn't exist, truncates if it does.
- * Uses openat2 with RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH on Linux.
- *
- * @throws if the path contains a symlink or escapes the base directory
- */
 export function secureOpenWrite(base: string, relative: string): SecureOpenResult {
-  const full = join(base, relative);
-
+  const flags = O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC;
   if (isLinux) {
-    const flags = O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC;
-    const how = buildOpenHow(flags, 0o644, RESOLVE_NO_SYMLINKS);
-    const fd = openat2Syscall(AT_FDCWD, full, how);
-    if (fd >= 0) return { fd, path: full };
-
-    const errno = -fd;
-    if (errno === ELOOP) {
-      throw new Error(`symlink detected in path: ${relative}`);
-    }
-    if (errno === ENOSYS || errno === 1) {
-      // ENOSYS = kernel too old; EPERM = openat2 denied (e.g. container env), fall through
-    } else {
-      throw new Error(`openat2 failed for ${relative} (errno ${errno})`);
-    }
+    const fd = tryOpenat2(base, relative, flags, 0o644);
+    if (fd >= 0) return { fd, path: join(base, relative) };
+    if (-fd === ELOOP) throw new Error(`symlink detected in path: ${relative}`);
+    if (-fd !== ENOSYS && -fd !== 1) throw new Error(`openat2 failed for ${relative} (errno ${-fd})`);
   }
 
-  // Fallback
-  const O_NOFOLLOW = 0x100000;
-  const fd = openSync(full, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0o644);
+  const full = join(base, relative);
+  const fd = openSync(full, flags | O_NOFOLLOW, 0o644);
   return { fd, path: full };
 }
 
-/**
- * Read a file securely — opens atomically, reads, closes.
- * Prevents TOCTOU symlink races on Linux >= 5.6.
- */
 export function secureReadFileSync(base: string, relative: string): Buffer {
   const { fd } = secureOpenRead(base, relative);
   try {
     const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new Error('path is not a file');
     if (stat.size > 10 * 1024 * 1024) throw new Error('file too large');
-
     const buf = Buffer.alloc(stat.size);
     let totalRead = 0;
     while (totalRead < buf.length) {
@@ -161,37 +122,23 @@ export function secureReadFileSync(base: string, relative: string): Buffer {
   }
 }
 
-/**
- * Write a file securely — opens atomically, writes, closes.
- * Prevents TOCTOU symlink races on Linux >= 5.6.
- */
 export function secureWriteFileSync(base: string, relative: string, data: Buffer | string): void {
   const { fd } = secureOpenWrite(base, relative);
   try {
     const buf = typeof data === 'string' ? Buffer.from(data, 'utf-8') : data;
     let written = 0;
-    while (written < buf.length) {
-      const n = writeSync(fd, buf, written, buf.length - written);
-      written += n;
-    }
+    while (written < buf.length) written += writeSync(fd, buf, written, buf.length - written);
   } finally {
     closeSync(fd);
   }
 }
 
-/**
- * Check if openat2 is available on this system.
- */
 export function hasOpenat2(): boolean {
-  if (!isLinux) return false;
-  const lib = getLibc();
-  if (!lib) return false;
-  const how = buildOpenHow(O_RDONLY | O_CLOEXEC, 0, RESOLVE_NO_SYMLINKS);
-  const fd = openat2Syscall(AT_FDCWD, '/dev/null', how);
+  if (!isLinux || !getLibc()) return false;
+  const fd = tryOpenat2('/tmp', '.', O_RDONLY | O_CLOEXEC);
   if (fd >= 0) {
     closeSync(fd);
     return true;
   }
-  const errno = -fd;
-  return errno !== ENOSYS;
+  return -fd !== ENOSYS;
 }
