@@ -1,19 +1,25 @@
-// replaces the C addons that did openat/renameat. we get the same security
-// guarantees by resolving symlinks and checking the result stays inside the
-// volume dir. not as low-level but works cross-platform and doesn't need gcc.
+// Path jail — validates resolved paths stay inside the volume directory.
 
-import type { Stats } from 'node:fs';
-import { closeSync, existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync, unlinkSync } from 'node:fs';
-import { rename } from 'node:fs/promises';
-import { basename, dirname, join, resolve, sep } from 'node:path';
-import config from '../config';
-import { getPaths } from '../paths';
-import { secureOpenRead, secureOpenWrite } from './secureOpen';
+import type { Stats } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readlinkSync,
+  realpathSync,
+  unlinkSync,
+} from "node:fs";
+import { rename } from "node:fs/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
+import config from "../config";
+import { getPaths } from "../paths";
+import { secureOpenRead, secureOpenWrite } from "./secureOpen";
 
 export class BackupPathError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'BackupPathError';
+    this.name = "BackupPathError";
   }
 }
 
@@ -25,15 +31,14 @@ function isInside(base: string, p: string): boolean {
   return p === base || p.startsWith(base + sep);
 }
 
-// throws if resolvedPath escapes base. returns the safe resolved path.
 export function jailPath(base: string, relative: string): string {
-  // Reject null bytes — they can truncate paths at the C level
-  if (relative.includes('\0')) {
-    throw new Error('path contains null byte');
+  // Reject null bytes
+  if (relative.includes("\0")) {
+    throw new Error("invalid path: null byte");
   }
-  // Reject paths exceeding PATH_MAX
+
   if (relative.length > MAX_PATH_LENGTH) {
-    throw new Error('path exceeds maximum length');
+    throw new Error("path exceeds maximum length");
   }
 
   const realBase = realpathSync(base);
@@ -106,7 +111,11 @@ export function jailPath(base: string, relative: string): string {
 
 // safe rename: validates both src and dest are inside base before renaming.
 // Uses openat2 on Linux to prevent TOCTOU symlink races during the rename.
-export async function jailRename(base: string, oldRel: string, newRel: string): Promise<void> {
+export async function jailRename(
+  base: string,
+  oldRel: string,
+  newRel: string,
+): Promise<void> {
   const safeSrc = jailPath(base, oldRel);
   const safeDest = jailPath(base, newRel);
 
@@ -117,22 +126,20 @@ export async function jailRename(base: string, oldRel: string, newRel: string): 
   await rename(safeSrc, safeDest);
 }
 
-// ── Secure file operations ────────────────────────────────────────────────────
-// These combine path validation (jailPath) with atomic file open (openat2)
-// to eliminate the TOCTOU window between validation and open.
+// Secure file operations — combine path validation with atomic file open.
 
 /**
  * Read a file inside a jail, protected against TOCTOU symlink races.
  * On Linux >= 5.6 uses openat2; on older kernels uses O_NOFOLLOW fallback.
  */
 export function secureReadFile(base: string, relative: string): Buffer {
-  const safePath = jailPath(base, relative);
+  jailPath(base, relative);
   const { fd } = secureOpenRead(base, relative);
   try {
-    const { readSync, fstatSync } = require('node:fs');
+    const { readSync, fstatSync } = require("node:fs");
     const stat = fstatSync(fd);
-    if (!stat.isFile()) throw new Error('path is not a file');
-    if (stat.size > 10 * 1024 * 1024) throw new Error('file too large');
+    if (!stat.isFile()) throw new Error("path is not a file");
+    if (stat.size > 10 * 1024 * 1024) throw new Error("file too large");
 
     const buf = Buffer.alloc(stat.size);
     let totalRead = 0;
@@ -151,12 +158,16 @@ export function secureReadFile(base: string, relative: string): Buffer {
  * Write a file inside a jail, protected against TOCTOU symlink races.
  * On Linux >= 5.6 uses openat2; on older kernels uses O_NOFOLLOW fallback.
  */
-export function secureWriteFile(base: string, relative: string, data: Buffer | string): void {
-  const safePath = jailPath(base, relative);
+export function secureWriteFile(
+  base: string,
+  relative: string,
+  data: Buffer | string,
+): void {
+  jailPath(base, relative);
   const { fd } = secureOpenWrite(base, relative);
   try {
-    const { writeSync } = require('node:fs');
-    const buf = typeof data === 'string' ? Buffer.from(data, 'utf-8') : data;
+    const { writeSync } = require("node:fs");
+    const buf = typeof data === "string" ? Buffer.from(data, "utf-8") : data;
     let written = 0;
     while (written < buf.length) {
       const n = writeSync(fd, buf, written, buf.length - written);
@@ -177,42 +188,31 @@ export function secureUnlink(base: string, relative: string): void {
   // Open with O_NOFOLLOW to verify it's not a symlink
   const { fd } = secureOpenRead(base, relative);
   try {
-    const { fstatSync } = require('node:fs');
+    const { fstatSync } = require("node:fs");
     const st = fstatSync(fd);
-    if (st.isDirectory()) throw new Error('cannot unlink a directory');
+    if (st.isDirectory()) throw new Error("cannot unlink a directory");
   } finally {
     closeSync(fd);
   }
   unlinkSync(safePath);
 }
 
-// ── Backup path jails ───────────────────────────────────────────────────────
-// resolveBackupPath pins a raw path to ONE container's backup directory; the
-// restore/delete/download/upload routes pass the panel-supplied backupPath
-// (which includes the `backups/` prefix) and the container id. resolveBackupsRoot
-// is the looser variant for the download/delete routes that accept any
-// container's backup file. Both throw BackupPathError on any escape, so the
-// coordinator can trust the returned absolute path.
+// Backup path jails — pin raw paths to a container's backup directory.
 
-const _BACKUPS_DIR = 'backups';
+const _BACKUPS_DIR = "backups";
 
 function backupsRoot(): string {
   return getPaths(config.paths).backupsRoot;
 }
 
-// normalizes rawPath (trailing slashes, `..`, absolute vs relative) against
-// the daemon's backup root and verifies the result stays inside `root` (or
-// equals it). The lexical check mirrors the old behaviour; on top of it, the
-// deepest existing ancestor of the resolved path is realpath'd and must resolve
-// inside `root` too — this closes the symlink escape where `backups/<id> -> /etc`
-// makes a lexical lookup look safe while the real file lives outside.
+// Normalizes rawPath against backup root and verifies containment via realpath.
 function jailToBackupsRoot(root: string, rawPath: string): string {
-  if (typeof rawPath !== 'string' || rawPath.length === 0) {
-    throw new BackupPathError('backup path is required');
+  if (typeof rawPath !== "string" || rawPath.length === 0) {
+    throw new BackupPathError("backup path is required");
   }
   // null bytes can't appear in a real filesystem path — reject up front
-  if (rawPath.includes('\0')) {
-    throw new BackupPathError('invalid backup path');
+  if (rawPath.includes("\0")) {
+    throw new BackupPathError("invalid backup path");
   }
 
   const resolvedPath = resolve(getPaths(config.paths).base, rawPath);
@@ -220,7 +220,7 @@ function jailToBackupsRoot(root: string, rawPath: string): string {
   // resolve() already collapsed any `..`/trailing slashes; what remains must be
   // the root itself or a path strictly beneath it
   if (!isInside(root, resolvedPath)) {
-    throw new BackupPathError('backup path escapes backup directory');
+    throw new BackupPathError("backup path escapes backup directory");
   }
 
   // walk up to the deepest ancestor that actually exists; for a fresh backup
@@ -241,25 +241,26 @@ function jailToBackupsRoot(root: string, rawPath: string): string {
     try {
       realProbe = realpathSync(probe);
     } catch {
-      throw new BackupPathError('backup path escapes backup directory');
+      throw new BackupPathError("backup path escapes backup directory");
     }
     if (realProbe !== root && !isInside(root, realProbe)) {
-      throw new BackupPathError('backup path escapes backup directory');
+      throw new BackupPathError("backup path escapes backup directory");
     }
   }
 
   return resolvedPath;
 }
 
-// Centralised backup path validation. Ensures the resolved path stays inside
-// the container's backup directory. Throws BackupPathError if not.
-export function resolveBackupPath(containerId: string, rawPath: string): string {
+// Backup path validation — resolves path to container's backup directory.
+export function resolveBackupPath(
+  containerId: string,
+  rawPath: string,
+): string {
   const containerRoot = resolve(backupsRoot(), containerId);
   return jailToBackupsRoot(containerRoot, rawPath);
 }
 
-// Jails a raw path to the <cwd>/backups/ root — used by backup download/delete,
-// which accept any container's backup file path.
+// Jails raw path to the backups/ root for download/delete routes.
 export function resolveBackupsRoot(rawPath: string): string {
   return jailToBackupsRoot(backupsRoot(), rawPath);
 }

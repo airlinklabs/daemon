@@ -1,38 +1,35 @@
 // bun loads .env automatically, no dotenv needed
 
-import { z } from 'zod';
-import type { DaemonPaths } from './paths';
+import { z } from "zod";
+import type { DaemonPaths } from "./paths";
 
-// ── Case-insensitive env lookup ───────────────────────────────────────────────
-// Bun loads .env case-sensitively. Our .env uses lowercase for some keys
-// (remote, key, port, version) and UPPERCASE for others. This helper tries
-// both so config works regardless of casing.
+// Case-insensitive env lookup — Bun loads .env case-sensitively.
 
 function env(name: string): string | undefined {
   const v = process.env[name];
   if (v !== undefined) return v;
   // try the other case
-  const alt = name === name.toUpperCase() ? name.toLowerCase() : name.toUpperCase();
+  const alt =
+    name === name.toUpperCase() ? name.toLowerCase() : name.toUpperCase();
   return process.env[alt];
 }
 
-// ── Zod Schema for DaemonConfig ─────────────────────────────────────────────
-// Validates all environment variables at startup with clear error messages.
+// Zod schema for DaemonConfig.
 
 const DaemonConfigSchema = z.object({
-  remote: z.string().default('localhost'),
-  key: z.string().min(16, 'daemon key must be at least 16 characters'),
+  remote: z.string().default("localhost"),
+  key: z.string().min(16, "daemon key must be at least 16 characters"),
   port: z.coerce.number().int().min(1).max(65535).default(3002),
   debug: z.coerce.boolean().default(false),
-  version: z.string().default('3.0.0'),
+  version: z.string().default("3.0.0"),
   statsInterval: z.coerce.number().int().min(1000).default(10000),
-  containerRuntime: z.enum(['docker', 'podman']).default('docker'),
+  containerRuntime: z.enum(["docker", "podman"]).default("docker"),
   allowedIps: z
     .string()
-    .default('')
+    .default("")
     .transform((val) =>
       val
-        .split(',')
+        .split(",")
         .map((s) => s.trim())
         .filter(Boolean),
     ),
@@ -50,40 +47,43 @@ type DaemonConfig = z.infer<typeof DaemonConfigSchema> & {
   paths: DaemonPaths;
 };
 
-// ── Parse and Validate ──────────────────────────────────────────────────────
+// Parse and validate.
 
-const ALL_ZEROS = '00000000000000000000000000000000';
+const ALL_ZEROS = "00000000000000000000000000000000";
 
 // Skip validation in test environments
-const isTest = process.env.BUN_TEST === 'true' || process.env.NODE_ENV === 'test';
+const isTest =
+  process.env.BUN_TEST === "true" || process.env.NODE_ENV === "test";
 
 function parseConfig(): DaemonConfig {
   // In test mode, use defaults if env vars are missing
-  const envKey = isTest ? (env('KEY') ?? 'test-key-for-unit-tests-12345678') : env('KEY');
+  const envKey = isTest
+    ? (env("KEY") ?? "test-key-for-unit-tests-12345678")
+    : env("KEY");
 
   const result = DaemonConfigSchema.safeParse({
-    remote: env('REMOTE'),
+    remote: env("REMOTE"),
     key: envKey,
-    port: env('PORT'),
-    debug: env('DEBUG'),
-    version: env('VERSION'),
-    statsInterval: env('STATS_INTERVAL'),
-    containerRuntime: env('CONTAINER_RUNTIME'),
-    allowedIps: env('ALLOWED_IPS'),
-    tlsCertPath: env('TLS_CERT'),
-    tlsKeyPath: env('TLS_KEY'),
-    sftpPort: env('SFTP_PORT'),
-    networkRateMbps: env('NETWORK_RATE_MBPS'),
-    requireHmac: env('REQUIRE_HMAC'),
-    installerMemoryMb: env('INSTALLER_MEMORY_MB'),
-    installerCpuPercent: env('INSTALLER_CPU_PERCENT'),
-    tmpfsSizeMb: env('TMPFS_SIZE_MB'),
+    port: env("PORT"),
+    debug: env("DEBUG"),
+    version: env("VERSION"),
+    statsInterval: env("STATS_INTERVAL"),
+    containerRuntime: env("CONTAINER_RUNTIME"),
+    allowedIps: env("ALLOWED_IPS"),
+    tlsCertPath: env("TLS_CERT"),
+    tlsKeyPath: env("TLS_KEY"),
+    sftpPort: env("SFTP_PORT"),
+    networkRateMbps: env("NETWORK_RATE_MBPS"),
+    requireHmac: env("REQUIRE_HMAC"),
+    installerMemoryMb: env("INSTALLER_MEMORY_MB"),
+    installerCpuPercent: env("INSTALLER_CPU_PERCENT"),
+    tmpfsSizeMb: env("TMPFS_SIZE_MB"),
   });
 
   if (!result.success) {
-    console.error('[config] FATAL: invalid configuration');
+    console.error("[config] FATAL: invalid configuration");
     for (const issue of result.error.issues) {
-      console.error(`  ${issue.path.join('.')}: ${issue.message}`);
+      console.error(`  ${issue.path.join(".")}: ${issue.message}`);
     }
     process.exit(1);
   }
@@ -93,20 +93,24 @@ function parseConfig(): DaemonConfig {
   // Additional security checks (skip in test)
   if (!isTest) {
     if (config.key === ALL_ZEROS) {
-      console.error('[config] FATAL: daemon key is insecure (all zeros). Set a unique key in .env');
+      console.error(
+        "[config] FATAL: daemon key is insecure (all zeros). Set a unique key in .env",
+      );
       process.exit(1);
     }
 
-    if (!config.requireHmac && process.env.NODE_ENV === 'production') {
+    if (!config.requireHmac && process.env.NODE_ENV === "production") {
       console.error(
-        '[config] FATAL: REQUIRE_HMAC=false is not allowed in production. Remove it or set NODE_ENV=development.',
+        "[config] FATAL: REQUIRE_HMAC=false is not allowed in production. Remove it or set NODE_ENV=development.",
       );
       process.exit(1);
     }
 
     // TLS config: both or neither
     if ((config.tlsCertPath === null) !== (config.tlsKeyPath === null)) {
-      console.error('[config] FATAL: both TLS_CERT and TLS_KEY must be set together');
+      console.error(
+        "[config] FATAL: both TLS_CERT and TLS_KEY must be set together",
+      );
       process.exit(1);
     }
   }
