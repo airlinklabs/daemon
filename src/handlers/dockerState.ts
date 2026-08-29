@@ -1,4 +1,5 @@
 import logger from "../logger";
+import { getErrorMessage } from "../utils/errorMessage";
 
 // In-memory container ID/name → running state map. Rebuilt on boot, synced via events.
 
@@ -13,13 +14,6 @@ const crashCallbacks = new Map<
 
 const DOCKER_EVENT_RECONNECT_ERROR_MS = 5_000;
 const DOCKER_EVENT_RECONNECT_END_MS = 2_000;
-
-function getErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "object" && err !== null && "message" in err)
-    return String((err as { message: unknown }).message);
-  return String(err);
-}
 
 export function applyContainerEvent(
   stateMap: Map<string, boolean>,

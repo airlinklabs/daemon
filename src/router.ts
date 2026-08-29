@@ -349,7 +349,7 @@ export class PublicUrlError extends Error {
 
 // Shared SSRF gate. Parses + resolves a URL and confirms every resolved address
 // is globally routable. Throws PublicUrlError for known-bad inputs and a plain
-// Error is throw only then is a lookup/DNS failure (callers treat that like any
+// Error is thrown only on a lookup/DNS failure (callers treat that like any
 // other fetch-time failure). Returns the normalized URL ready to fetch.
 export async function validatePublicUrl(rawUrl: string): Promise<URL> {
   let parsed: URL;
