@@ -19,7 +19,7 @@
 //   bun run build.ts build
 //   bun run build.ts build:dev
 
-import { createHash } from 'node:crypto';
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
@@ -29,50 +29,93 @@ import {
   rmSync,
   statSync,
   writeFileSync,
-} from 'node:fs';
-import { copyFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+} from "node:fs";
+import { copyFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const ROOT = resolve('.');
-const DIST_DIR = join(ROOT, 'dist');
-const STORAGE_DIR = join(ROOT, 'storage');
-const EMBEDDED_PATH = join(ROOT, 'src', 'embedded.ts');
-const MANIFEST_PATH = join(DIST_DIR, 'manifest.json');
-const BUN_VERSION = '1.4.0';
+const ROOT = resolve(".");
+const DIST_DIR = join(ROOT, "dist");
+const STORAGE_DIR = join(ROOT, "storage");
+const EMBEDDED_PATH = join(ROOT, "src", "embedded.ts");
+const MANIFEST_PATH = join(DIST_DIR, "manifest.json");
+const BUN_VERSION = "1.4.0";
 
 // Supported target matrix
 const ALL_TARGETS = [
-  { platform: 'linux', arch: 'x64', target: 'bun-linux-x64', out: 'airlinkd-linux-x64' },
-  { platform: 'linux', arch: 'arm64', target: 'bun-linux-arm64', out: 'airlinkd-linux-arm64' },
-  { platform: 'linux', arch: 'x64', target: 'bun-linux-x64-musl', out: 'airlinkd-linux-x64-musl' },
-  { platform: 'linux', arch: 'arm64', target: 'bun-linux-arm64-musl', out: 'airlinkd-linux-arm64-musl' },
-  { platform: 'windows', arch: 'x64', target: 'bun-windows-x64', out: 'airlinkd-windows-x64.exe' },
-  { platform: 'windows', arch: 'arm64', target: 'bun-windows-arm64', out: 'airlinkd-windows-arm64.exe' },
-  { platform: 'macos', arch: 'x64', target: 'bun-darwin-x64', out: 'airlinkd-macos-x64' },
-  { platform: 'macos', arch: 'arm64', target: 'bun-darwin-arm64', out: 'airlinkd-macos-arm64' },
+  {
+    platform: "linux",
+    arch: "x64",
+    target: "bun-linux-x64",
+    out: "airlinkd-linux-x64",
+  },
+  {
+    platform: "linux",
+    arch: "arm64",
+    target: "bun-linux-arm64",
+    out: "airlinkd-linux-arm64",
+  },
+  {
+    platform: "linux",
+    arch: "x64",
+    target: "bun-linux-x64-musl",
+    out: "airlinkd-linux-x64-musl",
+  },
+  {
+    platform: "linux",
+    arch: "arm64",
+    target: "bun-linux-arm64-musl",
+    out: "airlinkd-linux-arm64-musl",
+  },
+  {
+    platform: "windows",
+    arch: "x64",
+    target: "bun-windows-x64",
+    out: "airlinkd-windows-x64.exe",
+  },
+  {
+    platform: "windows",
+    arch: "arm64",
+    target: "bun-windows-arm64",
+    out: "airlinkd-windows-arm64.exe",
+  },
+  {
+    platform: "macos",
+    arch: "x64",
+    target: "bun-darwin-x64",
+    out: "airlinkd-macos-x64",
+  },
+  {
+    platform: "macos",
+    arch: "arm64",
+    target: "bun-darwin-arm64",
+    out: "airlinkd-macos-arm64",
+  },
 ] as const;
 
 type Target = { platform: string; arch: string; target: string; out: string };
 
 // Files to embed from storage/ — the allowlist
-const EMBEDDED_ALLOWLIST = new Set(['storage/config.json', 'storage/fileSpecifier.json']);
+const EMBEDDED_ALLOWLIST = new Set([
+  "storage/config.json",
+  "storage/fileSpecifier.json",
+]);
 
 // Runtime state — never bundled
 const RUNTIME_STORAGE = new Set([
-  'sftp_host_ed25519',
-  'alc',
-  'containerConfigs',
-  'install_logs.json',
-  'systemStats.json',
+  "sftp_host_ed25519",
+  "alc",
+  "containerConfigs",
+  "install_logs.json",
+  "systemStats.json",
 ]);
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
 function sha256(data: Buffer | string): string {
-  return createHash('sha256').update(data).digest('hex');
+  return createHash("sha256").update(data).digest("hex");
 }
 
 function fileSha256(filePath: string): string {
@@ -81,16 +124,22 @@ function fileSha256(filePath: string): string {
 
 function getGitCommit(): string {
   try {
-    const result = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { stdout: 'pipe', stderr: 'ignore' });
+    const result = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
     return result.stdout.toString().trim();
   } catch {
-    return 'unknown';
+    return "unknown";
   }
 }
 
 function getGitTag(): string | undefined {
   try {
-    const result = Bun.spawnSync(['git', 'describe', '--tags', '--exact-match'], { stdout: 'pipe', stderr: 'ignore' });
+    const result = Bun.spawnSync(
+      ["git", "describe", "--tags", "--exact-match"],
+      { stdout: "pipe", stderr: "ignore" },
+    );
     const text = result.stdout.toString().trim();
     return text || undefined;
   } catch {
@@ -100,7 +149,10 @@ function getGitTag(): string | undefined {
 
 function isDirtyTree(): boolean {
   try {
-    const result = Bun.spawnSync(['git', 'status', '--porcelain'], { stdout: 'pipe', stderr: 'ignore' });
+    const result = Bun.spawnSync(["git", "status", "--porcelain"], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
     return result.stdout.toString().trim().length > 0;
   } catch {
     return false;
@@ -108,7 +160,7 @@ function isDirtyTree(): boolean {
 }
 
 function getVersion(): string {
-  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
   return pkg.version;
 }
 
@@ -130,10 +182,13 @@ interface EmbeddedAsset {
 
 function collectStorageFiles(): string[] {
   try {
-    const result = Bun.spawnSync(['git', 'ls-files', 'storage/'], { stdout: 'pipe', stderr: 'ignore' });
+    const result = Bun.spawnSync(["git", "ls-files", "storage/"], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
     const listed = result.stdout
       .toString()
-      .split('\n')
+      .split("\n")
       .map((f) => f.trim())
       .filter(Boolean);
     if (listed.length > 0) return listed;
@@ -145,7 +200,7 @@ function collectStorageFiles(): string[] {
     const found: string[] = [];
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
-      const rel = path.replace(`${ROOT}/`, '');
+      const rel = path.replace(`${ROOT}/`, "");
       if (RUNTIME_STORAGE.has(entry.name)) continue;
       if (entry.isDirectory()) {
         found.push(...walk(path));
@@ -159,11 +214,12 @@ function collectStorageFiles(): string[] {
 }
 
 function generateEmbeddedCode(files: string[]): string {
-  const esc = (s: string) => JSON.stringify(s).slice(1, -1).replace(/'/g, "\\'");
+  const esc = (s: string) =>
+    JSON.stringify(s).slice(1, -1).replace(/'/g, "\\'");
 
   const entries = files.map((file) => {
-    const contents = readFileSync(file, 'utf8');
-    const relPath = file.replace(`${ROOT}/`, '');
+    const contents = readFileSync(file, "utf8");
+    const relPath = file.replace(`${ROOT}/`, "");
     return `  {\n    path: '${esc(relPath)}',\n    contents: '${esc(contents)}',\n  },`;
   });
 
@@ -182,20 +238,22 @@ export interface EmbeddedAsset {
 }
 
 export const EMBEDDED_STORAGE: EmbeddedAsset[] = [
-${entries.join('\n')}
+${entries.join("\n")}
 ];
 `;
 }
 
 function generateEmbedded(checkOnly: boolean): void {
-  console.log('generate-embedded: collecting storage files...');
+  console.log("generate-embedded: collecting storage files...");
   const files = collectStorageFiles();
 
   // Validate against allowlist
   for (const file of files) {
-    const rel = file.replace(`${ROOT}/`, '');
+    const rel = file.replace(`${ROOT}/`, "");
     if (!EMBEDDED_ALLOWLIST.has(rel)) {
-      fail(`storage file '${rel}' is not in the embedded allowlist. Add it to EMBEDDED_ALLOWLIST or exclude it.`);
+      fail(
+        `storage file '${rel}' is not in the embedded allowlist. Add it to EMBEDDED_ALLOWLIST or exclude it.`,
+      );
     }
   }
 
@@ -203,17 +261,19 @@ function generateEmbedded(checkOnly: boolean): void {
 
   if (checkOnly) {
     if (!existsSync(EMBEDDED_PATH)) {
-      fail('src/embedded.ts does not exist. Run generate-embedded without --check to create it.');
+      fail(
+        "src/embedded.ts does not exist. Run generate-embedded without --check to create it.",
+      );
     }
-    const existing = readFileSync(EMBEDDED_PATH, 'utf8');
+    const existing = readFileSync(EMBEDDED_PATH, "utf8");
     if (existing !== code) {
-      fail('src/embedded.ts is stale. Run: bun run build.ts generate-embedded');
+      fail("src/embedded.ts is stale. Run: bun run build.ts generate-embedded");
     }
     ok(`embedded assets are current (${files.length} files)`);
     return;
   }
 
-  mkdirSync(join(ROOT, 'src'), { recursive: true });
+  mkdirSync(join(ROOT, "src"), { recursive: true });
   writeFileSync(EMBEDDED_PATH, code);
   ok(`embedded ${files.length} storage file(s) into src/embedded.ts`);
 }
@@ -229,32 +289,43 @@ async function createBuildWorkspace(): Promise<string> {
   mkdirSync(stagingDir, { recursive: true });
 
   // Copy source files
-  const srcDir = join(stagingDir, 'src');
-  Bun.spawnSync(['cp', '-r', join(ROOT, 'src'), srcDir], { stdio: ['ignore', 'ignore', 'ignore'] });
+  const srcDir = join(stagingDir, "src");
+  Bun.spawnSync(["cp", "-r", join(ROOT, "src"), srcDir], {
+    stdio: ["ignore", "ignore", "ignore"],
+  });
 
   // Copy storage files
-  const storageDir = join(stagingDir, 'storage');
+  const storageDir = join(stagingDir, "storage");
   if (existsSync(STORAGE_DIR)) {
-    Bun.spawnSync(['cp', '-r', STORAGE_DIR, storageDir], { stdio: ['ignore', 'ignore', 'ignore'] });
+    Bun.spawnSync(["cp", "-r", STORAGE_DIR, storageDir], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
   }
 
   // Copy package.json, lock files, and example.env (imported by bootstrap.ts)
-  for (const file of ['package.json', 'bun.lock', 'tsconfig.json', 'example.env']) {
+  for (const file of [
+    "package.json",
+    "bun.lock",
+    "tsconfig.json",
+    "example.env",
+  ]) {
     const src = join(ROOT, file);
     if (existsSync(src)) {
-      Bun.spawnSync(['cp', src, stagingDir], { stdio: ['ignore', 'ignore', 'ignore'] });
+      Bun.spawnSync(["cp", src, stagingDir], {
+        stdio: ["ignore", "ignore", "ignore"],
+      });
     }
   }
 
   // Install fresh dependencies in workspace
-  console.log('installing dependencies in build workspace...');
-  const installProc = Bun.spawn(['bun', 'install', '--frozen-lockfile'], {
+  console.log("installing dependencies in build workspace...");
+  const installProc = Bun.spawn(["bun", "install", "--frozen-lockfile"], {
     cwd: stagingDir,
-    stdout: 'inherit',
-    stderr: 'inherit',
+    stdout: "inherit",
+    stderr: "inherit",
   });
   if ((await installProc.exited) !== 0) {
-    fail('failed to install dependencies in build workspace');
+    fail("failed to install dependencies in build workspace");
   }
 
   return stagingDir;
@@ -265,39 +336,60 @@ async function createBuildWorkspace(): Promise<string> {
  */
 async function applyPlatformPatches(workspaceDir: string): Promise<void> {
   // Stub cpu-features (required by ssh2, never actually called)
-  const cpuFeaturesPath = join(workspaceDir, 'node_modules/cpu-features/lib/index.js');
+  const cpuFeaturesPath = join(
+    workspaceDir,
+    "node_modules/cpu-features/lib/index.js",
+  );
   if (existsSync(cpuFeaturesPath)) {
-    writeFileSync(cpuFeaturesPath, 'module.exports = function() { return { flags: [], models: [] }; };\n');
-    console.log('patched cpu-features');
+    writeFileSync(
+      cpuFeaturesPath,
+      "module.exports = function() { return { flags: [], models: [] }; };\n",
+    );
+    console.log("patched cpu-features");
   }
 
   // Stub ssh2 native crypto binding — ssh2 wraps in try/catch but Bun crashes
   // on dlopen. Remove the require so ssh2 falls back to JS crypto.
-  const sshCryptoPath = join(workspaceDir, 'node_modules/ssh2/lib/protocol/crypto.js');
+  const sshCryptoPath = join(
+    workspaceDir,
+    "node_modules/ssh2/lib/protocol/crypto.js",
+  );
   if (existsSync(sshCryptoPath)) {
-    const orig = readFileSync(sshCryptoPath, 'utf8');
+    const orig = readFileSync(sshCryptoPath, "utf8");
     if (orig.includes("require('./crypto/build/Release/sshcrypto.node')")) {
       const patched = orig.replace(
         /binding = require\('\.\/crypto\/build\/Release\/sshcrypto\.node'\);/,
-        'binding = null; // stubbed: native .node crashes Bun standalone',
+        "binding = null; // stubbed: native .node crashes Bun standalone",
       );
       writeFileSync(sshCryptoPath, patched);
-      console.log('patched ssh2 crypto binding');
+      console.log("patched ssh2 crypto binding");
     }
   }
 
   // Remove .node files so bun build --compile can't try to embed them
   try {
-    Bun.spawnSync(['find', join(workspaceDir, 'node_modules'), '-name', '*.node', '-delete'], {
-      stdio: ['ignore', 'ignore', 'ignore'],
-    });
-    console.log('removed .node files');
+    Bun.spawnSync(
+      [
+        "find",
+        join(workspaceDir, "node_modules"),
+        "-name",
+        "*.node",
+        "-delete",
+      ],
+      {
+        stdio: ["ignore", "ignore", "ignore"],
+      },
+    );
+    console.log("removed .node files");
   } catch {
     // ignore
   }
 }
 
-async function packageBinary(target: Target, workspaceDir?: string): Promise<void> {
+async function packageBinary(
+  target: Target,
+  workspaceDir?: string,
+): Promise<void> {
   const outPath = join(DIST_DIR, target.out);
   const buildDir = workspaceDir ?? ROOT;
 
@@ -312,23 +404,22 @@ async function packageBinary(target: Target, workspaceDir?: string): Promise<voi
   console.log(`packaging ${target.out}...`);
   const proc = Bun.spawn(
     [
-      'bun',
-      'build',
-      '--compile',
-      '--target',
+      "bun",
+      "build",
+      "--compile",
+      "--target",
       target.target,
-      '--bytecode',
-      '--minify',
-      '--sourcemap',
-      '--define',
+      "--minify",
+      "--sourcemap",
+      "--define",
       `BUN_VERSION="${BUN_VERSION}"`,
-      '--define',
+      "--define",
       `PKG_VERSION="${pkgVersion}"`,
-      '--outfile',
+      "--outfile",
       stagingOut,
-      'src/app.ts',
+      "src/app.ts",
     ],
-    { stdout: 'inherit', stderr: 'inherit', cwd: buildDir },
+    { stdout: "inherit", stderr: "inherit", cwd: buildDir },
   );
   const code = await proc.exited;
   if (code !== 0) {
@@ -362,7 +453,11 @@ async function verifyBinary(binaryPath: string): Promise<void> {
 
   // Version check
   try {
-    const result = Bun.spawnSync([binaryPath, 'version'], { stdout: 'pipe', stderr: 'pipe', timeout: 10000 });
+    const result = Bun.spawnSync([binaryPath, "version"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 10000,
+    });
     const version = result.stdout.toString().trim();
     const pkgVersion = getVersion();
     if (!version.includes(pkgVersion)) {
@@ -375,12 +470,16 @@ async function verifyBinary(binaryPath: string): Promise<void> {
 
   // --help check
   try {
-    const result = Bun.spawnSync([binaryPath, '--help'], { stdout: 'pipe', stderr: 'pipe', timeout: 10000 });
+    const result = Bun.spawnSync([binaryPath, "--help"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 10000,
+    });
     const help = result.stdout.toString();
-    if (!help.includes('airlinkd')) {
+    if (!help.includes("airlinkd")) {
       fail('--help output missing "airlinkd"');
     }
-    ok('--help works');
+    ok("--help works");
   } catch (e) {
     fail(`--help check failed: ${e}`);
   }
@@ -390,9 +489,9 @@ async function verifyBinary(binaryPath: string): Promise<void> {
   mkdirSync(testDir, { recursive: true });
   try {
     // The binary should create default dirs and .env on first run
-    const proc = Bun.spawn([binaryPath, 'version'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
+    const proc = Bun.spawn([binaryPath, "version"], {
+      stdout: "pipe",
+      stderr: "pipe",
       env: { ...process.env, DAEMON_DATA_ROOT: testDir },
       cwd: testDir,
     });
@@ -401,7 +500,7 @@ async function verifyBinary(binaryPath: string): Promise<void> {
       const stderr = await new Response(proc.stderr).text();
       fail(`first-run test failed (exit ${exitCode}): ${stderr}`);
     }
-    ok('first-run: exits cleanly');
+    ok("first-run: exits cleanly");
   } finally {
     rmSync(testDir, { recursive: true, force: true });
   }
@@ -410,32 +509,36 @@ async function verifyBinary(binaryPath: string): Promise<void> {
 // ── Command: smoke ───────────────────────────────────────────────────────────
 
 async function smokeTest(): Promise<void> {
-  console.log('running smoke tests...');
+  console.log("running smoke tests...");
 
   // Find the native binary (airlinkd without platform suffix)
-  const nativeBin = join(DIST_DIR, 'airlinkd');
+  const nativeBin = join(DIST_DIR, "airlinkd");
   if (!existsSync(nativeBin)) {
     // Fall back to the host-platform binary
     const hostTarget = ALL_TARGETS.find(
       (t) =>
-        t.platform === (process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux') &&
-        t.arch === process.arch,
+        t.platform ===
+          (process.platform === "win32"
+            ? "windows"
+            : process.platform === "darwin"
+              ? "macos"
+              : "linux") && t.arch === process.arch,
     );
     if (!hostTarget) {
-      fail('no native binary found for smoke test');
+      fail("no native binary found for smoke test");
     }
     await verifyBinary(join(DIST_DIR, hostTarget.out));
   } else {
     await verifyBinary(nativeBin);
   }
 
-  ok('smoke tests passed');
+  ok("smoke tests passed");
 }
 
 // ── Command: release-manifest ────────────────────────────────────────────────
 
 function generateManifest(): void {
-  console.log('generating release manifest...');
+  console.log("generating release manifest...");
 
   mkdirSync(DIST_DIR, { recursive: true });
 
@@ -447,7 +550,7 @@ function generateManifest(): void {
 
   for (const entry of readdirSync(DIST_DIR)) {
     const fullPath = join(DIST_DIR, entry);
-    if (entry === 'manifest.json' || entry.endsWith('.sha256')) continue;
+    if (entry === "manifest.json" || entry.endsWith(".sha256")) continue;
     const stat = statSync(fullPath);
     if (!stat.isFile()) continue;
 
@@ -456,11 +559,13 @@ function generateManifest(): void {
 
     // Write detached checksum
     writeFileSync(join(DIST_DIR, `${entry}.sha256`), `${hash}  ${entry}\n`);
-    console.log(`  ${entry}: ${hash.slice(0, 12)}... (${(stat.size / 1024 / 1024).toFixed(1)} MB)`);
+    console.log(
+      `  ${entry}: ${hash.slice(0, 12)}... (${(stat.size / 1024 / 1024).toFixed(1)} MB)`,
+    );
   }
 
   // Compute embedded assets hash
-  let embeddedHash = 'none';
+  let embeddedHash = "none";
   if (existsSync(EMBEDDED_PATH)) {
     embeddedHash = fileSha256(EMBEDDED_PATH);
   }
@@ -472,9 +577,9 @@ function generateManifest(): void {
     dirtyTree: dirty,
     buildTimestamp: new Date().toISOString(),
     bunVersion: BUN_VERSION,
-    generatorVersion: '1.0',
+    generatorVersion: "1.0",
     embeddedAssetsHash: embeddedHash,
-    license: 'See LICENSE in repository root',
+    license: "See LICENSE in repository root",
     artifacts,
   };
 
@@ -485,10 +590,12 @@ function generateManifest(): void {
   for (const [name, info] of Object.entries(artifacts)) {
     const actual = fileSha256(join(DIST_DIR, name));
     if (actual !== info.sha256) {
-      fail(`checksum mismatch for ${name}: manifest says ${info.sha256}, computed ${actual}`);
+      fail(
+        `checksum mismatch for ${name}: manifest says ${info.sha256}, computed ${actual}`,
+      );
     }
   }
-  ok('all checksums verified');
+  ok("all checksums verified");
 }
 
 // ── Command: build ───────────────────────────────────────────────────────────
@@ -497,7 +604,10 @@ async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
   const startTime = Date.now();
 
   // 1. Verify Bun version
-  const bunResult = Bun.spawnSync(['bun', '--version'], { stdout: 'pipe', stderr: 'ignore' });
+  const bunResult = Bun.spawnSync(["bun", "--version"], {
+    stdout: "pipe",
+    stderr: "ignore",
+  });
   const bunVersion = bunResult.stdout.toString().trim();
   if (bunVersion !== BUN_VERSION) {
     fail(`Bun version mismatch: expected ${BUN_VERSION}, got ${bunVersion}`);
@@ -505,18 +615,22 @@ async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
   ok(`bun version: ${bunVersion}`);
 
   // 2. TypeScript check (on source)
-  console.log('running TypeScript check...');
-  const tscProc = Bun.spawn(['bunx', 'tsc', '--noEmit'], { stdout: 'inherit', stderr: 'inherit', cwd: ROOT });
+  console.log("running TypeScript check...");
+  const tscProc = Bun.spawn(["bunx", "tsc", "--noEmit"], {
+    stdout: "inherit",
+    stderr: "inherit",
+    cwd: ROOT,
+  });
   if ((await tscProc.exited) !== 0) {
-    fail('TypeScript check failed');
+    fail("TypeScript check failed");
   }
-  ok('TypeScript check passed');
+  ok("TypeScript check passed");
 
   // 3. Generate embedded assets (on source)
   generateEmbedded(false);
 
   // 4. Create isolated build workspace (no mutation of node_modules)
-  console.log('creating isolated build workspace...');
+  console.log("creating isolated build workspace...");
   const workspaceDir = await createBuildWorkspace();
   ok(`build workspace created: ${workspaceDir}`);
 
@@ -528,7 +642,7 @@ async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
     mkdirSync(DIST_DIR, { recursive: true });
     try {
       for (const entry of readdirSync(DIST_DIR)) {
-        if (entry === 'manifest.json') continue;
+        if (entry === "manifest.json") continue;
         rmSync(join(DIST_DIR, entry), { force: true });
       }
     } catch {
@@ -540,15 +654,18 @@ async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
     if (dev) {
       targets = [
         {
-          platform: 'linux' as const,
-          arch: 'x64' as const,
-          target: 'bun-linux-x64' as const,
-          out: 'airlinkd' as const,
+          platform: "linux" as const,
+          arch: "x64" as const,
+          target: "bun-linux-x64" as const,
+          out: "airlinkd" as const,
         },
       ];
     } else if (targetFilter) {
       const filtered = ALL_TARGETS.find((t) => t.target === targetFilter);
-      if (!filtered) fail(`unknown target: ${targetFilter}. Available: ${ALL_TARGETS.map((t) => t.target).join(', ')}`);
+      if (!filtered)
+        fail(
+          `unknown target: ${targetFilter}. Available: ${ALL_TARGETS.map((t) => t.target).join(", ")}`,
+        );
       targets = [filtered];
     } else {
       targets = ALL_TARGETS;
@@ -570,12 +687,15 @@ async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
       const nativeTarget = ALL_TARGETS.find(
         (t) =>
           t.platform ===
-            (process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux') &&
-          t.arch === process.arch,
+            (process.platform === "win32"
+              ? "windows"
+              : process.platform === "darwin"
+                ? "macos"
+                : "linux") && t.arch === process.arch,
       );
       if (nativeTarget) {
         const src = join(DIST_DIR, nativeTarget.out);
-        const dst = join(DIST_DIR, 'airlinkd');
+        const dst = join(DIST_DIR, "airlinkd");
         await copyFile(src, dst);
         console.log(`copied ${nativeTarget.out} -> airlinkd`);
       }
@@ -583,7 +703,7 @@ async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
 
     // 9. Verify native binary (full builds only)
     if (!targetFilter) {
-      const nativeBin = join(DIST_DIR, 'airlinkd');
+      const nativeBin = join(DIST_DIR, "airlinkd");
       if (existsSync(nativeBin)) {
         await verifyBinary(nativeBin);
       }
@@ -598,7 +718,7 @@ async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
     console.log(`\nbuild complete in ${elapsed}s (${built} targets)`);
   } finally {
     // Cleanup workspace
-    console.log('cleaning up build workspace...');
+    console.log("cleaning up build workspace...");
     rmSync(workspaceDir, { recursive: true, force: true });
   }
 }
@@ -606,42 +726,45 @@ async function fullBuild(dev: boolean, targetFilter?: string): Promise<void> {
 // ── CLI Router ───────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
-const command = args[0] ?? 'build';
-const _isDev = args.includes('--dev') || command === 'build:dev';
-const targetArg = args.find((a) => a.startsWith('--target='));
-const targetFilter = targetArg ? targetArg.split('=')[1] : undefined;
+const command = args[0] ?? "build";
+const _isDev = args.includes("--dev") || command === "build:dev";
+const targetArg = args.find((a) => a.startsWith("--target="));
+const targetFilter = targetArg ? targetArg.split("=")[1] : undefined;
 
 switch (command) {
-  case 'generate-embedded': {
-    const checkOnly = args.includes('--check');
+  case "generate-embedded": {
+    const checkOnly = args.includes("--check");
     generateEmbedded(checkOnly);
     break;
   }
-  case 'package': {
-    const targetArg = args.find((a) => a.startsWith('--target='));
-    if (!targetArg) fail('usage: build.ts package --target <target>');
-    const targetName = targetArg.split('=')[1];
+  case "package": {
+    const targetArg = args.find((a) => a.startsWith("--target="));
+    if (!targetArg) fail("usage: build.ts package --target <target>");
+    const targetName = targetArg.split("=")[1];
     const target = ALL_TARGETS.find((t) => t.target === targetName);
-    if (!target) fail(`unknown target: ${targetName}. Available: ${ALL_TARGETS.map((t) => t.target).join(', ')}`);
+    if (!target)
+      fail(
+        `unknown target: ${targetName}. Available: ${ALL_TARGETS.map((t) => t.target).join(", ")}`,
+      );
     packageBinary(target).catch((e) => fail(String(e)));
     break;
   }
-  case 'verify': {
-    const binArg = args.find((a) => a.startsWith('--binary='));
-    const binPath = binArg ? binArg.split('=')[1] : join(DIST_DIR, 'airlinkd');
+  case "verify": {
+    const binArg = args.find((a) => a.startsWith("--binary="));
+    const binPath = binArg ? binArg.split("=")[1] : join(DIST_DIR, "airlinkd");
     verifyBinary(binPath).catch((e) => fail(String(e)));
     break;
   }
-  case 'smoke':
+  case "smoke":
     smokeTest().catch((e) => fail(String(e)));
     break;
-  case 'release-manifest':
+  case "release-manifest":
     generateManifest();
     break;
-  case 'build':
+  case "build":
     fullBuild(false, targetFilter).catch((e) => fail(String(e)));
     break;
-  case 'build:dev':
+  case "build:dev":
     fullBuild(true, targetFilter).catch((e) => fail(String(e)));
     break;
   default:

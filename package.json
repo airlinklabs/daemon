@@ -26,6 +26,7 @@
     "configure": "bun src/configure.ts"
   },
   "dependencies": {
+    "boxen": "^8.0.1",
     "dockerode": "^4.0.10",
     "long": "^5.3.2",
     "minecraft-status": "^1.1.0",
