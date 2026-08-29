@@ -5,7 +5,6 @@ import logger from '../logger';
 const PIDS_LIMIT = 256;
 const BLKIO_WEIGHT = 500;
 const CPU_NANO_FACTOR = 1e9;
-const CPU_PERIOD = 100_000; // 100ms CFS period (Wings default)
 
 // Wings-compatible security drop set: capabilities dropped from every container.
 const WINGS_CAP_DROP = [
@@ -123,7 +122,6 @@ export function buildHostConfig(opts: {
     PidsLimit: PIDS_LIMIT,
     BlkioWeight: BLKIO_WEIGHT,
     NanoCpus: Math.floor((opts.Cpu / 100) * CPU_NANO_FACTOR),
-    CpuPeriod: CPU_PERIOD,
     RestartPolicy: { Name: 'unless-stopped' },
     // Wings-compatible security hardening
     ReadonlyRootfs: true,
@@ -173,7 +171,6 @@ export function buildInstallerHostConfig(opts: {
     Memory: boundedMemory * 1024 * 1024,
     MemoryReservation: installerMem * 1024 * 1024,
     NanoCpus: Math.floor((installerCpu / 100) * CPU_NANO_FACTOR),
-    CpuPeriod: CPU_PERIOD,
     // Wings removes PID limits for installer containers
     // Security hardening matching Wings
     ReadonlyRootfs: true,
