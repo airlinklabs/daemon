@@ -1,9 +1,24 @@
 // Owned operation manager for detached install/reinstall operations.
 
+import config from '../config';
 import logger from '../logger';
+import { emit } from '../ws/events';
 import { setServerState } from './installState';
 
 export type OperationKind = 'install' | 'reinstall';
+
+async function reportInstallStatus(id: string, status: 'installed' | 'failed', error?: string): Promise<void> {
+  try {
+    const url = `http://${config.remote}/api/daemon/install/status`;
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status, error: error ?? null }),
+    });
+  } catch (err) {
+    logger.warn(`could not report install status for ${id} to panel: ${err}`);
+  }
+}
 
 export interface Operation {
   id: string;
@@ -98,6 +113,8 @@ async function executeOperation(op: Operation): Promise<void> {
     await setServerState(op.id, 'installed').catch((err) => {
       logger.error(`operation manager: failed to set installed state for ${op.id}`, err);
     });
+    emit(op.id, { type: 'installed', message: 'installation complete' });
+    await reportInstallStatus(op.id, 'installed');
     logger.info(`operation ${op.kind} completed for ${op.id}`);
   } catch (err) {
     if (op.abort.signal.aborted) {
@@ -111,6 +128,8 @@ async function executeOperation(op: Operation): Promise<void> {
     await setServerState(op.id, 'failed', op.error).catch((err) => {
       logger.error(`operation manager: failed to set failed state for ${op.id}`, err);
     });
+    emit(op.id, { type: 'error', message: op.error ?? 'install failed' });
+    await reportInstallStatus(op.id, 'failed', op.error);
     logger.error(`operation ${op.kind} failed for ${op.id}: ${op.error}`);
   } finally {
     operations.delete(key);

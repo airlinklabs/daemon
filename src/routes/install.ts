@@ -12,6 +12,7 @@ import {
 import { copyIntoVolume, downloadToVolume } from '../handlers/fs';
 import { getInstallStatus, setServerState } from '../handlers/installState';
 import { enqueueOperation } from '../handlers/operationManager';
+import { emit } from '../ws/events';
 import {
   config as _config,
   apiError,
@@ -158,17 +159,23 @@ async function performInstall(
 
     if (!existsSync(filesDir)) mkdirSync(filesDir, { recursive: true });
 
-    for (const script of scripts) {
-      const s = script as {
+    const total = scripts.length;
+    for (let i = 0; i < scripts.length; i++) {
+      const script = scripts[i] as {
         url?: string;
         fileName?: string;
         ALVKT?: boolean;
       };
-      const { url, fileName } = s;
+      const { url, fileName } = script;
 
       if (!url || !fileName) {
         continue;
       }
+
+      emit(id, {
+        type: 'installing',
+        message: `[${i + 1}/${total}] downloading ${fileName}`,
+      });
 
       const resolvedUrl = url.replace(/\$ALVKT\((\w+)\)/g, (_, v: string) => envVars[v] ?? '');
       if (!resolvedUrl) {
@@ -182,13 +189,20 @@ async function performInstall(
 
       try {
         if (alcEntry && existingLoc && existsSync(cachedFilePath)) {
+          emit(id, {
+            type: 'installing',
+            message: `[${i + 1}/${total}] using cached ${fileName}`,
+          });
           await copyIntoVolume(id, cachedFilePath, fileName);
         } else {
-          await downloadToVolume(id, resolvedUrl, fileName, s.ALVKT === true ? envVars : undefined);
+          await downloadToVolume(id, resolvedUrl, fileName, script.ALVKT === true ? envVars : undefined);
 
           if (alcEntry) {
             const tempPath = join(getPaths(_config.paths).volumesRoot, id, fileName);
-            await Bun.spawn(['cp', tempPath, join(filesDir, cachedFileId)], { stdout: 'pipe', stderr: 'pipe' }).exited;
+            await Bun.spawn(['cp', tempPath, join(filesDir, cachedFileId)], {
+              stdout: 'pipe',
+              stderr: 'pipe',
+            }).exited;
             locations.push({
               Name: fileName,
               url: resolvedUrl,
@@ -197,12 +211,18 @@ async function performInstall(
             await saveJson(locationsPath, locations);
           }
         }
+        emit(id, {
+          type: 'installing',
+          message: `[${i + 1}/${total}] ${fileName} ready`,
+        });
       } catch (err) {
         logger.error(`error downloading file "${fileName}"`, err);
         throw new Error(`failed to download ${fileName}`);
       }
     }
   }
+
+  emit(id, { type: 'installed', message: 'installation complete' });
 }
 
 export async function handleContainerInstallStatus(_req: Request, params: Record<string, string>): Promise<Response> {

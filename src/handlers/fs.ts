@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { copyFile, lstat, mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import config from '../config';

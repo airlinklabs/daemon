@@ -34,7 +34,7 @@ function readCpu(): { time: number; perCore: number[] } {
   return { time: total, perCore };
 }
 
-export function cpuPct(now: number): { total: number; perCore: number[] } {
+export function cpuPct(_now: number): { total: number; perCore: number[] } {
   const cur = readCpu();
   if (!prevCpu) {
     prevCpu = { time: cur.time, perCore: cur.perCore.slice() };
