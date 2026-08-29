@@ -11,14 +11,14 @@ import {
   unlinkSync,
   type WriteStream,
   writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { create as tarCreate, extract as tarExtract } from "tar";
-import config from "../config";
-import logger from "../logger";
-import { getPaths } from "../paths";
-import type { ContainerRuntime } from "./containerRuntime";
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { create as tarCreate, extract as tarExtract } from 'tar';
+import config from '../config';
+import logger from '../logger';
+import { getPaths } from '../paths';
+import type { ContainerRuntime } from './containerRuntime';
 
 // Tunable limits — all overridable through env.
 
@@ -29,20 +29,11 @@ function positiveIntEnv(name: string, fallback: number): number {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-const LOG_BUFFER_SIZE = positiveIntEnv("AIRLINK_LOG_BUFFER_SIZE", 150); // ring buffer lines per container
-const LOG_BUFFER_TTL_MS = positiveIntEnv(
-  "AIRLINK_LOG_BUFFER_TTL_MS",
-  10 * 60 * 1000,
-); // drop lines older than this
-const MAX_LOG_LINE_BYTES = positiveIntEnv(
-  "AIRLINK_LOG_LINE_MAX_BYTES",
-  32 * 1024,
-); // truncate a single line at this
-const MAX_PENDING_BYTES = positiveIntEnv(
-  "AIRLINK_LOG_PENDING_MAX_BYTES",
-  64 * 1024,
-); // cap partial-line accumulation
-const LOG_MAX_BYTES = positiveIntEnv("AIRLINK_LOG_MAX_BYTES", 5 * 1024 * 1024); // rotate a container log file at this size
+const LOG_BUFFER_SIZE = positiveIntEnv('AIRLINK_LOG_BUFFER_SIZE', 150); // ring buffer lines per container
+const LOG_BUFFER_TTL_MS = positiveIntEnv('AIRLINK_LOG_BUFFER_TTL_MS', 10 * 60 * 1000); // drop lines older than this
+const MAX_LOG_LINE_BYTES = positiveIntEnv('AIRLINK_LOG_LINE_MAX_BYTES', 32 * 1024); // truncate a single line at this
+const MAX_PENDING_BYTES = positiveIntEnv('AIRLINK_LOG_PENDING_MAX_BYTES', 64 * 1024); // cap partial-line accumulation
+const LOG_MAX_BYTES = positiveIntEnv('AIRLINK_LOG_MAX_BYTES', 5 * 1024 * 1024); // rotate a container log file at this size
 const DEFAULT_LOG_HISTORY_LIMIT = 500;
 const DOCKER_EVENT_RECONNECT_ERROR_MS = 5_000;
 const DOCKER_EVENT_RECONNECT_END_MS = 2_000;
@@ -78,9 +69,9 @@ function streamFor(id: string): WriteStream {
   let s = streams.get(id);
   if (!s) {
     mkdirSync(logDir(), { recursive: true });
-    s = createWriteStream(logPath(id), { flags: "a" });
-    s.on("error", () => dropStream(id));
-    s.on("close", () => dropStream(id));
+    s = createWriteStream(logPath(id), { flags: 'a' });
+    s.on('error', () => dropStream(id));
+    s.on('close', () => dropStream(id));
     streams.set(id, s);
     bytes.set(id, 0);
   }
@@ -91,9 +82,9 @@ function rotate(id: string): void {
   const s = streams.get(id);
   if (s) {
     const flushed = new Promise<void>((resolve) => {
-      s.once("finish", () => resolve());
-      s.once("close", () => resolve());
-      s.once("error", () => resolve());
+      s.once('finish', () => resolve());
+      s.once('close', () => resolve());
+      s.once('error', () => resolve());
     });
     pendingFlush.set(id, flushed);
     s.end();
@@ -136,8 +127,7 @@ function pruneStale(buf: BufferedLine[]): void {
 function appendLog(containerId: string, line: string): void {
   // A single pathological line (huge stack trace, binary blob) must not blow up
   // the ring buffer or the per-container disk file, so truncate it up front.
-  const bounded =
-    line.length > MAX_LOG_LINE_BYTES ? line.slice(0, MAX_LOG_LINE_BYTES) : line;
+  const bounded = line.length > MAX_LOG_LINE_BYTES ? line.slice(0, MAX_LOG_LINE_BYTES) : line;
   let buf = logBuffers.get(containerId);
   if (!buf) {
     buf = [];
@@ -165,14 +155,13 @@ export function clearLogBuffer(containerId: string): void {
 
 // Splits raw docker log chunks into lines, buffering partials.
 export function appendRawLogChunk(containerId: string, chunk: Buffer): void {
-  let pending = (pendingLines.get(containerId) ?? "") + chunk.toString("utf8");
+  let pending = (pendingLines.get(containerId) ?? '') + chunk.toString('utf8');
   // Cap pending bytes to prevent unbounded growth from newline-less streams.
-  if (pending.length > MAX_PENDING_BYTES)
-    pending = pending.slice(-MAX_PENDING_BYTES);
-  const lines = pending.split("\n");
-  pendingLines.set(containerId, lines.pop() ?? "");
+  if (pending.length > MAX_PENDING_BYTES) pending = pending.slice(-MAX_PENDING_BYTES);
+  const lines = pending.split('\n');
+  pendingLines.set(containerId, lines.pop() ?? '');
   for (const line of lines) {
-    const trimmed = line.replace(/\r$/, "");
+    const trimmed = line.replace(/\r$/, '');
     if (trimmed) appendLog(containerId, trimmed);
   }
 }
@@ -190,22 +179,19 @@ export async function flushLogHistory(id: string): Promise<void> {
   if (s && s.writableLength > 0) {
     await new Promise<void>((resolve) => {
       const done = () => {
-        s.off("drain", done);
-        s.off("error", done);
-        s.off("close", done);
+        s.off('drain', done);
+        s.off('error', done);
+        s.off('close', done);
         resolve();
       };
-      s.once("drain", done);
-      s.once("error", done);
-      s.once("close", done);
+      s.once('drain', done);
+      s.once('error', done);
+      s.once('close', done);
     });
   }
 }
 
-export async function getLogHistory(
-  id: string,
-  limit = DEFAULT_LOG_HISTORY_LIMIT,
-): Promise<string[]> {
+export async function getLogHistory(id: string, limit = DEFAULT_LOG_HISTORY_LIMIT): Promise<string[]> {
   // Wait for pending disk writes so the caller always sees the latest lines.
   await flushLogHistory(id);
   const parts: string[] = [];
@@ -214,22 +200,22 @@ export async function getLogHistory(
   for (const path of [rotatedPath(id), logPath(id)]) {
     const text = await Bun.file(path)
       .text()
-      .catch(() => "");
+      .catch(() => '');
     if (text) parts.push(text);
   }
-  const all = parts.join("\n").split("\n").filter(Boolean);
+  const all = parts.join('\n').split('\n').filter(Boolean);
   return all.slice(-limit);
 }
 
 // Log archival — timestamped tar.gz under .airlinkd/logs/archive/<id>/.
 
 function archiveDir(id: string): string {
-  return join(logDir(), "archive", id);
+  return join(logDir(), 'archive', id);
 }
 
 function timestamp(): string {
   const now = new Date();
-  const pad = (n: number): string => String(n).padStart(2, "0");
+  const pad = (n: number): string => String(n).padStart(2, '0');
   return (
     `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
     `_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
@@ -243,10 +229,10 @@ export async function archiveLogHistory(id: string): Promise<string | null> {
   for (const path of [rotatedPath(id), logPath(id)]) {
     const text = await Bun.file(path)
       .text()
-      .catch(() => "");
+      .catch(() => '');
     if (text) parts.push(text);
   }
-  const combined = parts.join("\n");
+  const combined = parts.join('\n');
   if (!combined.trim()) return null;
 
   const stamp = timestamp();
@@ -255,20 +241,16 @@ export async function archiveLogHistory(id: string): Promise<string | null> {
 
   let tempDir: string | null = null;
   try {
-    tempDir = mkdtempSync(join(tmpdir(), "airlinkd-log-archive-"));
-    writeFileSync(join(tempDir, `${stamp}.txt`), combined, "utf8");
-    await tarCreate({ gzip: true, file: archivePath, cwd: tempDir }, [
-      `${stamp}.txt`,
-    ]);
+    tempDir = mkdtempSync(join(tmpdir(), 'airlinkd-log-archive-'));
+    writeFileSync(join(tempDir, `${stamp}.txt`), combined, 'utf8');
+    await tarCreate({ gzip: true, file: archivePath, cwd: tempDir }, [`${stamp}.txt`]);
   } finally {
     if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   }
   return archivePath;
 }
 
-export async function listLogArchives(
-  id: string,
-): Promise<{ fileName: string; size: number; createdAt: string }[]> {
+export async function listLogArchives(id: string): Promise<{ fileName: string; size: number; createdAt: string }[]> {
   const dir = archiveDir(id);
   let entries: string[];
   try {
@@ -285,18 +267,12 @@ export async function listLogArchives(
         return null;
       }
     })
-    .filter(
-      (e): e is { fileName: string; size: number; createdAt: string } =>
-        e !== null,
-    )
+    .filter((e): e is { fileName: string; size: number; createdAt: string } => e !== null)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 // Jails an archive filename to the container's archive dir.
-export function resolveLogArchivePath(
-  id: string,
-  fileName: string,
-): string | null {
+export function resolveLogArchivePath(id: string, fileName: string): string | null {
   if (!/^[A-Za-z0-9._-]+$/.test(fileName)) return null;
   const dir = archiveDir(id);
   const path = resolve(join(dir, fileName));
@@ -305,21 +281,18 @@ export function resolveLogArchivePath(
 }
 
 // Reads the raw txt back out of an archive.
-export async function readLogArchive(
-  id: string,
-  fileName: string,
-): Promise<string[] | null> {
+export async function readLogArchive(id: string, fileName: string): Promise<string[] | null> {
   const archivePath = resolveLogArchivePath(id, fileName);
   if (!archivePath) return null;
   if (!existsSync(archivePath)) return null;
 
   let tempDir: string | null = null;
   try {
-    tempDir = mkdtempSync(join(tmpdir(), "airlinkd-log-read-"));
+    tempDir = mkdtempSync(join(tmpdir(), 'airlinkd-log-read-'));
     await tarExtract({ file: archivePath, cwd: tempDir });
-    const txt = readdirSync(tempDir).find((f) => f.endsWith(".txt"));
+    const txt = readdirSync(tempDir).find((f) => f.endsWith('.txt'));
     if (!txt) return null;
-    return readFileSync(join(tempDir, txt), "utf8").split("\n").filter(Boolean);
+    return readFileSync(join(tempDir, txt), 'utf8').split('\n').filter(Boolean);
   } catch {
     return null;
   } finally {
@@ -359,7 +332,7 @@ export function isCapturing(containerId: string): boolean {
 
 // Narrow via `in` to access dockerode's destroy() method.
 function destroyStream(stream: NodeJS.ReadableStream): void {
-  if ("destroy" in stream && typeof stream.destroy === "function") {
+  if ('destroy' in stream && typeof stream.destroy === 'function') {
     stream.destroy();
   }
 }
@@ -378,18 +351,16 @@ export function beginCapture(containerId: string): void {
     .then((logStream) => {
       activeStreams.set(containerId, logStream);
 
-      logStream.on("data", (chunk: Buffer) => {
+      logStream.on('data', (chunk: Buffer) => {
         appendRawLogChunk(containerId, chunk);
       });
 
-      logStream.on("error", (err: Error) => {
-        logger.warn(
-          `background log stream error for ${containerId}: ${err.message}`,
-        );
+      logStream.on('error', (err: Error) => {
+        logger.warn(`background log stream error for ${containerId}: ${err.message}`);
         activeStreams.delete(containerId);
       });
 
-      logStream.on("end", () => {
+      logStream.on('end', () => {
         activeStreams.delete(containerId);
       });
     })
@@ -415,11 +386,11 @@ async function subscribeToContainerEvents(): Promise<void> {
 
   try {
     const stream = await runtimeRef.getEvents({
-      filters: JSON.stringify({ type: ["container"] }),
+      filters: JSON.stringify({ type: ['container'] }),
     });
 
-    stream.on("data", (chunk: Buffer) => {
-      for (const line of chunk.toString().split("\n")) {
+    stream.on('data', (chunk: Buffer) => {
+      for (const line of chunk.toString().split('\n')) {
         if (!line.trim()) continue;
         let parsed: {
           Action?: string;
@@ -429,27 +400,21 @@ async function subscribeToContainerEvents(): Promise<void> {
         try {
           parsed = JSON.parse(line);
         } catch {
-          logger.warn(
-            `docker event stream: could not parse line: ${line.slice(0, 100)}`,
-          );
+          logger.warn(`docker event stream: could not parse line: ${line.slice(0, 100)}`);
           continue;
         }
         const id = parsed.id;
         if (!id) continue;
 
-        if (parsed.Action === "start") {
+        if (parsed.Action === 'start') {
           beginCapture(id);
-        } else if (
-          parsed.Action === "die" ||
-          parsed.Action === "stop" ||
-          parsed.Action === "destroy"
-        ) {
+        } else if (parsed.Action === 'die' || parsed.Action === 'stop' || parsed.Action === 'destroy') {
           endCapture(id);
         }
       }
     });
 
-    stream.on("error", (err: Error) => {
+    stream.on('error', (err: Error) => {
       eventStreamActive = false;
       logger.warn(
         `background log event stream error, reconnecting in ${DOCKER_EVENT_RECONNECT_ERROR_MS}ms: ${err.message}`,
@@ -457,25 +422,21 @@ async function subscribeToContainerEvents(): Promise<void> {
       setTimeout(subscribeToContainerEvents, DOCKER_EVENT_RECONNECT_ERROR_MS);
     });
 
-    stream.on("end", () => {
+    stream.on('end', () => {
       eventStreamActive = false;
-      logger.warn(
-        `background log event stream dropped, reconnecting in ${DOCKER_EVENT_RECONNECT_END_MS}ms`,
-      );
+      logger.warn(`background log event stream dropped, reconnecting in ${DOCKER_EVENT_RECONNECT_END_MS}ms`);
       setTimeout(subscribeToContainerEvents, DOCKER_EVENT_RECONNECT_END_MS);
     });
 
-    logger.info("background log collector event stream connected");
+    logger.info('background log collector event stream connected');
   } catch (err) {
     eventStreamActive = false;
-    logger.error("could not start background log event stream, retrying", err);
+    logger.error('could not start background log event stream, retrying', err);
     setTimeout(subscribeToContainerEvents, DOCKER_EVENT_RECONNECT_ERROR_MS);
   }
 }
 
-export async function startBackgroundLogCollector(
-  runtime: ContainerRuntime,
-): Promise<void> {
+export async function startBackgroundLogCollector(runtime: ContainerRuntime): Promise<void> {
   runtimeRef = runtime;
 
   try {
@@ -484,11 +445,9 @@ export async function startBackgroundLogCollector(
       const id = c.Id;
       if (id) beginCapture(id);
     }
-    logger.info(
-      `background log collector started for ${containers.length} running containers`,
-    );
+    logger.info(`background log collector started for ${containers.length} running containers`);
   } catch (err) {
-    logger.error("could not enumerate running containers for log capture", err);
+    logger.error('could not enumerate running containers for log capture', err);
   }
 
   await subscribeToContainerEvents();

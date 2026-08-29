@@ -23,11 +23,11 @@ export function checkRateLimit(ip: string, limit = 300): Response | null {
 
   data.count++;
   if (data.count > limit) {
-    return new Response(JSON.stringify({ error: "rate limit exceeded" }), {
+    return new Response(JSON.stringify({ error: 'rate limit exceeded' }), {
       status: 429,
       headers: {
-        "Content-Type": "application/json",
-        "Retry-After": String(Math.ceil((data.resetAt - now) / 1000)),
+        'Content-Type': 'application/json',
+        'Retry-After': String(Math.ceil((data.resetAt - now) / 1000)),
       },
     });
   }

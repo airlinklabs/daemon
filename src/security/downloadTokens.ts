@@ -1,7 +1,7 @@
 // Single-use, short-lived download tokens. Minted by daemon, consumed at /dl/<token>.
 
-import { randomBytes } from "node:crypto";
-import logger from "../logger";
+import { randomBytes } from 'node:crypto';
+import logger from '../logger';
 
 export const DOWNLOAD_TOKEN_TTL_MS = 90_000; // 90s — enough for a redirect + tab open
 const MAX_TOKENS = 10_000;
@@ -13,7 +13,7 @@ export interface DownloadToken {
   /** safe filename for Content-Disposition */
   fileName: string;
   contentType: string;
-  disposition: "attachment" | "inline";
+  disposition: 'attachment' | 'inline';
   expiresAt: number;
 }
 
@@ -34,9 +34,7 @@ function evictExpired(): void {
   }
 }
 
-export function createDownloadToken(
-  entry: Omit<DownloadToken, "expiresAt">,
-): string {
+export function createDownloadToken(entry: Omit<DownloadToken, 'expiresAt'>): string {
   evictExpired();
   if (tokens.size >= MAX_TOKENS) {
     // still full after eviction — drop the soonest-to-expire token
@@ -51,7 +49,7 @@ export function createDownloadToken(
     if (oldest) tokens.delete(oldest);
   }
 
-  const token = randomBytes(32).toString("hex");
+  const token = randomBytes(32).toString('hex');
   tokens.set(token, {
     ...entry,
     expiresAt: Date.now() + DOWNLOAD_TOKEN_TTL_MS,

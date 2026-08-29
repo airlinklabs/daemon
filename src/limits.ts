@@ -5,7 +5,6 @@ export const MAX_BACKUP_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024;
 
 // Route key format: `${method} ${pathname}` — must match router.ts.
 export function maxBodyBytesFor(routeKey: string): number {
-  if (routeKey === "POST /container/backup/upload")
-    return MAX_BACKUP_UPLOAD_BYTES;
+  if (routeKey === 'POST /container/backup/upload') return MAX_BACKUP_UPLOAD_BYTES;
   return MAX_REQUEST_BODY_BYTES;
 }

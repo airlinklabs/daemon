@@ -1,31 +1,31 @@
 // Typed error factory — consistent { error, code, status } shape for all API errors.
 
 export type ApiErrorCode =
-  | "invalid_json"
-  | "invalid_request"
-  | "container_not_found"
-  | "path_traversal"
-  | "rate_limit_exceeded"
-  | "unauthorized"
-  | "hmac_expired"
-  | "hmac_invalid"
-  | "nonce_replayed"
-  | "missing_nonce"
-  | "missing_digest"
-  | "digest_mismatch"
-  | "invalid_payload_version"
-  | "missing_hmac_headers"
-  | "access_denied"
-  | "internal_error"
-  | "not_found"
-  | "port_conflict"
-  | "checksum_mismatch"
-  | "request_too_large"
-  | "local_only"
-  | "unsupported_content_type"
-  | "duplicate_query_key"
-  | "nonce_storage_full"
-  | "invalid_nonce";
+  | 'invalid_json'
+  | 'invalid_request'
+  | 'container_not_found'
+  | 'path_traversal'
+  | 'rate_limit_exceeded'
+  | 'unauthorized'
+  | 'hmac_expired'
+  | 'hmac_invalid'
+  | 'nonce_replayed'
+  | 'missing_nonce'
+  | 'missing_digest'
+  | 'digest_mismatch'
+  | 'invalid_payload_version'
+  | 'missing_hmac_headers'
+  | 'access_denied'
+  | 'internal_error'
+  | 'not_found'
+  | 'port_conflict'
+  | 'checksum_mismatch'
+  | 'request_too_large'
+  | 'local_only'
+  | 'unsupported_content_type'
+  | 'duplicate_query_key'
+  | 'nonce_storage_full'
+  | 'invalid_nonce';
 
 export interface ApiError {
   error: string;
@@ -37,25 +37,17 @@ export interface ApiError {
 // Type-safe error factory.
 function sanitizeDetail(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
-  const lines = raw.split("\n");
-  const clean = lines.filter(
-    (line) =>
-      !/^\s+at\s+/.test(line) && !/node_modules|\.ts:\d+:\d+/.test(line),
-  );
-  return clean.join("\n").trim() || undefined;
+  const lines = raw.split('\n');
+  const clean = lines.filter((line) => !/^\s+at\s+/.test(line) && !/node_modules|\.ts:\d+:\d+/.test(line));
+  return clean.join('\n').trim() || undefined;
 }
 
-export function apiError(
-  code: ApiErrorCode,
-  message: string,
-  status: number,
-  detail?: string,
-): Response {
+export function apiError(code: ApiErrorCode, message: string, status: number, detail?: string): Response {
   const body: ApiError = { error: message, code, status };
   const safeDetail = sanitizeDetail(detail);
   if (safeDetail) body.detail = safeDetail;
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { 'Content-Type': 'application/json' },
   });
 }

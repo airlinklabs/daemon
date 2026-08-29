@@ -1,10 +1,10 @@
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
-import config from "./config";
-import { apiError } from "./errors";
-import { docker } from "./handlers/docker";
-import { maxBodyBytesFor } from "./limits";
-import logger from "./logger";
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+import config from './config';
+import { apiError } from './errors';
+import { docker } from './handlers/docker';
+import { maxBodyBytesFor } from './limits';
+import logger from './logger';
 import {
   handleContainerBackup,
   handleContainerBackupDelete,
@@ -12,8 +12,8 @@ import {
   handleContainerBackupDownloadToken,
   handleContainerBackupUpload,
   handleContainerRestore,
-} from "./routes/backups";
-import { handleHostInfo, handleRoot, handleStats } from "./routes/core";
+} from './routes/backups';
+import { handleHostInfo, handleRoot, handleStats } from './routes/core';
 import {
   handleDownloadToken,
   handleFsAppend,
@@ -33,13 +33,13 @@ import {
   handleFsUnzip,
   handleFsUpload,
   handleFsZip,
-} from "./routes/filesystem";
+} from './routes/filesystem';
 import {
   handleContainerInstall,
   handleContainerInstaller,
   handleContainerInstallStatus,
   handleContainerReinstall,
-} from "./routes/install";
+} from './routes/install';
 import {
   handleContainerCommand,
   handleContainerDelete,
@@ -49,7 +49,7 @@ import {
   handleContainerStats,
   handleContainerStatus,
   handleContainerStop,
-} from "./routes/instances";
+} from './routes/instances';
 import {
   handleContainerLogArchiveDownload,
   handleContainerLogArchiveDownloadToken,
@@ -57,105 +57,84 @@ import {
   handleContainerLogArchives,
   handleContainerLogHistory,
   handleContainerLogs,
-} from "./routes/logs";
-import { handleMinecraftPlayers } from "./routes/minecraft";
-import { handleRadarScan, handleRadarZip } from "./routes/radar";
-import {
-  handleSftpActivity,
-  handleSftpCreate,
-  handleSftpRevoke,
-  handleSftpStatus,
-} from "./routes/sftp";
-import {
-  checkBasicAuth,
-  getAllowedIpCheck,
-  verifyHmac,
-  withSecurityHeaders,
-} from "./security/hmac";
-import { checkRateLimit } from "./security/rateLimit";
+} from './routes/logs';
+import { handleMinecraftPlayers } from './routes/minecraft';
+import { handleRadarScan, handleRadarZip } from './routes/radar';
+import { handleSftpActivity, handleSftpCreate, handleSftpRevoke, handleSftpStatus } from './routes/sftp';
+import { checkBasicAuth, getAllowedIpCheck, verifyHmac, withSecurityHeaders } from './security/hmac';
+import { checkRateLimit } from './security/rateLimit';
 
-type Handler = (
-  req: Request,
-  params: Record<string, string>,
-) => Promise<Response> | Response;
+type Handler = (req: Request, params: Record<string, string>) => Promise<Response> | Response;
 
 const exactRoutes = new Map<string, Handler>([
-  ["GET /", handleRoot],
-  ["GET /stats", handleStats],
-  ["GET /host", handleHostInfo],
+  ['GET /', handleRoot],
+  ['GET /stats', handleStats],
+  ['GET /host', handleHostInfo],
   [
-    "GET /capabilities",
+    'GET /capabilities',
     (_req) => {
       const caps = docker.capabilities();
       return new Response(JSON.stringify(caps), {
-        headers: { "Content-Type": "application/json" },
+        headers: { 'Content-Type': 'application/json' },
       });
     },
   ],
-  ["POST /container/installer", handleContainerInstaller],
-  ["POST /container/install", handleContainerInstall],
-  ["POST /container/reinstall", handleContainerReinstall],
-  ["POST /container/start", handleContainerStart],
-  ["POST /container/stop", handleContainerStop],
-  ["POST /container/restart", handleContainerRestart],
-  ["DELETE /container/kill", handleContainerKill],
-  ["POST /container/command", handleContainerCommand],
-  ["DELETE /container", handleContainerDelete],
-  ["GET /container/status", handleContainerStatus],
-  ["GET /container/logs/history", handleContainerLogHistory],
-  ["GET /container/logs/archives", handleContainerLogArchives],
-  ["GET /container/logs/archives/read", handleContainerLogArchiveRead],
-  ["GET /container/logs/archives/download", handleContainerLogArchiveDownload],
-  [
-    "POST /container/logs/archives/download-token",
-    handleContainerLogArchiveDownloadToken,
-  ],
-  ["GET /container/stats", handleContainerStats],
-  ["POST /container/backup", handleContainerBackup],
-  ["POST /container/restore", handleContainerRestore],
-  ["DELETE /container/backup", handleContainerBackupDelete],
-  ["GET /container/backup/download", handleContainerBackupDownload],
-  ["POST /container/backup/download-token", handleContainerBackupDownloadToken],
-  ["POST /container/backup/upload", handleContainerBackupUpload],
-  ["GET /fs/list", handleFsList],
-  ["GET /fs/size", handleFsSize],
-  ["GET /fs/info", handleFsInfo],
-  ["GET /fs/file/content", handleFsFileRead],
-  ["POST /fs/file/content", handleFsFileWrite],
-  ["GET /fs/download", handleFsDownload],
-  ["POST /fs/download-token", handleFsDownloadToken],
-  ["DELETE /fs/rm", handleFsRm],
-  ["POST /fs/copy", handleFsCopy],
-  ["POST /fs/pull", handleFsPull],
-  ["POST /fs/zip", handleFsZip],
-  ["POST /fs/unzip", handleFsUnzip],
-  ["POST /fs/rename", handleFsRename],
-  ["POST /fs/upload", handleFsUpload],
-  ["POST /fs/create-empty-file", handleFsCreateEmpty],
-  ["POST /fs/mkdir", handleFsMkdir],
-  ["POST /fs/append-file", handleFsAppend],
-  ["POST /sftp/credentials", handleSftpCreate],
-  ["DELETE /sftp/credentials", handleSftpRevoke],
-  ["GET /sftp/status", handleSftpStatus],
-  ["GET /sftp/activity", handleSftpActivity],
-  ["GET /minecraft/players", handleMinecraftPlayers],
-  ["POST /radar/scan", handleRadarScan],
-  ["POST /radar/zip", handleRadarZip],
+  ['POST /container/installer', handleContainerInstaller],
+  ['POST /container/install', handleContainerInstall],
+  ['POST /container/reinstall', handleContainerReinstall],
+  ['POST /container/start', handleContainerStart],
+  ['POST /container/stop', handleContainerStop],
+  ['POST /container/restart', handleContainerRestart],
+  ['DELETE /container/kill', handleContainerKill],
+  ['POST /container/command', handleContainerCommand],
+  ['DELETE /container', handleContainerDelete],
+  ['GET /container/status', handleContainerStatus],
+  ['GET /container/logs/history', handleContainerLogHistory],
+  ['GET /container/logs/archives', handleContainerLogArchives],
+  ['GET /container/logs/archives/read', handleContainerLogArchiveRead],
+  ['GET /container/logs/archives/download', handleContainerLogArchiveDownload],
+  ['POST /container/logs/archives/download-token', handleContainerLogArchiveDownloadToken],
+  ['GET /container/stats', handleContainerStats],
+  ['POST /container/backup', handleContainerBackup],
+  ['POST /container/restore', handleContainerRestore],
+  ['DELETE /container/backup', handleContainerBackupDelete],
+  ['GET /container/backup/download', handleContainerBackupDownload],
+  ['POST /container/backup/download-token', handleContainerBackupDownloadToken],
+  ['POST /container/backup/upload', handleContainerBackupUpload],
+  ['GET /fs/list', handleFsList],
+  ['GET /fs/size', handleFsSize],
+  ['GET /fs/info', handleFsInfo],
+  ['GET /fs/file/content', handleFsFileRead],
+  ['POST /fs/file/content', handleFsFileWrite],
+  ['GET /fs/download', handleFsDownload],
+  ['POST /fs/download-token', handleFsDownloadToken],
+  ['DELETE /fs/rm', handleFsRm],
+  ['POST /fs/copy', handleFsCopy],
+  ['POST /fs/pull', handleFsPull],
+  ['POST /fs/zip', handleFsZip],
+  ['POST /fs/unzip', handleFsUnzip],
+  ['POST /fs/rename', handleFsRename],
+  ['POST /fs/upload', handleFsUpload],
+  ['POST /fs/create-empty-file', handleFsCreateEmpty],
+  ['POST /fs/mkdir', handleFsMkdir],
+  ['POST /fs/append-file', handleFsAppend],
+  ['POST /sftp/credentials', handleSftpCreate],
+  ['DELETE /sftp/credentials', handleSftpRevoke],
+  ['GET /sftp/status', handleSftpStatus],
+  ['GET /sftp/activity', handleSftpActivity],
+  ['GET /minecraft/players', handleMinecraftPlayers],
+  ['POST /radar/scan', handleRadarScan],
+  ['POST /radar/zip', handleRadarZip],
 ]);
 
 const dynamicRoutes: [RegExp, string[], string, Handler][] = [
   [
     /^\/container\/status\/([a-zA-Z0-9_-]+)$/,
-    ["id"],
-    "GET",
+    ['id'],
+    'GET',
     (req, params) => handleContainerInstallStatus(req, params),
   ],
-  [
-    /^\/container\/logs\/([a-zA-Z0-9_-]+)$/,
-    ["id"],
-    "GET",
-    (req, params) => handleContainerLogs(req, params),
-  ],
+  [/^\/container\/logs\/([a-zA-Z0-9_-]+)$/, ['id'], 'GET', (req, params) => handleContainerLogs(req, params)],
 ];
 
 // SSRF address classification — shared by /fs/pull and downloadToVolume.
@@ -184,7 +163,7 @@ function isUnsafeIpv4(octets: number[]): boolean {
 }
 
 function parseIpv4(host: string): number[] | null {
-  const parts = host.split(".");
+  const parts = host.split('.');
   if (parts.length !== 4) return null;
   const octets = parts.map((p) => parseInt(p, 10));
   if (octets.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return null;
@@ -196,33 +175,29 @@ function parseIpv4(host: string): number[] | null {
 // last two hextets, so ::-compressed zeros are placed between the leading
 // groups and the mapped address.
 function parseIpv6ToHextets(ip: string): number[] | null {
-  const raw = ip.split("%")[0]; // strip zone id (e.g. fe80::1%eth0)
+  const raw = ip.split('%')[0]; // strip zone id (e.g. fe80::1%eth0)
   let embedded: number[] | null = null;
 
   let head = raw;
-  if (raw.includes(".")) {
-    const lastColon = raw.lastIndexOf(":");
+  if (raw.includes('.')) {
+    const lastColon = raw.lastIndexOf(':');
     if (lastColon === -1) return null;
     const octets = raw
       .slice(lastColon + 1)
-      .split(".")
+      .split('.')
       .map((p) => parseInt(p, 10));
-    if (
-      octets.length !== 4 ||
-      octets.some((n) => Number.isNaN(n) || n < 0 || n > 255)
-    )
-      return null;
+    if (octets.length !== 4 || octets.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return null;
     embedded = octets;
     head = raw.slice(0, lastColon);
   }
 
-  const parts = head.split("::");
+  const parts = head.split('::');
   if (parts.length > 2) return null;
 
   const parseGroup = (seg: string): number[] | null => {
-    if (seg === "") return [];
+    if (seg === '') return [];
     const groups: number[] = [];
-    for (const p of seg.split(":")) {
+    for (const p of seg.split(':')) {
       if (!/^[0-9a-fA-F]{1,4}$/.test(p)) return null;
       groups.push(parseInt(p, 16));
     }
@@ -243,11 +218,7 @@ function parseIpv6ToHextets(ip: string): number[] | null {
     const zeros = 6 - explicitBefore;
     const result = [...left];
     for (let i = 0; i < zeros; i++) result.push(0);
-    result.push(
-      ...right,
-      (embedded[0] << 8) | embedded[1],
-      (embedded[2] << 8) | embedded[3],
-    );
+    result.push(...right, (embedded[0] << 8) | embedded[1], (embedded[2] << 8) | embedded[3]);
     return result;
   }
 
@@ -275,12 +246,7 @@ function isUnsafeIpv6(hextets: number[]): boolean {
     hextets[4] === 0 &&
     hextets[5] === 0xffff
   ) {
-    const v4 = [
-      (hextets[6] >> 8) & 0xff,
-      hextets[6] & 0xff,
-      (hextets[7] >> 8) & 0xff,
-      hextets[7] & 0xff,
-    ];
+    const v4 = [(hextets[6] >> 8) & 0xff, hextets[6] & 0xff, (hextets[7] >> 8) & 0xff, hextets[7] & 0xff];
     return isUnsafeIpv4(v4);
   }
 
@@ -295,7 +261,7 @@ function isUnsafeIpv6(hextets: number[]): boolean {
 }
 
 function stripBrackets(host: string): string {
-  return host.replace(/^\[|\]$/g, "");
+  return host.replace(/^\[|\]$/g, '');
 }
 
 // True when an IP (or 'localhost' hostname) is not safely global. Non-IP input
@@ -304,7 +270,7 @@ function stripBrackets(host: string): string {
 // each resulting IP back through this classifier.
 export function isPrivateIp(ip: string): boolean {
   const host = stripBrackets(ip).toLowerCase();
-  if (host === "localhost") return true;
+  if (host === 'localhost') return true;
 
   if (isIP(host) === 4) {
     const octets = parseIpv4(host);
@@ -324,17 +290,16 @@ export function isPrivateIp(ip: string): boolean {
 // error message distinction; both are rejected regardless)
 function isLoopbackAddress(host: string): boolean {
   const h = stripBrackets(host).toLowerCase();
-  if (h === "localhost" || h === "::1" || h === "0:0:0:0:0:0:0:1") return true;
+  if (h === 'localhost' || h === '::1' || h === '0:0:0:0:0:0:0:1') return true;
   if (isIP(h) === 4) {
     const octets = parseIpv4(h);
     return octets !== null && octets[0] === 127;
   }
-  if (h.startsWith("::ffff:127.") || h.startsWith("::ffff:7f")) return true; // IPv4-mapped loopback
+  if (h.startsWith('::ffff:127.') || h.startsWith('::ffff:7f')) return true; // IPv4-mapped loopback
   return false;
 }
 
-export type PublicUrlRejection =
-  "invalid_url" | "unsupported_scheme" | "local" | "private";
+export type PublicUrlRejection = 'invalid_url' | 'unsupported_scheme' | 'local' | 'private';
 
 // Typed rejection so handlers can map to stable HTTP codes / messages without
 // leaking the underlying assertion out to clients.
@@ -342,7 +307,7 @@ export class PublicUrlError extends Error {
   readonly reason: PublicUrlRejection;
   constructor(reason: PublicUrlRejection, message: string) {
     super(message);
-    this.name = "PublicUrlError";
+    this.name = 'PublicUrlError';
     this.reason = reason;
   }
 }
@@ -356,14 +321,11 @@ export async function validatePublicUrl(rawUrl: string): Promise<URL> {
   try {
     parsed = new URL(rawUrl);
   } catch {
-    throw new PublicUrlError("invalid_url", "invalid URL");
+    throw new PublicUrlError('invalid_url', 'invalid URL');
   }
 
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new PublicUrlError(
-      "unsupported_scheme",
-      "only http(s) URLs are allowed",
-    );
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new PublicUrlError('unsupported_scheme', 'only http(s) URLs are allowed');
   }
 
   await assertPublicHostname(parsed.hostname);
@@ -378,10 +340,7 @@ async function assertPublicHostname(hostname: string): Promise<void> {
   // dotted-quad here, so we get the canonical address.
   if (isIP(host) === 4 || isIP(host) === 6) {
     if (isPrivateIp(host)) {
-      throw new PublicUrlError(
-        isLoopbackAddress(host) ? "local" : "private",
-        `non-public address: ${host}`,
-      );
+      throw new PublicUrlError(isLoopbackAddress(host) ? 'local' : 'private', `non-public address: ${host}`);
     }
     return;
   }
@@ -396,62 +355,53 @@ async function assertPublicHostname(hostname: string): Promise<void> {
   for (const record of addresses) {
     if (isPrivateIp(record.address)) {
       throw new PublicUrlError(
-        isLoopbackAddress(record.address) ? "local" : "private",
+        isLoopbackAddress(record.address) ? 'local' : 'private',
         `resolves to non-public address: ${record.address}`,
       );
     }
   }
 }
 
-export async function handleHttpRequest(
-  req: Request,
-  server: ReturnType<typeof Bun.serve>,
-): Promise<Response> {
+export async function handleHttpRequest(req: Request, server: ReturnType<typeof Bun.serve>): Promise<Response> {
   const started = Date.now();
   const url = new URL(req.url);
   const key = `${req.method} ${url.pathname}`;
 
-  let effectiveIp = "unknown";
+  let effectiveIp = 'unknown';
   const finish = (res: Response): Response => {
     const wrapped = withSecurityHeaders(res);
-    if (key !== "GET /healthz") {
-      logger.info(
-        `${req.method} ${url.pathname} ${effectiveIp} → ${wrapped.status} [${Date.now() - started}ms]`,
-      );
+    if (key !== 'GET /healthz') {
+      logger.info(`${req.method} ${url.pathname} ${effectiveIp} → ${wrapped.status} [${Date.now() - started}ms]`);
     }
     return wrapped;
   };
 
-  const contentLength = parseInt(req.headers.get("content-length") ?? "0", 10);
+  const contentLength = parseInt(req.headers.get('content-length') ?? '0', 10);
   if (contentLength > maxBodyBytesFor(key)) {
-    return finish(apiError("request_too_large", "request too large", 413));
+    return finish(apiError('request_too_large', 'request too large', 413));
   }
 
   const rawIp = server.requestIP(req);
-  const socketIp = rawIp?.address.replace(/^::ffff:/, "") ?? "unknown";
+  const socketIp = rawIp?.address.replace(/^::ffff:/, '') ?? 'unknown';
 
-  const behindProxy = Bun.env.BEHIND_PROXY === "true";
+  const behindProxy = Bun.env.BEHIND_PROXY === 'true';
   effectiveIp = socketIp;
   if (behindProxy) {
     if (isPrivateIp(socketIp)) {
-      effectiveIp =
-        req.headers.get("x-forwarded-for")?.split(",")[0].trim() || socketIp;
+      effectiveIp = req.headers.get('x-forwarded-for')?.split(',')[0].trim() || socketIp;
     } else {
       logger.warn(`BEHIND_PROXY=true but ${socketIp} is not a trusted proxy`);
     }
   }
 
-  if (key === "GET /healthz") {
-    const isLocalhost =
-      socketIp === "127.0.0.1" ||
-      socketIp === "::1" ||
-      socketIp === "localhost";
+  if (key === 'GET /healthz') {
+    const isLocalhost = socketIp === '127.0.0.1' || socketIp === '::1' || socketIp === 'localhost';
     if (!isLocalhost) {
-      return finish(apiError("local_only", "local only", 403));
+      return finish(apiError('local_only', 'local only', 403));
     }
     return finish(
       new Response(JSON.stringify({ ok: true }), {
-        headers: { "Content-Type": "application/json" },
+        headers: { 'Content-Type': 'application/json' },
       }),
     );
   }
@@ -464,10 +414,7 @@ export async function handleHttpRequest(
 
   // GET /dl/<token> skips Basic + HMAC auth — the token IS the credential.
   // 256 bits of CSPRNG entropy, single-use, 90s TTL, consumed on first read.
-  const tokenMatch =
-    req.method === "GET"
-      ? /^\/dl\/([a-zA-Z0-9_-]{40,})$/.exec(url.pathname)
-      : null;
+  const tokenMatch = req.method === 'GET' ? /^\/dl\/([a-zA-Z0-9_-]{40,})$/.exec(url.pathname) : null;
   if (tokenMatch) {
     const token = tokenMatch[1];
     const res = await handleDownloadToken(req, token);
@@ -480,18 +427,16 @@ export async function handleHttpRequest(
   const hmacErr = await verifyHmac(req, config.key, key);
   if (hmacErr) return finish(hmacErr);
 
-  if (req.method !== "GET") {
-    const ct = req.headers.get("content-type") ?? "";
+  if (req.method !== 'GET') {
+    const ct = req.headers.get('content-type') ?? '';
     const ok =
       !ct ||
-      ct.startsWith("application/json") ||
-      ct.startsWith("application/octet-stream") ||
-      ct.startsWith("text/") ||
-      ct.startsWith("multipart/");
+      ct.startsWith('application/json') ||
+      ct.startsWith('application/octet-stream') ||
+      ct.startsWith('text/') ||
+      ct.startsWith('multipart/');
     if (!ok) {
-      return finish(
-        apiError("unsupported_content_type", "unsupported content type", 415),
-      );
+      return finish(apiError('unsupported_content_type', 'unsupported content type', 415));
     }
   }
 
@@ -501,7 +446,7 @@ export async function handleHttpRequest(
       return finish(await handler(req, {}));
     } catch (err) {
       logger.error(`route error: ${key}`, err);
-      return finish(apiError("internal_error", "internal error", 500));
+      return finish(apiError('internal_error', 'internal error', 500));
     }
   }
 
@@ -519,9 +464,9 @@ export async function handleHttpRequest(
       return finish(await dynHandler(req, params));
     } catch (err) {
       logger.error(`route error: ${url.pathname}`, err);
-      return finish(apiError("internal_error", "internal error", 500));
+      return finish(apiError('internal_error', 'internal error', 500));
     }
   }
 
-  return finish(apiError("not_found", "not found", 404));
+  return finish(apiError('not_found', 'not found', 404));
 }
