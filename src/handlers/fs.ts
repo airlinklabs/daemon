@@ -1,18 +1,12 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { copyFile, lstat, mkdir, readdir, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, extname, join, resolve } from "node:path";
-import config from "../config";
-import { getPaths } from "../paths";
-import { validatePublicUrl } from "../router";
-import {
-  jailPath,
-  jailRename,
-  secureReadFile,
-  secureUnlink,
-  secureWriteFile,
-} from "../security/pathJail";
-import fileSpecifier from "../utils/fileSpecifier";
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFile, lstat, mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, extname, join, resolve } from 'node:path';
+import config from '../config';
+import { getPaths } from '../paths';
+import { validatePublicUrl } from '../router';
+import { jailPath, jailRename, secureReadFile, secureUnlink, secureWriteFile } from '../security/pathJail';
+import fileSpecifier from '../utils/fileSpecifier';
 
 function volumeRoot(id: string): string {
   return join(getPaths(config.paths).volumesRoot, id);
@@ -36,7 +30,7 @@ async function getDirSize(dir: string, depth = 0): Promise<number> {
   try {
     const entries = await readdir(dir, { withFileTypes: true });
     for (const e of entries) {
-      if (e.name === "node_modules") continue;
+      if (e.name === 'node_modules') continue;
       const full = join(dir, e.name);
       try {
         const s = await lstat(full);
@@ -49,11 +43,7 @@ async function getDirSize(dir: string, depth = 0): Promise<number> {
   return total;
 }
 
-export async function listDir(
-  id: string,
-  relativePath = "/",
-  filter?: string,
-): Promise<unknown> {
+export async function listDir(id: string, relativePath = '/', filter?: string): Promise<unknown> {
   const now = Date.now();
 
   if (!listCache.has(id)) {
@@ -66,13 +56,9 @@ export async function listDir(
   }
 
   const rateData = listCache.get(id);
-  if (!rateData) throw new Error("list cache was not initialized");
+  if (!rateData) throw new Error('list cache was not initialized');
 
-  if (
-    rateData.cache &&
-    now - rateData.lastRequest < 1000 &&
-    rateData.path === relativePath
-  ) {
+  if (rateData.cache && now - rateData.lastRequest < 1000 && rateData.path === relativePath) {
     return rateData.cache;
   }
 
@@ -83,7 +69,7 @@ export async function listDir(
   rateData.path = relativePath;
 
   if (rateData.count > 5) {
-    rateData.cache = { error: "Too many requests, please wait 3 seconds." };
+    rateData.cache = { error: 'Too many requests, please wait 3 seconds.' };
     setTimeout(() => listCache.delete(id), 3000);
     return rateData.cache;
   }
@@ -111,7 +97,7 @@ export async function listDir(
 
       return {
         name: dirent.name,
-        type: dirent.isDirectory() ? "directory" : "file",
+        type: dirent.isDirectory() ? 'directory' : 'file',
         extension: dirent.isDirectory() ? null : ext,
         category: dirent.isDirectory() ? null : category,
         size,
@@ -119,27 +105,19 @@ export async function listDir(
     }),
   );
 
-  const filtered = filter
-    ? results.filter((i) => i.name.includes(filter))
-    : results;
+  const filtered = filter ? results.filter((i) => i.name.includes(filter)) : results;
   const limited = filtered.slice(0, 256);
   rateData.cache = limited;
   return limited;
 }
 
-export async function getDirSizeForId(
-  id: string,
-  relativePath = "/",
-): Promise<number> {
+export async function getDirSizeForId(id: string, relativePath = '/'): Promise<number> {
   const baseDirectory = volumeRoot(id);
   const dirPath = jailPath(baseDirectory, relativePath);
   return getDirSize(dirPath);
 }
 
-export async function getFileContent(
-  id: string,
-  relativePath = "/",
-): Promise<string | null> {
+export async function getFileContent(id: string, relativePath = '/'): Promise<string | null> {
   try {
     const baseDirectory = volumeRoot(id);
     const filePath = jailPath(baseDirectory, relativePath);
@@ -149,17 +127,13 @@ export async function getFileContent(
     if (s.size > MAX_FILE_CONTENT_BYTES) return null;
     // Use secure read to prevent TOCTOU symlink races
     const buf = secureReadFile(baseDirectory, relativePath);
-    return buf.toString("utf-8");
+    return buf.toString('utf-8');
   } catch {
     return null;
   }
 }
 
-export async function writeFileContent(
-  id: string,
-  relativePath: string,
-  content: string | Buffer,
-): Promise<void> {
+export async function writeFileContent(id: string, relativePath: string, content: string | Buffer): Promise<void> {
   const baseDirectory = volumeRoot(id);
   await mkdir(baseDirectory, { recursive: true });
   const filePath = jailPath(baseDirectory, relativePath);
@@ -168,13 +142,13 @@ export async function writeFileContent(
   secureWriteFile(baseDirectory, relativePath, content);
 }
 
-export function getFilePath(id: string, relativePath = "/"): string {
+export function getFilePath(id: string, relativePath = '/'): string {
   const baseDirectory = volumeRoot(id);
   return jailPath(baseDirectory, relativePath);
 }
 
 export async function rmPath(id: string, relativePath: string): Promise<void> {
-  if (relativePath === "/") throw new Error("root directory cannot be deleted");
+  if (relativePath === '/') throw new Error('root directory cannot be deleted');
   const baseDirectory = volumeRoot(id);
   const targetPath = jailPath(baseDirectory, relativePath);
   const s = await lstat(targetPath);
@@ -182,19 +156,14 @@ export async function rmPath(id: string, relativePath: string): Promise<void> {
   else if (s.isFile()) {
     // Use secure unlink to prevent TOCTOU symlink races
     secureUnlink(baseDirectory, relativePath);
-  } else throw new Error("path is neither a file nor a directory");
+  } else throw new Error('path is neither a file nor a directory');
 }
 
-export async function renameFile(
-  id: string,
-  oldPath: string,
-  newPath: string,
-): Promise<void> {
+export async function renameFile(id: string, oldPath: string, newPath: string): Promise<void> {
   const baseDirectory = volumeRoot(id);
 
   const rawNewParent = resolve(join(baseDirectory, dirname(newPath)));
-  if (!rawNewParent.startsWith(baseDirectory))
-    throw new Error("destination escapes volume boundary");
+  if (!rawNewParent.startsWith(baseDirectory)) throw new Error('destination escapes volume boundary');
   await mkdir(rawNewParent, { recursive: true });
 
   await jailRename(baseDirectory, oldPath, newPath);
@@ -202,15 +171,12 @@ export async function renameFile(
 
 const MAX_REDIRECT_HOPS = 5;
 
-export async function fetchPublicUrl(
-  rawUrl: string,
-  signal: AbortSignal,
-): Promise<Response> {
+export async function fetchPublicUrl(rawUrl: string, signal: AbortSignal): Promise<Response> {
   let current = rawUrl;
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
     const safeUrl = await validatePublicUrl(current);
     const response = await fetch(safeUrl.toString(), {
-      redirect: "manual",
+      redirect: 'manual',
       signal,
     });
 
@@ -221,12 +187,10 @@ export async function fetchPublicUrl(
       response.status === 307 ||
       response.status === 308
     ) {
-      const location = response.headers.get("location");
+      const location = response.headers.get('location');
       await response.body?.cancel();
       if (!location) {
-        throw new Error(
-          `redirect response without a location header (${response.status})`,
-        );
+        throw new Error(`redirect response without a location header (${response.status})`);
       }
       current = new URL(location, safeUrl).toString();
       continue;
@@ -256,20 +220,17 @@ export async function downloadToVolume(
     clearTimeout(timer);
   }
 
-  if (!response.ok)
-    throw new Error(
-      `download failed: ${response.status} ${response.statusText}`,
-    );
+  if (!response.ok) throw new Error(`download failed: ${response.status} ${response.statusText}`);
 
   await mkdir(dirname(filePath), { recursive: true });
 
   if (env) {
     const raw = await response.arrayBuffer();
-    const text = new TextDecoder("utf-8", { fatal: false }).decode(raw);
-    const substituted = text.includes("$ALVKT(")
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(raw);
+    const substituted = text.includes('$ALVKT(')
       ? text.replace(/\$ALVKT\((\w+)\)/g, (_, varName: string) => {
           if (env[varName] !== undefined) return env[varName];
-          return "";
+          return '';
         })
       : text;
     // Use secure write to prevent TOCTOU symlink races
@@ -281,11 +242,7 @@ export async function downloadToVolume(
   }
 }
 
-export async function copyIntoVolume(
-  id: string,
-  sourcePath: string,
-  destRelative: string,
-): Promise<void> {
+export async function copyIntoVolume(id: string, sourcePath: string, destRelative: string): Promise<void> {
   const baseDirectory = volumeRoot(id);
   const destPath = jailPath(baseDirectory, destRelative);
   const s = await lstat(sourcePath);
@@ -296,11 +253,7 @@ export async function copyIntoVolume(
     for (const e of entries) {
       // Skip symlinks to prevent reading files outside the volume
       if (e.isSymbolicLink()) continue;
-      await copyIntoVolume(
-        id,
-        join(sourcePath, e.name),
-        join(destRelative, e.name),
-      );
+      await copyIntoVolume(id, join(sourcePath, e.name), join(destRelative, e.name));
     }
   } else if (!s.isSymbolicLink()) {
     await mkdir(dirname(destPath), { recursive: true });
@@ -308,54 +261,48 @@ export async function copyIntoVolume(
   }
 }
 
-export async function zipPaths(
-  id: string,
-  filePaths: string[],
-  zipname: string,
-): Promise<string> {
+export async function zipPaths(id: string, filePaths: string[], zipname: string): Promise<string> {
   const baseDirectory = volumeRoot(id);
 
-  const clean = (f: string): string => f.replace(/[[\]"']/g, "").trim();
+  const clean = (f: string): string => f.replace(/[[\]"']/g, '').trim();
   const files = filePaths
-    .flatMap((f) =>
-      typeof f === "string" ? f.split(",").map((s) => s.trim()) : [f],
-    )
+    .flatMap((f) => (typeof f === 'string' ? f.split(',').map((s) => s.trim()) : [f]))
     .map((f) => {
       const cleanPath = clean(f);
       const fullPath = jailPath(baseDirectory, cleanPath);
       return { cleanPath, fullPath };
     });
 
-  if (files.length === 0) throw new Error("no files specified for zip");
+  if (files.length === 0) throw new Error('no files specified for zip');
 
-  const firstFileRel = files[0].cleanPath.split("/").slice(0, -1).join("/");
+  const firstFileRel = files[0].cleanPath.split('/').slice(0, -1).join('/');
   const zipPath = jailPath(baseDirectory, join(firstFileRel, `${zipname}.zip`));
   await mkdir(dirname(zipPath), { recursive: true });
 
-  const staging = mkdtempSync(join(tmpdir(), "airlinkd-zip-"));
+  const staging = mkdtempSync(join(tmpdir(), 'airlinkd-zip-'));
   try {
     for (const { cleanPath, fullPath } of files) {
       const dest = jailPath(staging, cleanPath);
-      await Bun.spawn(["mkdir", "-p", dirname(dest)], {
-        stdout: "pipe",
-        stderr: "pipe",
+      await Bun.spawn(['mkdir', '-p', dirname(dest)], {
+        stdout: 'pipe',
+        stderr: 'pipe',
       }).exited;
-      await Bun.spawn(["cp", "-r", fullPath, dest], {
-        stdout: "pipe",
-        stderr: "pipe",
+      await Bun.spawn(['cp', '-r', fullPath, dest], {
+        stdout: 'pipe',
+        stderr: 'pipe',
       }).exited;
     }
 
-    const proc = Bun.spawn(["zip", "-r", "-9", zipPath, "."], {
+    const proc = Bun.spawn(['zip', '-r', '-9', zipPath, '.'], {
       cwd: staging,
-      stdout: "pipe",
-      stderr: "pipe",
+      stdout: 'pipe',
+      stderr: 'pipe',
     });
     const code = await proc.exited;
     if (code !== 0) {
       const err = await (proc.stderr instanceof ReadableStream
         ? new Response(proc.stderr).text()
-        : Promise.resolve(""));
+        : Promise.resolve(''));
       throw new Error(`zip failed (exit ${code}): ${err}`);
     }
   } finally {
@@ -366,4 +313,4 @@ export async function zipPaths(
 }
 
 // Re-export archive functions for backward compatibility.
-export { appendChunk, unzipPath } from "./fsArchive";
+export { appendChunk, unzipPath } from './fsArchive';
