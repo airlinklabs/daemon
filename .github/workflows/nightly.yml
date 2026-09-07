@@ -1,0 +1,77 @@
+name: Nightly Build
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # 2 AM UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Check if minor version changed ───────────────────────────────────────────
+  # Compare package.json version against latest release tag.
+  # Only build when the minor version (x.Y.z) differs.
+
+  check:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.compare.outputs.should_build }}
+      version: ${{ steps.current.outputs.version }}
+      latest: ${{ steps.compare.outputs.latest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need tags
+
+      - name: Get current version from package.json
+        id: current
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Current version: v${VERSION}"
+
+      - name: Get latest release tag
+        id: latest
+        run: |
+          LATEST=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | sed 's/^v//')
+          if [ -z "$LATEST" ]; then
+            LATEST="0.0.0"
+            echo "No release tags found, using $LATEST"
+          fi
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "Latest release: $LATEST"
+
+      - name: Compare minor versions
+        id: compare
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          LATEST="${{ steps.latest.outputs.latest }}"
+
+          CUR_MINOR=$(echo "$CURRENT" | cut -d. -f2)
+          LATEST_MINOR=$(echo "$LATEST" | cut -d. -f2)
+
+          echo "Current minor: $CUR_MINOR"
+          echo "Latest minor:  $LATEST_MINOR"
+
+          if [ "$CUR_MINOR" != "$LATEST_MINOR" ]; then
+            echo "Minor version changed ($LATEST_MINOR → $CUR_MINOR) — will build"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Minor version unchanged ($CUR_MINOR) — skipping"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Build & release ──────────────────────────────────────────────────────────
+
+  build:
+    name: Build
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+      prerelease: false
+      draft: true
+    secrets: inherit

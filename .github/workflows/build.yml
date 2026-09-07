@@ -17,6 +17,22 @@ on:
         required: true
         type: boolean
         default: false
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      prerelease:
+        required: false
+        type: boolean
+        default: false
+      draft:
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      GITHUB_TOKEN:
+        required: false
 
 permissions:
   contents: read
