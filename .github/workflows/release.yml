@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "package.json"
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Check if major version changed ───────────────────────────────────────────
+
+  check:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.compare.outputs.should_build }}
+      version: ${{ steps.current.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get current version
+        id: current
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Current: v${VERSION}"
+
+      - name: Compare major versions
+        id: compare
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          CUR_MAJOR=$(echo "${CURRENT#v}" | cut -d. -f1)
+
+          LATEST=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | sed 's/^v//')
+          if [ -z "$LATEST" ]; then LATEST="0.0.0"; fi
+          LATEST_MAJOR=$(echo "$LATEST" | cut -d. -f1)
+
+          echo "Current major: $CUR_MAJOR | Latest major: $LATEST_MAJOR"
+
+          if [ "$CUR_MAJOR" != "$LATEST_MAJOR" ]; then
+            echo "Major version changed ($LATEST_MAJOR → $CUR_MAJOR) — building"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Major version unchanged — skipping"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Call build workflow ──────────────────────────────────────────────────────
+
+  build:
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+      prerelease: false
+      draft: false
+    secrets: inherit

@@ -33,10 +33,6 @@ on:
     secrets:
       GITHUB_TOKEN:
         required: false
-  push:
-    branches: [main]
-    paths:
-      - "package.json"
 
 permissions:
   contents: read
@@ -50,67 +46,28 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
-      should_build: ${{ steps.decide.outputs.should_build }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Determine version
         id: version
         run: |
-          # Priority: input > package.json
           INPUT_VERSION="${{ inputs.version }}"
           PKG_VERSION=$(node -p "require('./package.json').version")
 
           if [ -n "$INPUT_VERSION" ]; then
             VERSION="$INPUT_VERSION"
-            echo "Using input version: $VERSION"
           else
             VERSION="v${PKG_VERSION}"
-            echo "Using package.json version: $VERSION"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Decide whether to build
-        id: decide
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TRIGGER="${{ github.event_name }}"
-
-          # Manual / called workflows always build
-          if [ "$TRIGGER" = "workflow_dispatch" ] || [ "$TRIGGER" = "workflow_call" ]; then
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-            echo "Build: yes (manual/call trigger)"
-            exit 0
-          fi
-
-          # Push trigger: only build if major version changed
-          CURRENT="${VERSION#v}"
-          CUR_MAJOR=$(echo "$CURRENT" | cut -d. -f1)
-
-          LATEST=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | sed 's/^v//')
-          if [ -z "$LATEST" ]; then
-            LATEST="0.0.0"
-          fi
-          LATEST_MAJOR=$(echo "$LATEST" | cut -d. -f1)
-
-          echo "Current major: $CUR_MAJOR | Latest major: $LATEST_MAJOR"
-
-          if [ "$CUR_MAJOR" != "$LATEST_MAJOR" ]; then
-            echo "Major version changed ($LATEST_MAJOR → $CUR_MAJOR) — will build"
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Major version unchanged ($CUR_MAJOR) — skipping"
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "Version: $VERSION"
 
   # ── Pre-flight checks ───────────────────────────────────────────────────────
 
   preflight:
     name: Preflight
     needs: resolve
-    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -146,7 +103,6 @@ jobs:
   build:
     name: build ${{ matrix.platform }}-${{ matrix.arch }}
     needs: [resolve, preflight]
-    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -212,7 +168,6 @@ jobs:
   manifest:
     name: Release manifest
     needs: [resolve, build]
-    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -240,7 +195,6 @@ jobs:
   release:
     name: Create release
     needs: [resolve, build, manifest]
-    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
