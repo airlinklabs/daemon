@@ -4,21 +4,21 @@
 
 ## Supported OS/Arch Matrix
 
-| Platform | Arch   | Target              | Status    |
-|----------|--------|---------------------|-----------|
-| Linux    | x64    | bun-linux-x64       | Supported |
-| Linux    | arm64  | bun-linux-arm64     | Supported |
-| Windows  | x64    | bun-windows-x64     | Supported |
-| Windows  | arm64  | bun-windows-arm64   | Supported |
-| macOS    | x64    | bun-darwin-x64      | Supported |
-| macOS    | arm64  | bun-darwin-arm64    | Supported |
+| Platform | Arch  | Target            | Status    |
+| -------- | ----- | ----------------- | --------- |
+| Linux    | x64   | bun-linux-x64     | Supported |
+| Linux    | arm64 | bun-linux-arm64   | Supported |
+| Windows  | x64   | bun-windows-x64   | Supported |
+| Windows  | arm64 | bun-windows-arm64 | Supported |
+| macOS    | x64   | bun-darwin-x64    | Supported |
+| macOS    | arm64 | bun-darwin-arm64  | Supported |
 
 **Container runtime support (Docker/Podman): Linux only.** Windows and macOS binaries do
 not include container runtime support. This is documented, not implied by binary existence.
 
 ## Bun Version
 
-Pinned via `packageManager` field in `package.json`. Current: `bun@1.3.12`.
+Pinned via `packageManager` field in `package.json`. Current: `bun@1.4.0`.
 The build must fail if the running Bun version does not match `package.json`.
 
 ## Node/Native Dependency Policy
@@ -37,10 +37,12 @@ Files shipped inside the binary are the git-tracked `storage/` directory content
 minus runtime state. The allowlist is maintained in `build.ts`:
 
 **Included:**
+
 - `storage/config.json` (default configuration template)
 - `storage/fileSpecifier.json` (file extension categories)
 
 **Excluded (runtime state, never bundled):**
+
 - `sftp_host_ed25519` — generated on first start
 - `alc/` — runtime ALC state
 - `containerConfigs/` — runtime container configs
@@ -54,6 +56,7 @@ starts, missing individual files are re-extracted.
 ## Runtime External Files
 
 The binary expects these paths at runtime (relative to `DAEMON_DATA_ROOT`):
+
 - `.env` — created from embedded template on first run
 - `storage/` — embedded defaults extracted on first run
 - `logs/` — created on first run
@@ -107,14 +110,14 @@ includes a `license` field pointing to the repository license file.
 
 ## Build Commands
 
-| Command                  | Purpose                                                  |
-|--------------------------|----------------------------------------------------------|
-| `generate-embedded`      | Generate `src/embedded.ts` from git-tracked storage/     |
+| Command                     | Purpose                                              |
+| --------------------------- | ---------------------------------------------------- |
+| `generate-embedded`         | Generate `src/embedded.ts` from git-tracked storage/ |
 | `generate-embedded --check` | Verify `src/embedded.ts` is up-to-date (CI)          |
-| `verify`                 | Verify binary: version, --help, first-run, config        |
-| `package --target T`     | Build binary for target T                                 |
-| `smoke`                  | Run smoke tests on built binaries                         |
-| `release-manifest`       | Generate `dist/manifest.json` + checksums                 |
+| `verify`                    | Verify binary: version, --help, first-run, config    |
+| `package --target T`        | Build binary for target T                            |
+| `smoke`                     | Run smoke tests on built binaries                    |
+| `release-manifest`          | Generate `dist/manifest.json` + checksums            |
 
 ## CI Flow
 
@@ -130,6 +133,7 @@ includes a `license` field pointing to the repository license file.
 ## Determinism
 
 The build is deterministic when:
+
 - Same Bun version
 - Same git commit (embedded files derived from git ls-files)
 - Same `storage/` contents

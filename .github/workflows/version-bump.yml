@@ -1,75 +1,83 @@
-name: version-bump
+name: Version
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to set (e.g. 3.1.0)'
+        description: "Version to set (e.g. 3.1.0)"
         required: true
         type: string
+      sync-readme:
+        description: "Update version in README.md"
+        required: false
+        type: boolean
+        default: true
+      sync-example-env:
+        description: "Update VERSION in example.env"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
 
 jobs:
   bump:
+    name: Bump to ${{ inputs.version }}
     runs-on: ubuntu-latest
-    # Only run on human commits, skip bot pushes and this workflow's own commits
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event.head_commit.message != null &&
-        !contains(github.event.head_commit.message, 'chore(release):') &&
-        !contains(github.event.head_commit.message, 'ci: version bump') &&
-        github.actor != 'github-actions[bot]'
-      )
     steps:
-      - name: checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: setup node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: determine version
-        id: version
+      - name: Validate version
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "new=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            # Auto-bump patch version
-            CURRENT=$(node -p "require('./package.json').version")
-            MAJOR=$(echo "$CURRENT" | cut -d. -f1)
-            MINOR=$(echo "$CURRENT" | cut -d. -f2)
-            PATCH=$(echo "$CURRENT" | cut -d. -f3)
-            NEW_PATCH=$((PATCH + 1))
-            echo "new=${MAJOR}.${MINOR}.${NEW_PATCH}" >> "$GITHUB_OUTPUT"
-            echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+          VERSION="${{ inputs.version }}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Invalid version format: $VERSION (expected e.g. 3.1.0 or 3.1.0-beta.1)"
+            exit 1
           fi
 
-      - name: update package.json version
+      - name: Update package.json
         run: |
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '${{ steps.version.outputs.new }}';
+            const old = pkg.version;
+            pkg.version = '${{ inputs.version }}';
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+            console.log('package.json: ' + old + ' -> ' + pkg.version);
           "
 
-      - name: update README.md version
+      - name: Update README.md
+        if: inputs.sync-readme
         run: |
-          sed -i "s/v[0-9]*\.[0-9]*\.[0-9]*[^ ]*/v${{ steps.version.outputs.new }}/g" README.md || true
+          if grep -q 'v[0-9]\+\.[0-9]\+\.[0-9]\+' README.md; then
+            sed -i "s/v[0-9]*\.[0-9]*\.[0-9]*[^ ]*/v${{ inputs.version }}/g" README.md
+            echo "README.md updated to v${{ inputs.version }}"
+          else
+            echo "README.md: no version string found, skipping"
+          fi
 
-      - name: commit and push
+      - name: Update example.env
+        if: inputs.sync-example-env
+        run: |
+          if grep -q '^VERSION=' example.env; then
+            sed -i "s/^VERSION=.*/VERSION=${{ inputs.version }}/" example.env
+            echo "example.env updated to VERSION=${{ inputs.version }}"
+          else
+            echo "example.env: no VERSION= line found, skipping"
+          fi
+
+      - name: Commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json README.md 2>/dev/null || true
-          git diff --cached --quiet && exit 0
-          git commit -m "ci(release): bump version to ${{ steps.version.outputs.new }}"
+          git add package.json README.md example.env 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "chore(release): bump version to ${{ inputs.version }}"
           git push
+          echo "Committed and pushed version ${{ inputs.version }}"

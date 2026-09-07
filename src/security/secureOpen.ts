@@ -4,11 +4,18 @@
 // without following symlinks and ensures the path stays beneath the dirfd.
 // This eliminates the race window between path validation and file open.
 
-import { closeSync, constants, fstatSync, openSync, readSync, writeSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readSync,
+  writeSync,
+} from "node:fs";
+import { join } from "node:path";
 
 // Only load FFI on Linux where openat2 is available (kernel >= 5.6)
-const isLinux = process.platform === 'linux';
+const isLinux = process.platform === "linux";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let libc: any = null;
@@ -21,10 +28,16 @@ function getLibc() {
   try {
     // Bun.dlopen exists at runtime but TypeScript doesn't know about it
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const bunFfi = require('bun:ffi');
-    libc = bunFfi.dlopen('libc.so.6', {
+    const bunFfi = require("bun:ffi");
+    libc = bunFfi.dlopen("libc.so.6", {
       syscall: {
-        args: [bunFfi.FFIType.i64, bunFfi.FFIType.i32, bunFfi.FFIType.cstring, bunFfi.FFIType.ptr, bunFfi.FFIType.u64],
+        args: [
+          bunFfi.FFIType.i64,
+          bunFfi.FFIType.i32,
+          bunFfi.FFIType.cstring,
+          bunFfi.FFIType.ptr,
+          bunFfi.FFIType.u64,
+        ],
         returns: bunFfi.FFIType.i64,
       },
     });
@@ -44,13 +57,19 @@ const RESOLVE_NO_SYMLINKS = 0x04;
 const O_WRONLY = constants.O_WRONLY ?? 1;
 const O_CREAT = constants.O_CREAT ?? 64;
 const O_TRUNC = constants.O_TRUNC ?? 512;
+const O_APPEND = constants.O_APPEND ?? 1024;
+const O_RDWR = constants.O_RDWR ?? 2;
 
 // Linux errno values
 const ENOSYS = 38; // kernel doesn't support openat2
 const ELOOP = 40; // symlink detected
 
 // struct open_how: { u64 flags; u64 mode; u64 resolve; } = 24 bytes
-function buildOpenHow(flags: number, mode: number, resolve: number): ArrayBuffer {
+function buildOpenHow(
+  flags: number,
+  mode: number,
+  resolve: number,
+): ArrayBuffer {
   const buf = new ArrayBuffer(24);
   const view = new DataView(buf);
   view.setBigUint64(0, BigInt(flags), true);
@@ -63,7 +82,9 @@ function openat2Syscall(dirfd: number, path: string, how: ArrayBuffer): number {
   const lib = getLibc();
   if (!lib) return -1;
 
-  const fd = Number(lib.symbols.syscall(BigInt(437), dirfd, path, how, BigInt(24)));
+  const fd = Number(
+    lib.symbols.syscall(BigInt(437), dirfd, path, how, BigInt(24)),
+  );
   return fd;
 }
 
@@ -79,7 +100,10 @@ export interface SecureOpenResult {
  *
  * @throws if the path contains a symlink or escapes the base directory
  */
-export function secureOpenRead(base: string, relative: string): SecureOpenResult {
+export function secureOpenRead(
+  base: string,
+  relative: string,
+): SecureOpenResult {
   const full = join(base, relative);
 
   if (isLinux) {
@@ -112,7 +136,10 @@ export function secureOpenRead(base: string, relative: string): SecureOpenResult
  *
  * @throws if the path contains a symlink or escapes the base directory
  */
-export function secureOpenWrite(base: string, relative: string): SecureOpenResult {
+export function secureOpenWrite(
+  base: string,
+  relative: string,
+): SecureOpenResult {
   const full = join(base, relative);
 
   if (isLinux) {
@@ -134,7 +161,79 @@ export function secureOpenWrite(base: string, relative: string): SecureOpenResul
 
   // Fallback
   const O_NOFOLLOW = 0x100000;
-  const fd = openSync(full, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0o644);
+  const fd = openSync(
+    full,
+    O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC,
+    0o644,
+  );
+  return { fd, path: full };
+}
+
+/**
+ * Atomically open a file for appending without following symlinks.
+ * Uses openat2 with RESOLVE_NO_SYMLINKS on Linux.
+ */
+export function secureOpenAppend(
+  base: string,
+  relative: string,
+): SecureOpenResult {
+  const full = join(base, relative);
+
+  if (isLinux) {
+    const flags = O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC;
+    const how = buildOpenHow(flags, 0o644, RESOLVE_NO_SYMLINKS);
+    const fd = openat2Syscall(AT_FDCWD, full, how);
+    if (fd >= 0) return { fd, path: full };
+
+    const errno = -fd;
+    if (errno === ELOOP) {
+      throw new Error(`symlink detected in path: ${relative}`);
+    }
+    if (errno === ENOSYS || errno === 1) {
+      // fall through
+    } else {
+      throw new Error(`openat2 failed for ${relative} (errno ${errno})`);
+    }
+  }
+
+  const O_NOFOLLOW = 0x100000;
+  const fd = openSync(
+    full,
+    O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC,
+    0o644,
+  );
+  return { fd, path: full };
+}
+
+/**
+ * Atomically open a file for read-write without following symlinks.
+ * Uses openat2 with RESOLVE_NO_SYMLINKS on Linux.
+ */
+export function secureOpenReadWrite(
+  base: string,
+  relative: string,
+): SecureOpenResult {
+  const full = join(base, relative);
+
+  if (isLinux) {
+    const flags = O_RDWR | O_CLOEXEC;
+    const how = buildOpenHow(flags, 0, RESOLVE_NO_SYMLINKS);
+    const fd = openat2Syscall(AT_FDCWD, full, how);
+    if (fd >= 0) return { fd, path: full };
+
+    const errno = -fd;
+    if (errno === ELOOP) {
+      throw new Error(`symlink detected in path: ${relative}`);
+    }
+    if (errno === ENOSYS || errno === 1) {
+      // fall through
+    } else {
+      throw new Error(`openat2 failed for ${relative} (errno ${errno})`);
+    }
+  }
+
+  const O_NOFOLLOW = 0x100000;
+  const fd = openSync(full, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
   return { fd, path: full };
 }
 
@@ -146,12 +245,18 @@ export function secureReadFileSync(base: string, relative: string): Buffer {
   const { fd } = secureOpenRead(base, relative);
   try {
     const stat = fstatSync(fd);
-    if (stat.size > 10 * 1024 * 1024) throw new Error('file too large');
+    if (stat.size > 10 * 1024 * 1024) throw new Error("file too large");
 
     const buf = Buffer.alloc(stat.size);
     let totalRead = 0;
     while (totalRead < buf.length) {
-      const bytesRead = readSync(fd, buf, totalRead, buf.length - totalRead, null);
+      const bytesRead = readSync(
+        fd,
+        buf,
+        totalRead,
+        buf.length - totalRead,
+        null,
+      );
       if (bytesRead === 0) break;
       totalRead += bytesRead;
     }
@@ -165,10 +270,14 @@ export function secureReadFileSync(base: string, relative: string): Buffer {
  * Write a file securely — opens atomically, writes, closes.
  * Prevents TOCTOU symlink races on Linux >= 5.6.
  */
-export function secureWriteFileSync(base: string, relative: string, data: Buffer | string): void {
+export function secureWriteFileSync(
+  base: string,
+  relative: string,
+  data: Buffer | string,
+): void {
   const { fd } = secureOpenWrite(base, relative);
   try {
-    const buf = typeof data === 'string' ? Buffer.from(data, 'utf-8') : data;
+    const buf = typeof data === "string" ? Buffer.from(data, "utf-8") : data;
     let written = 0;
     while (written < buf.length) {
       const n = writeSync(fd, buf, written, buf.length - written);
@@ -187,7 +296,7 @@ export function hasOpenat2(): boolean {
   const lib = getLibc();
   if (!lib) return false;
   const how = buildOpenHow(O_RDONLY | O_CLOEXEC, 0, RESOLVE_NO_SYMLINKS);
-  const fd = openat2Syscall(AT_FDCWD, '/dev/null', how);
+  const fd = openat2Syscall(AT_FDCWD, "/dev/null", how);
   if (fd >= 0) {
     closeSync(fd);
     return true;

@@ -3,16 +3,82 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "storage/**"
+      - "build.ts"
+      - "tsconfig.json"
+      - "biome.json"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/ci.yml"
+      - ".github/.semgrep.yml"
   pull_request:
     branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "storage/**"
+      - "build.ts"
+      - "tsconfig.json"
+      - "biome.json"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/ci.yml"
+      - ".github/.semgrep.yml"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
   security-events: write
 
 jobs:
+  # ── Path filter ──────────────────────────────────────────────────────────────
+
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      security: ${{ steps.filter.outputs.security }}
+      quality: ${{ steps.filter.outputs.quality }}
+      test: ${{ steps.filter.outputs.test }}
+      embedded: ${{ steps.filter.outputs.embedded }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            security:
+              - 'package.json'
+              - 'bun.lock'
+              - 'src/**'
+              - '.github/.semgrep.yml'
+            quality:
+              - 'src/**'
+              - 'tsconfig.json'
+              - 'biome.json'
+              - 'package.json'
+              - 'bun.lock'
+            test:
+              - 'src/**'
+              - 'tests/**'
+              - 'package.json'
+              - 'bun.lock'
+            embedded:
+              - 'src/**'
+              - 'storage/**'
+
+  # ── Security ────────────────────────────────────────────────────────────────
+
   semgrep:
-    name: Semgrep SAST
+    name: SAST
+    needs: changes
+    if: needs.changes.outputs.security == 'true'
     runs-on: ubuntu-latest
     container:
       image: semgrep/semgrep
@@ -20,40 +86,145 @@ jobs:
       - uses: actions/checkout@v4
       - run: semgrep ci --config .github/.semgrep.yml --verbose
 
-  typecheck:
-    name: Typecheck
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - run: bun install
-      - run: bun run typecheck
+  # ── Quality ─────────────────────────────────────────────────────────────────
 
   lint:
     name: Lint
+    needs: changes
+    if: needs.changes.outputs.quality == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-      - run: bun install
-      - run: bunx biome check --diagnostic-level=error .
+          bun-version: 1.4.0
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+
+  typecheck:
+    name: Typecheck
+    needs: changes
+    if: needs.changes.outputs.quality == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+
+  # ── Embedded verification ───────────────────────────────────────────────────
+  # Ensure generated embedded.ts is fresh — catches forgotten regeneration.
+
+  embedded-check:
+    name: Embedded check
+    needs: changes
+    if: needs.changes.outputs.embedded == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run generate-embedded:check
+
+  # ── Test ────────────────────────────────────────────────────────────────────
 
   test:
     name: Test
+    needs: changes
+    if: needs.changes.outputs.test == 'true'
     runs-on: ubuntu-latest
     env:
       key: test-secret-key-at-least-16-chars
       port: "3002"
       remote: localhost
-      version: "3.0.0"
+      version: "3.0.59"
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-      - run: bun install
+          bun-version: 1.4.0
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
       - run: bun test
+
+  # ── Build verification ──────────────────────────────────────────────────────
+  # Verify the build compiles without producing release binaries.
+
+  build-check:
+    name: Build check
+    needs: changes
+    if: needs.changes.outputs.quality == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run build:dev
+
+  # ── CI Gate ─────────────────────────────────────────────────────────────────
+
+  ci-gate:
+    name: CI
+    if: always()
+    needs:
+      - semgrep
+      - lint
+      - typecheck
+      - embedded-check
+      - test
+      - build-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate results
+        run: |
+          echo "SAST:       ${{ needs.semgrep.result }}"
+          echo "Lint:       ${{ needs.lint.result }}"
+          echo "Typecheck:  ${{ needs.typecheck.result }}"
+          echo "Embedded:   ${{ needs.embedded-check.result }}"
+          echo "Test:       ${{ needs.test.result }}"
+          echo "Build:      ${{ needs.build-check.result }}"
+
+          for result in \
+            "${{ needs.semgrep.result }}" \
+            "${{ needs.lint.result }}" \
+            "${{ needs.typecheck.result }}" \
+            "${{ needs.embedded-check.result }}" \
+            "${{ needs.test.result }}" \
+            "${{ needs.build-check.result }}"; do
+            if [ "$result" = "failure" ]; then
+              echo "::error::One or more CI jobs failed"
+              exit 1
+            fi
+          done
+
+          echo "All checks passed or were skipped (no relevant changes)."

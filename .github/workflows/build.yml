@@ -1,18 +1,19 @@
-name: build
+name: Build
+
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. v3.0.0-beta.rc1)'
+        description: "Release version (e.g. v3.1.0)"
         required: true
         type: string
       prerelease:
-        description: 'Mark as pre-release'
+        description: "Mark as pre-release"
         required: true
         type: boolean
         default: true
       draft:
-        description: 'Mark as draft'
+        description: "Mark as draft"
         required: true
         type: boolean
         default: false
@@ -21,8 +22,44 @@ permissions:
   contents: read
 
 jobs:
+  # ── Pre-flight checks ───────────────────────────────────────────────────────
+  # Validate code before burning build minutes.
+
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - name: Verify version format
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if [[ ! "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Invalid version format: $VERSION (expected e.g. v3.1.0 or 3.1.0-beta.1)"
+            exit 1
+          fi
+      - name: Verify embedded assets
+        run: bun run generate-embedded:check
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Lint
+        run: bun run lint
+      - name: Test
+        run: bun test
+
+  # ── Build binaries ──────────────────────────────────────────────────────────
+
   build:
     name: build ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: preflight
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -49,57 +86,89 @@ jobs:
             arch: x64
             windows: true
     steps:
-      - name: checkout
-        uses: actions/checkout@v4
-
-      - name: install bun
-        uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
 
-      - name: install deps
-        run: bun install --frozen-lockfile
-
-      - name: build binaries
+      - name: Build binary
         run: bun run build --target=${{ matrix.target }}
 
-      - name: zip binaries
-        if: matrix.windows == false
+      - name: Zip binaries
+        if: ${{ !matrix.windows }}
         run: |
           cd dist
-          zip airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}.zip airlinkd-*
+          zip "airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}.zip" airlinkd-*
 
-      - name: zip binaries (windows)
-        if: matrix.windows == true
+      - name: Zip binaries (Windows)
+        if: ${{ matrix.windows }}
         shell: pwsh
         run: |
           cd dist
-          Compress-Archive -Path airlinkd-* -DestinationPath airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}.zip
+          Compress-Archive -Path airlinkd-* -DestinationPath "airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}.zip"
 
-      - name: upload artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}
           path: dist/*.zip
           if-no-files-found: error
 
-  release:
-    name: create release
+  # ── Checksums & manifest ────────────────────────────────────────────────────
+  # Generate release manifest and SHA-256 checksums after all binaries build.
+
+  manifest:
+    name: Release manifest
     needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum *.zip > SHA256SUMS.txt
+          echo "--- Checksums ---"
+          cat SHA256SUMS.txt
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums-${{ github.event.inputs.version }}
+          path: artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+
+  # ── Create release ──────────────────────────────────────────────────────────
+
+  release:
+    name: Create release
+    needs: [build, manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: dist/
           merge-multiple: true
 
-      - name: list artifacts
+      - name: List artifacts
         run: ls -lh dist/
 
-      - name: create release
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.version }}
@@ -120,6 +189,9 @@ jobs:
             | Linux | arm64 | `airlinkd-linux-arm64-${{ github.event.inputs.version }}.zip` |
             | macOS | arm64 (Apple Silicon) | `airlinkd-macos-arm64-${{ github.event.inputs.version }}.zip` |
             | Windows | x64 | `airlinkd-windows-x64-${{ github.event.inputs.version }}.zip` |
+
+            ### Checksums (SHA-256)
+            See `SHA256SUMS.txt` in the release assets.
 
             ### Changelog
             <!-- Add changelog notes here before publishing -->

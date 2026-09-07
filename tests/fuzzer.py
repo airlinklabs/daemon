@@ -46,6 +46,7 @@ HMAC_WINDOW_SECS = 30
 
 # ── Result tracking ──────────────────────────────────────────────────────────
 
+
 class Verdict(str, Enum):
     PASS = "pass"
     INTERESTING = "interesting"
@@ -67,6 +68,7 @@ class Finding:
 
 
 # ── Fuzzer core ──────────────────────────────────────────────────────────────
+
 
 class Fuzzer:
     def __init__(self, host: str, port: int, key: str, base_url: str | None = None):
@@ -92,20 +94,40 @@ class Fuzzer:
     def sign_hmac(self, method: str, path: str, body: bytes = b"") -> dict[str, str]:
         ts = str(int(time.time()))
         nonce = secrets.token_hex(16)
-        body_repr = ""
-        if body:
-            body_repr = f"digest:{hashlib.sha256(body).hexdigest()}"
+        digest = hashlib.sha256(body).hexdigest() if body else None
+        body_repr = f"digest:{digest}" if digest else ""
         payload = f"{ts}:{nonce}:{method.upper()}:{path}:{body_repr}"
-        sig = hmac_mod.new(self.key.encode(), payload.encode(), hashlib.sha256).hexdigest()
-        return {"X-HMAC-Timestamp": ts, "X-HMAC-Nonce": nonce, "X-HMAC-Signature": sig}
+        sig = hmac_mod.new(
+            self.key.encode(), payload.encode(), hashlib.sha256
+        ).hexdigest()
+        headers = {
+            "X-Airlink-Timestamp": ts,
+            "X-Airlink-Nonce": nonce,
+            "X-Airlink-Signature": sig,
+            "X-Airlink-Payload-Version": "1",
+        }
+        if digest:
+            headers["X-Airlink-Digest"] = f"sha256:{digest}"
+        return headers
 
-    def sign_hmac_with(self, method: str, path: str, body: bytes, ts: str, nonce: str) -> dict[str, str]:
-        body_repr = ""
-        if body:
-            body_repr = f"digest:{hashlib.sha256(body).hexdigest()}"
+    def sign_hmac_with(
+        self, method: str, path: str, body: bytes, ts: str, nonce: str
+    ) -> dict[str, str]:
+        digest = hashlib.sha256(body).hexdigest() if body else None
+        body_repr = f"digest:{digest}" if digest else ""
         payload = f"{ts}:{nonce}:{method.upper()}:{path}:{body_repr}"
-        sig = hmac_mod.new(self.key.encode(), payload.encode(), hashlib.sha256).hexdigest()
-        return {"X-HMAC-Timestamp": ts, "X-HMAC-Nonce": nonce, "X-HMAC-Signature": sig}
+        sig = hmac_mod.new(
+            self.key.encode(), payload.encode(), hashlib.sha256
+        ).hexdigest()
+        headers = {
+            "X-Airlink-Timestamp": ts,
+            "X-Airlink-Nonce": nonce,
+            "X-Airlink-Signature": sig,
+            "X-Airlink-Payload-Version": "1",
+        }
+        if digest:
+            headers["X-Airlink-Digest"] = f"sha256:{digest}"
+        return headers
 
     # ── HTTP helpers ──────────────────────────────────────────────────────────
 
@@ -124,9 +146,13 @@ class Fuzzer:
             hdrs.update(headers)
         try:
             if raw_body is not None:
-                return self.session.request(method, url, data=raw_body, headers=hdrs, timeout=timeout)
+                return self.session.request(
+                    method, url, data=raw_body, headers=hdrs, timeout=timeout
+                )
             if body is not None:
-                return self.session.request(method, url, json=body, headers=hdrs, timeout=timeout)
+                return self.session.request(
+                    method, url, json=body, headers=hdrs, timeout=timeout
+                )
             return self.session.request(method, url, headers=hdrs, timeout=timeout)
         except requests.exceptions.ConnectionError:
             return None
@@ -158,7 +184,9 @@ class Fuzzer:
                 Verdict.ERROR: "\033[90m[ERR]\033[0m",
                 Verdict.PASS: "\033[92m[OK]\033[0m",
             }[finding.verdict]
-            print(f"  {m} {finding.method:7s} {finding.url:<60s} {finding.status_code:3d}  {finding.detail}")
+            print(
+                f"  {m} {finding.method:7s} {finding.url:<60s} {finding.status_code:3d}  {finding.detail}"
+            )
 
     def ok(self, suite: str, case: str, method: str, url: str, code: int, detail: str):
         self.record(Finding(suite, case, method, url, code, Verdict.PASS, detail))
@@ -166,10 +194,16 @@ class Fuzzer:
     def bug(self, suite: str, case: str, method: str, url: str, code: int, detail: str):
         self.record(Finding(suite, case, method, url, code, Verdict.BUG, detail))
 
-    def interesting(self, suite: str, case: str, method: str, url: str, code: int, detail: str):
-        self.record(Finding(suite, case, method, url, code, Verdict.INTERESTING, detail))
+    def interesting(
+        self, suite: str, case: str, method: str, url: str, code: int, detail: str
+    ):
+        self.record(
+            Finding(suite, case, method, url, code, Verdict.INTERESTING, detail)
+        )
 
-    def error(self, suite: str, case: str, method: str, url: str, code: int, detail: str):
+    def error(
+        self, suite: str, case: str, method: str, url: str, code: int, detail: str
+    ):
         self.record(Finding(suite, case, method, url, code, Verdict.ERROR, detail))
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -182,25 +216,60 @@ class Fuzzer:
         suite = "method_enforcement"
 
         post_eps = [
-            "/container/start", "/container/stop", "/container/restart",
-            "/container/command", "/container/install", "/container/installer",
-            "/container/reinstall", "/container/backup", "/container/restore",
-            "/container/backup/upload", "/container/backup/download-token",
+            "/container/start",
+            "/container/stop",
+            "/container/restart",
+            "/container/command",
+            "/container/install",
+            "/container/installer",
+            "/container/reinstall",
+            "/container/backup",
+            "/container/restore",
+            "/container/backup/upload",
+            "/container/backup/download-token",
             "/container/logs/archives/download-token",
-            "/fs/copy", "/fs/pull", "/fs/zip", "/fs/unzip", "/fs/rename",
-            "/fs/upload", "/fs/create-empty-file", "/fs/mkdir", "/fs/append-file",
-            "/fs/file/content", "/sftp/credentials", "/radar/scan", "/radar/zip",
+            "/fs/copy",
+            "/fs/pull",
+            "/fs/zip",
+            "/fs/unzip",
+            "/fs/rename",
+            "/fs/upload",
+            "/fs/create-empty-file",
+            "/fs/mkdir",
+            "/fs/append-file",
+            "/fs/file/content",
+            "/sftp/credentials",
+            "/radar/scan",
+            "/radar/zip",
         ]
         get_eps = [
-            "/container/status", "/container/stats", "/container/logs/history",
-            "/container/logs/archives", "/container/logs/archives/read",
-            "/container/logs/archives/download", "/container/backup/download",
-            "/fs/list", "/fs/size", "/fs/info", "/fs/file/content",
-            "/fs/download", "/fs/download-token",
-            "/sftp/status", "/sftp/activity", "/minecraft/players",
-            "/stats", "/host", "/capabilities",
+            "/container/status",
+            "/container/stats",
+            "/container/logs/history",
+            "/container/logs/archives",
+            "/container/logs/archives/read",
+            "/container/logs/archives/download",
+            "/container/backup/download",
+            "/fs/list",
+            "/fs/size",
+            "/fs/info",
+            "/fs/file/content",
+            "/fs/download",
+            "/fs/download-token",
+            "/sftp/status",
+            "/sftp/activity",
+            "/minecraft/players",
+            "/stats",
+            "/host",
+            "/capabilities",
         ]
-        del_eps = ["/container/kill", "/container", "/container/backup", "/fs/rm", "/sftp/credentials"]
+        del_eps = [
+            "/container/kill",
+            "/container",
+            "/container/backup",
+            "/fs/rm",
+            "/sftp/credentials",
+        ]
 
         for ep in post_eps:
             for bad in ["GET", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]:
@@ -211,7 +280,14 @@ class Fuzzer:
                 if resp.status_code == 500:
                     self.bug(suite, f"{bad}_{ep}", bad, ep, 500, "500 on wrong method")
                 elif resp.status_code < 400:
-                    self.bug(suite, f"{bad}_{ep}", bad, ep, resp.status_code, f"accepted {bad} on POST endpoint")
+                    self.bug(
+                        suite,
+                        f"{bad}_{ep}",
+                        bad,
+                        ep,
+                        resp.status_code,
+                        f"accepted {bad} on POST endpoint",
+                    )
                 else:
                     self.ok(suite, f"{bad}_{ep}", bad, ep, resp.status_code, "rejected")
 
@@ -224,7 +300,14 @@ class Fuzzer:
                 if resp.status_code == 500:
                     self.bug(suite, f"{bad}_{ep}", bad, ep, 500, "500 on wrong method")
                 elif resp.status_code < 400:
-                    self.bug(suite, f"{bad}_{ep}", bad, ep, resp.status_code, f"accepted {bad} on GET endpoint")
+                    self.bug(
+                        suite,
+                        f"{bad}_{ep}",
+                        bad,
+                        ep,
+                        resp.status_code,
+                        f"accepted {bad} on GET endpoint",
+                    )
                 else:
                     self.ok(suite, f"{bad}_{ep}", bad, ep, resp.status_code, "rejected")
 
@@ -237,7 +320,14 @@ class Fuzzer:
                 if resp.status_code == 500:
                     self.bug(suite, f"{bad}_{ep}", bad, ep, 500, "500 on wrong method")
                 elif resp.status_code < 400:
-                    self.bug(suite, f"{bad}_{ep}", bad, ep, resp.status_code, f"accepted {bad} on DELETE endpoint")
+                    self.bug(
+                        suite,
+                        f"{bad}_{ep}",
+                        bad,
+                        ep,
+                        resp.status_code,
+                        f"accepted {bad} on DELETE endpoint",
+                    )
                 else:
                     self.ok(suite, f"{bad}_{ep}", bad, ep, resp.status_code, "rejected")
 
@@ -257,7 +347,9 @@ class Fuzzer:
         if resp is None:
             self.error(suite, "no_auth", "GET", ep, 0, "no response")
         elif resp.status_code < 400:
-            self.bug(suite, "no_auth", "GET", ep, resp.status_code, "accepted without auth")
+            self.bug(
+                suite, "no_auth", "GET", ep, resp.status_code, "accepted without auth"
+            )
         else:
             self.ok(suite, "no_auth", "GET", ep, resp.status_code, "rejected")
 
@@ -266,14 +358,25 @@ class Fuzzer:
         ts = str(int(time.time()))
         nonce = secrets.token_hex(16)
         payload = f"{ts}:{nonce}:GET:/container/status:"
-        sig = hmac_mod.new(wrong_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
-        resp = self._send("GET", ep, headers={
-            "X-HMAC-Timestamp": ts, "X-HMAC-Nonce": nonce, "X-HMAC-Signature": sig,
-        })
+        sig = hmac_mod.new(
+            wrong_key.encode(), payload.encode(), hashlib.sha256
+        ).hexdigest()
+        resp = self._send(
+            "GET",
+            ep,
+            headers={
+                "X-Airlink-Timestamp": ts,
+                "X-Airlink-Nonce": nonce,
+                "X-Airlink-Signature": sig,
+                "X-Airlink-Payload-Version": "1",
+            },
+        )
         if resp is None:
             self.error(suite, "wrong_key", "GET", ep, 0, "no response")
         elif resp.status_code < 400:
-            self.bug(suite, "wrong_key", "GET", ep, resp.status_code, "accepted wrong key")
+            self.bug(
+                suite, "wrong_key", "GET", ep, resp.status_code, "accepted wrong key"
+            )
         else:
             self.ok(suite, "wrong_key", "GET", ep, resp.status_code, "rejected")
 
@@ -281,14 +384,30 @@ class Fuzzer:
         old_ts = str(int(time.time()) - 120)
         nonce2 = secrets.token_hex(16)
         payload2 = f"{old_ts}:{nonce2}:GET:/container/status:"
-        sig2 = hmac_mod.new(self.key.encode(), payload2.encode(), hashlib.sha256).hexdigest()
-        resp = self._send("GET", ep, headers={
-            "X-HMAC-Timestamp": old_ts, "X-HMAC-Nonce": nonce2, "X-HMAC-Signature": sig2,
-        })
+        sig2 = hmac_mod.new(
+            self.key.encode(), payload2.encode(), hashlib.sha256
+        ).hexdigest()
+        resp = self._send(
+            "GET",
+            ep,
+            headers={
+                "X-Airlink-Timestamp": old_ts,
+                "X-Airlink-Nonce": nonce2,
+                "X-Airlink-Signature": sig2,
+                "X-Airlink-Payload-Version": "1",
+            },
+        )
         if resp is None:
             self.error(suite, "expired_ts", "GET", ep, 0, "no response")
         elif resp.status_code < 400:
-            self.bug(suite, "expired_ts", "GET", ep, resp.status_code, "accepted expired timestamp")
+            self.bug(
+                suite,
+                "expired_ts",
+                "GET",
+                ep,
+                resp.status_code,
+                "accepted expired timestamp",
+            )
         else:
             self.ok(suite, "expired_ts", "GET", ep, resp.status_code, "rejected")
 
@@ -296,14 +415,30 @@ class Fuzzer:
         future_ts = str(int(time.time()) + 120)
         nonce3 = secrets.token_hex(16)
         payload3 = f"{future_ts}:{nonce3}:GET:/container/status:"
-        sig3 = hmac_mod.new(self.key.encode(), payload3.encode(), hashlib.sha256).hexdigest()
-        resp = self._send("GET", ep, headers={
-            "X-HMAC-Timestamp": future_ts, "X-HMAC-Nonce": nonce3, "X-HMAC-Signature": sig3,
-        })
+        sig3 = hmac_mod.new(
+            self.key.encode(), payload3.encode(), hashlib.sha256
+        ).hexdigest()
+        resp = self._send(
+            "GET",
+            ep,
+            headers={
+                "X-Airlink-Timestamp": future_ts,
+                "X-Airlink-Nonce": nonce3,
+                "X-Airlink-Signature": sig3,
+                "X-Airlink-Payload-Version": "1",
+            },
+        )
         if resp is None:
             self.error(suite, "future_ts", "GET", ep, 0, "no response")
         elif resp.status_code < 400:
-            self.bug(suite, "future_ts", "GET", ep, resp.status_code, "accepted future timestamp")
+            self.bug(
+                suite,
+                "future_ts",
+                "GET",
+                ep,
+                resp.status_code,
+                "accepted future timestamp",
+            )
         else:
             self.ok(suite, "future_ts", "GET", ep, resp.status_code, "rejected")
 
@@ -314,87 +449,194 @@ class Fuzzer:
         if resp1 is None or resp2 is None:
             self.error(suite, "replay", "GET", ep, 0, "no response")
         elif resp2.status_code < 400:
-            self.bug(suite, "replay", "GET", ep, resp2.status_code, "accepted replayed nonce")
+            self.bug(
+                suite, "replay", "GET", ep, resp2.status_code, "accepted replayed nonce"
+            )
         else:
-            self.ok(suite, "replay", "GET", ep, resp2.status_code, "nonce replay blocked")
+            self.ok(
+                suite, "replay", "GET", ep, resp2.status_code, "nonce replay blocked"
+            )
 
         # 6) Missing HMAC header fields
-        for hdr in ["X-HMAC-Timestamp", "X-HMAC-Nonce", "X-HMAC-Signature"]:
+        for hdr in [
+            "X-Airlink-Timestamp",
+            "X-Airlink-Nonce",
+            "X-Airlink-Signature",
+            "X-Airlink-Payload-Version",
+        ]:
             h = self.sign_hmac("GET", "/container/status")
             h.pop(hdr, None)
             resp = self._send("GET", ep, headers=h)
             if resp is None:
                 self.error(suite, f"missing_{hdr}", "GET", ep, 0, "no response")
             elif resp.status_code < 400:
-                self.bug(suite, f"missing_{hdr}", "GET", ep, resp.status_code, f"accepted without {hdr}")
+                self.bug(
+                    suite,
+                    f"missing_{hdr}",
+                    "GET",
+                    ep,
+                    resp.status_code,
+                    f"accepted without {hdr}",
+                )
             else:
-                self.ok(suite, f"missing_{hdr}", "GET", ep, resp.status_code, "rejected")
+                self.ok(
+                    suite, f"missing_{hdr}", "GET", ep, resp.status_code, "rejected"
+                )
 
         # 7) Empty/malformed signature
-        resp = self._send("GET", ep, headers={
-            "X-HMAC-Timestamp": str(int(time.time())),
-            "X-HMAC-Nonce": secrets.token_hex(16),
-            "X-HMAC-Signature": "not-a-hex-signature!!!",
-        })
+        resp = self._send(
+            "GET",
+            ep,
+            headers={
+                "X-Airlink-Timestamp": str(int(time.time())),
+                "X-Airlink-Nonce": secrets.token_hex(16),
+                "X-Airlink-Signature": "not-a-hex-signature!!!",
+                "X-Airlink-Payload-Version": "1",
+            },
+        )
         if resp is None:
             self.error(suite, "bad_sig_format", "GET", ep, 0, "no response")
         elif resp.status_code < 400:
-            self.bug(suite, "bad_sig_format", "GET", ep, resp.status_code, "accepted bad sig format")
+            self.bug(
+                suite,
+                "bad_sig_format",
+                "GET",
+                ep,
+                resp.status_code,
+                "accepted bad sig format",
+            )
         else:
             self.ok(suite, "bad_sig_format", "GET", ep, resp.status_code, "rejected")
 
         # 8) Tampered body: sign one body, send another
         h4 = self.sign_hmac("POST", "/container/command", b'{"id":"x","command":"ls"}')
-        resp = self._send("POST", "/container/command",
-                          body={"id": self.container_id, "command": "ls"}, headers=h4)
+        resp = self._send(
+            "POST",
+            "/container/command",
+            body={"id": self.container_id, "command": "ls"},
+            headers=h4,
+        )
         if resp is None:
-            self.error(suite, "body_tamper", "POST", "/container/command", 0, "no response")
+            self.error(
+                suite, "body_tamper", "POST", "/container/command", 0, "no response"
+            )
         elif resp.status_code < 400:
-            self.bug(suite, "body_tamper", "POST", "/container/command", resp.status_code, "accepted tampered body")
+            self.bug(
+                suite,
+                "body_tamper",
+                "POST",
+                "/container/command",
+                resp.status_code,
+                "accepted tampered body",
+            )
         else:
-            self.ok(suite, "body_tamper", "POST", "/container/command", resp.status_code, "rejected")
+            self.ok(
+                suite,
+                "body_tamper",
+                "POST",
+                "/container/command",
+                resp.status_code,
+                "rejected",
+            )
 
         # 9) Method mismatch: sign GET, send POST
         h5 = self.sign_hmac("GET", "/container/command")
-        resp = self._send("POST", "/container/command",
-                          body={"id": self.container_id, "command": "ls"}, headers=h5)
+        resp = self._send(
+            "POST",
+            "/container/command",
+            body={"id": self.container_id, "command": "ls"},
+            headers=h5,
+        )
         if resp is None:
-            self.error(suite, "method_mismatch", "POST", "/container/command", 0, "no response")
+            self.error(
+                suite, "method_mismatch", "POST", "/container/command", 0, "no response"
+            )
         elif resp.status_code < 400:
-            self.bug(suite, "method_mismatch", "POST", "/container/command", resp.status_code, "accepted method mismatch")
+            self.bug(
+                suite,
+                "method_mismatch",
+                "POST",
+                "/container/command",
+                resp.status_code,
+                "accepted method mismatch",
+            )
         else:
-            self.ok(suite, "method_mismatch", "POST", "/container/command", resp.status_code, "rejected")
+            self.ok(
+                suite,
+                "method_mismatch",
+                "POST",
+                "/container/command",
+                resp.status_code,
+                "rejected",
+            )
 
         # 10) Path mismatch: sign /host, send /container/status
         h6 = self.sign_hmac("GET", "/host")
         resp = self._send("GET", "/container/status", headers=h6)
         if resp is None:
-            self.error(suite, "path_mismatch", "GET", "/container/status", 0, "no response")
+            self.error(
+                suite, "path_mismatch", "GET", "/container/status", 0, "no response"
+            )
         elif resp.status_code < 400:
-            self.bug(suite, "path_mismatch", "GET", "/container/status", resp.status_code, "accepted path mismatch")
+            self.bug(
+                suite,
+                "path_mismatch",
+                "GET",
+                "/container/status",
+                resp.status_code,
+                "accepted path mismatch",
+            )
         else:
-            self.ok(suite, "path_mismatch", "GET", "/container/status", resp.status_code, "rejected")
+            self.ok(
+                suite,
+                "path_mismatch",
+                "GET",
+                "/container/status",
+                resp.status_code,
+                "rejected",
+            )
 
         # 11) Extremely long nonce (>128 bytes should be rejected)
-        h7 = self.sign_hmac_with("GET", "/container/status", b"", str(int(time.time())), "A" * 256)
+        h7 = self.sign_hmac_with(
+            "GET", "/container/status", b"", str(int(time.time())), "A" * 256
+        )
         resp = self._send("GET", "/container/status", headers=h7)
         if resp is None:
             self.error(suite, "long_nonce", "GET", ep, 0, "no response")
         elif resp.status_code < 400:
-            self.bug(suite, "long_nonce", "GET", ep, resp.status_code, "accepted oversized nonce")
+            self.bug(
+                suite,
+                "long_nonce",
+                "GET",
+                ep,
+                resp.status_code,
+                "accepted oversized nonce",
+            )
         else:
             self.ok(suite, "long_nonce", "GET", ep, resp.status_code, "rejected")
 
         # 12) Non-numeric timestamp
-        resp = self._send("GET", ep, headers={
-            "X-HMAC-Timestamp": "not-a-number",
-            "X-HMAC-Nonce": secrets.token_hex(16),
-            "X-HMAC-Signature": "aa",
-        })
+        resp = self._send(
+            "GET",
+            ep,
+            headers={
+                "X-Airlink-Timestamp": "not-a-number",
+                "X-Airlink-Nonce": secrets.token_hex(16),
+                "X-Airlink-Signature": "aa",
+                "X-Airlink-Payload-Version": "1",
+            },
+        )
         if resp is None:
             self.error(suite, "bad_timestamp", "GET", ep, 0, "no response")
         elif resp.status_code < 400:
-            self.bug(suite, "bad_timestamp", "GET", ep, resp.status_code, "accepted non-numeric timestamp")
+            self.bug(
+                suite,
+                "bad_timestamp",
+                "GET",
+                ep,
+                resp.status_code,
+                "accepted non-numeric timestamp",
+            )
         else:
             self.ok(suite, "bad_timestamp", "GET", ep, resp.status_code, "rejected")
 
@@ -458,9 +700,23 @@ class Fuzzer:
                 if resp is None:
                     self.error(suite, f"id_{label}", method, url, 0, "no response")
                 elif resp.status_code == 500:
-                    self.bug(suite, f"id_{label}", method, url, 500, f"500 on container id={label}")
+                    self.bug(
+                        suite,
+                        f"id_{label}",
+                        method,
+                        url,
+                        500,
+                        f"500 on container id={label}",
+                    )
                 else:
-                    self.ok(suite, f"id_{label}", method, url, resp.status_code, f"id={label}")
+                    self.ok(
+                        suite,
+                        f"id_{label}",
+                        method,
+                        url,
+                        resp.status_code,
+                        f"id={label}",
+                    )
 
         # Path traversal in filesystem paths
         path_payloads = [
@@ -495,20 +751,53 @@ class Fuzzer:
                 if resp is None:
                     self.error(suite, f"path_{label}", method, url, 0, "no response")
                 elif resp.status_code == 500:
-                    self.bug(suite, f"path_{label}", method, url, 500, f"500 on path={label}")
-                elif "etc/passwd" in str(resp.text).lower() or "root:" in str(resp.text).lower():
-                    self.bug(suite, f"path_{label}", method, url, resp.status_code, "FILE LEAK: /etc/passwd content in response")
+                    self.bug(
+                        suite, f"path_{label}", method, url, 500, f"500 on path={label}"
+                    )
+                elif (
+                    "etc/passwd" in str(resp.text).lower()
+                    or "root:" in str(resp.text).lower()
+                ):
+                    self.bug(
+                        suite,
+                        f"path_{label}",
+                        method,
+                        url,
+                        resp.status_code,
+                        "FILE LEAK: /etc/passwd content in response",
+                    )
                 else:
-                    self.ok(suite, f"path_{label}", method, url, resp.status_code, f"path={label}")
+                    self.ok(
+                        suite,
+                        f"path_{label}",
+                        method,
+                        url,
+                        resp.status_code,
+                        f"path={label}",
+                    )
 
         # Null byte in path via raw query string
         resp = self._signed_send("GET", "/fs/list?path=data/test%00.jpg")
         if resp is None:
             self.error(suite, "nullbyte_query", "GET", "/fs/list", 0, "no response")
         elif resp.status_code == 500:
-            self.bug(suite, "nullbyte_query", "GET", "/fs/list", 500, "500 on null byte in query")
+            self.bug(
+                suite,
+                "nullbyte_query",
+                "GET",
+                "/fs/list",
+                500,
+                "500 on null byte in query",
+            )
         else:
-            self.ok(suite, "nullbyte_query", "GET", "/fs/list", resp.status_code, "null byte handled")
+            self.ok(
+                suite,
+                "nullbyte_query",
+                "GET",
+                "/fs/list",
+                resp.status_code,
+                "null byte handled",
+            )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # SUITE: injection
@@ -537,7 +826,10 @@ class Fuzzer:
             ("shell_double_quote", 'ls"; cat /etc/passwd #'),
             # SSTI
             ("ssti_jinja", "{{7*7}}"),
-            ("ssti_jinja2", "{{config.__class__.__init__.__globals__['os'].popen('id').read()}}"),
+            (
+                "ssti_jinja2",
+                "{{config.__class__.__init__.__globals__['os'].popen('id').read()}}",
+            ),
             ("ssti_django", "{% load %}"),
             # SQL injection (in command string)
             ("sql_single", "' OR 1=1 --"),
@@ -572,36 +864,73 @@ class Fuzzer:
             if resp is None:
                 self.error(suite, label, "POST", "/container/command", 0, "no response")
             elif resp.status_code == 500:
-                self.bug(suite, label, "POST", "/container/command", 500, f"500 on injection: {label}")
+                self.bug(
+                    suite,
+                    label,
+                    "POST",
+                    "/container/command",
+                    500,
+                    f"500 on injection: {label}",
+                )
             else:
                 # Check response for evidence of command execution
                 text = resp.text.lower() if resp else ""
                 leaks = ["root:", "bin/bash", "uid=", "/bin/sh"]
                 if any(leak in text for leak in leaks):
-                    self.bug(suite, label, "POST", "/container/command", resp.status_code,
-                             f"evidence of RCE: {label}")
+                    self.bug(
+                        suite,
+                        label,
+                        "POST",
+                        "/container/command",
+                        resp.status_code,
+                        f"evidence of RCE: {label}",
+                    )
                 else:
-                    self.ok(suite, label, "POST", "/container/command", resp.status_code, f"injection={label}")
+                    self.ok(
+                        suite,
+                        label,
+                        "POST",
+                        "/container/command",
+                        resp.status_code,
+                        f"injection={label}",
+                    )
 
         # Injection in container start (env vars, config files)
         inject_start_cases = [
-            ("env_inject", {
-                "id": self.container_id,
-                "env": {"EVIL": "; cat /etc/passwd"},
-                "startCommand": "echo $EVIL",
-            }),
-            ("env_newline", {
-                "id": self.container_id,
-                "env": {"EVIL": "val\ninjected_line"},
-            }),
-            ("config_file_traversal", {
-                "id": self.container_id,
-                "configFiles": [{"path": "../../etc/cron.d/evil", "content": "* * * * * root reverse"}],
-            }),
-            ("env_overflow", {
-                "id": self.container_id,
-                "env": {f"KEY{i}": "v" * 10000 for i in range(100)},
-            }),
+            (
+                "env_inject",
+                {
+                    "id": self.container_id,
+                    "env": {"EVIL": "; cat /etc/passwd"},
+                    "startCommand": "echo $EVIL",
+                },
+            ),
+            (
+                "env_newline",
+                {
+                    "id": self.container_id,
+                    "env": {"EVIL": "val\ninjected_line"},
+                },
+            ),
+            (
+                "config_file_traversal",
+                {
+                    "id": self.container_id,
+                    "configFiles": [
+                        {
+                            "path": "../../etc/cron.d/evil",
+                            "content": "* * * * * root reverse",
+                        }
+                    ],
+                },
+            ),
+            (
+                "env_overflow",
+                {
+                    "id": self.container_id,
+                    "env": {f"KEY{i}": "v" * 10000 for i in range(100)},
+                },
+            ),
         ]
 
         for label, body in inject_start_cases:
@@ -609,9 +938,18 @@ class Fuzzer:
             if resp is None:
                 self.error(suite, label, "POST", "/container/start", 0, "no response")
             elif resp.status_code == 500:
-                self.bug(suite, label, "POST", "/container/start", 500, f"500 on: {label}")
+                self.bug(
+                    suite, label, "POST", "/container/start", 500, f"500 on: {label}"
+                )
             else:
-                    self.ok(suite, label, "POST", "/container/start", resp.status_code, f"injection={label}")
+                self.ok(
+                    suite,
+                    label,
+                    "POST",
+                    "/container/start",
+                    resp.status_code,
+                    f"injection={label}",
+                )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # SUITE: body_fuzzing
@@ -623,10 +961,17 @@ class Fuzzer:
         suite = "body"
 
         post_endpoints_with_body = [
-            "/container/start", "/container/command", "/container/install",
-            "/fs/copy", "/fs/mkdir", "/fs/file/content", "/fs/rename",
-            "/fs/append-file", "/fs/create-empty-file",
-            "/container/backup", "/container/restore",
+            "/container/start",
+            "/container/command",
+            "/container/install",
+            "/fs/copy",
+            "/fs/mkdir",
+            "/fs/file/content",
+            "/fs/rename",
+            "/fs/append-file",
+            "/fs/create-empty-file",
+            "/container/backup",
+            "/container/restore",
             "/sftp/credentials",
         ]
 
@@ -639,19 +984,16 @@ class Fuzzer:
             ("null", None),
             ("array", [1, 2, 3]),
             ("nested_array", [[], []]),
-
             # Structural corruption
             ("empty_json", {}),
             ("trailing_comma", None),  # sent as raw
             ("unclosed_brace", None),
             ("deeply_nested", {"a": {"b": {"c": {"d": {"e": {"f": {"g": 1}}}}}}}),
             ("wide_object", {f"key{i}": f"val{i}" for i in range(1000)}),
-
             # Unicode
             ("unicode_key", {"\u00e9\u00e8\u00ea": "val"}),
             ("emoji_val", {"key": "\U0001f600" * 100}),
             ("bidi_override", {"\u202ekey": "val"}),
-
             # Numeric extremes
             ("zero", 0),
             ("neg_one", -1),
@@ -676,8 +1018,8 @@ class Fuzzer:
             ("empty_body", b""),
             ("binary_garbage", b"\x00\x01\x02\x03\xff\xfe\xfd"),
             ("utf8_bom", b"\xef\xbb\xbf{}"),
-            ("double_json", b'{}{}'),
-            ("json_array", b'[1,2,3]'),
+            ("double_json", b"{}{}"),
+            ("json_array", b"[1,2,3]"),
             ("huge_value", b'{"x": "' + b"A" * (1024 * 1024) + b'"}'),
             ("null_bytes", b'{"k": "\x00\x00\x00"}'),
             ("backslash_ends", b'{"k": "\\'),
@@ -693,7 +1035,14 @@ class Fuzzer:
                 elif resp.status_code == 500:
                     self.bug(suite, f"{label}_{ep}", "POST", ep, 500, f"500 on {label}")
                 else:
-                    self.ok(suite, f"{label}_{ep}", "POST", ep, resp.status_code, f"body={label}")
+                    self.ok(
+                        suite,
+                        f"{label}_{ep}",
+                        "POST",
+                        ep,
+                        resp.status_code,
+                        f"body={label}",
+                    )
 
             for label, raw in raw_payloads:
                 h = self.sign_hmac("POST", ep, raw)
@@ -701,9 +1050,23 @@ class Fuzzer:
                 if resp is None:
                     self.error(suite, f"raw_{label}_{ep}", "POST", ep, 0, "no response")
                 elif resp.status_code == 500:
-                    self.bug(suite, f"raw_{label}_{ep}", "POST", ep, 500, f"500 on raw={label}")
+                    self.bug(
+                        suite,
+                        f"raw_{label}_{ep}",
+                        "POST",
+                        ep,
+                        500,
+                        f"500 on raw={label}",
+                    )
                 else:
-                    self.ok(suite, f"raw_{label}_{ep}", "POST", ep, resp.status_code, f"raw={label}")
+                    self.ok(
+                        suite,
+                        f"raw_{label}_{ep}",
+                        "POST",
+                        ep,
+                        resp.status_code,
+                        f"raw={label}",
+                    )
 
         # Trailing comma (raw JSON)
         for ep in post_endpoints_with_body:
@@ -713,9 +1076,23 @@ class Fuzzer:
             if resp is None:
                 self.error(suite, f"trailing_comma_{ep}", "POST", ep, 0, "no response")
             elif resp.status_code == 500:
-                self.bug(suite, f"trailing_comma_{ep}", "POST", ep, 500, "500 on trailing comma")
+                self.bug(
+                    suite,
+                    f"trailing_comma_{ep}",
+                    "POST",
+                    ep,
+                    500,
+                    "500 on trailing comma",
+                )
             else:
-                self.ok(suite, f"trailing_comma_{ep}", "POST", ep, resp.status_code, "trailing comma handled")
+                self.ok(
+                    suite,
+                    f"trailing_comma_{ep}",
+                    "POST",
+                    ep,
+                    resp.status_code,
+                    "trailing comma handled",
+                )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # SUITE: content_type
@@ -752,7 +1129,9 @@ class Fuzzer:
             elif resp.status_code == 500:
                 self.bug(suite, label, "POST", ep, 500, f"500 on Content-Type: {label}")
             else:
-                self.ok(suite, label, "POST", ep, resp.status_code, f"Content-Type={label}")
+                self.ok(
+                    suite, label, "POST", ep, resp.status_code, f"Content-Type={label}"
+                )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # SUITE: ssrf
@@ -774,7 +1153,6 @@ class Fuzzer:
             ("octal_ip", "http://0177.0.0.1/stats"),
             ("ip_variants", "http://127.1/stats"),
             ("ip_double", "http://127.0.0.1.1/stats"),
-
             # Private ranges
             ("class_a", "http://10.0.0.1:8080/secret"),
             ("class_b", "http://172.16.0.1:8080/secret"),
@@ -782,12 +1160,16 @@ class Fuzzer:
             ("class_b_max", "http://172.31.255.255/secret"),
             ("link_local", "http://169.254.169.254/latest/meta-data/"),
             ("cgnat", "http://100.64.0.1/secret"),
-
             # Cloud metadata
-            ("aws_meta", "http://169.254.169.254/latest/meta-data/iam/security-credentials/"),
+            (
+                "aws_meta",
+                "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+            ),
             ("gcp_meta", "http://metadata.google.internal/computeMetadata/v1/"),
-            ("azure_meta", "http://169.254.169.254/metadata/instance?api-version=2021-02-01"),
-
+            (
+                "azure_meta",
+                "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+            ),
             # Protocol confusion
             ("file_proto", "file:///etc/passwd"),
             ("ftp_proto", "ftp://127.0.0.1/"),
@@ -795,25 +1177,49 @@ class Fuzzer:
             ("dict_proto", "dict://127.0.0.1:6379/info"),
             ("data_proto", "data:text/html,<h1>test</h1>"),
             ("javascript_proto", "javascript:alert(1)"),
-
             # DNS rebinding (will likely resolve but should be caught by IP check)
             ("dns_localhost", "http://localtest.me/stats"),
-
             # Redirect tricks (external)
-            ("redirect_to_localhost", "http://httpbin.org/redirect-to?url=http://127.0.0.1:3002/stats"),
+            (
+                "redirect_to_localhost",
+                "http://httpbin.org/redirect-to?url=http://127.0.0.1:3002/stats",
+            ),
         ]
 
         for label, url in ssrf_urls:
             body = {"id": self.container_id, "url": url}
             resp = self._signed_send("POST", "/fs/pull", body=body)
             if resp is None:
-                self.error(suite, label, "POST", "/fs/pull", 0, "no response (possible crash)")
+                self.error(
+                    suite, label, "POST", "/fs/pull", 0, "no response (possible crash)"
+                )
             elif resp.status_code == 500:
-                self.bug(suite, label, "POST", "/fs/pull", 500, f"500 on SSRF attempt: {label}")
+                self.bug(
+                    suite,
+                    label,
+                    "POST",
+                    "/fs/pull",
+                    500,
+                    f"500 on SSRF attempt: {label}",
+                )
             elif resp.status_code < 400:
-                self.bug(suite, label, "POST", "/fs/pull", resp.status_code, f"SSRF ALLOWED: {label}")
+                self.bug(
+                    suite,
+                    label,
+                    "POST",
+                    "/fs/pull",
+                    resp.status_code,
+                    f"SSRF ALLOWED: {label}",
+                )
             else:
-                self.ok(suite, label, "POST", "/fs/pull", resp.status_code, f"blocked: {label}")
+                self.ok(
+                    suite,
+                    label,
+                    "POST",
+                    "/fs/pull",
+                    resp.status_code,
+                    f"blocked: {label}",
+                )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # SUITE: boundary_values
@@ -830,11 +1236,32 @@ class Fuzzer:
         h = self.sign_hmac("POST", "/container/command", raw_huge)
         resp = self._send("POST", "/container/command", raw_body=raw_huge, headers=h)
         if resp is None:
-            self.error(suite, "huge_body", "POST", "/container/command", 0, "no response (possible OOM)")
+            self.error(
+                suite,
+                "huge_body",
+                "POST",
+                "/container/command",
+                0,
+                "no response (possible OOM)",
+            )
         elif resp.status_code == 500:
-            self.bug(suite, "huge_body", "POST", "/container/command", 500, "500 on oversized body")
+            self.bug(
+                suite,
+                "huge_body",
+                "POST",
+                "/container/command",
+                500,
+                "500 on oversized body",
+            )
         else:
-            self.ok(suite, "huge_body", "POST", "/container/command", resp.status_code, "handled")
+            self.ok(
+                suite,
+                "huge_body",
+                "POST",
+                "/container/command",
+                resp.status_code,
+                "handled",
+            )
 
         # 2) Extremely long Content-Length header
         h2 = self.sign_hmac("GET", "/stats")
@@ -843,9 +1270,23 @@ class Fuzzer:
         if resp is None:
             self.error(suite, "long_content_length", "GET", "/stats", 0, "no response")
         elif resp.status_code == 500:
-            self.bug(suite, "long_content_length", "GET", "/stats", 500, "500 on huge Content-Length")
+            self.bug(
+                suite,
+                "long_content_length",
+                "GET",
+                "/stats",
+                500,
+                "500 on huge Content-Length",
+            )
         else:
-            self.ok(suite, "long_content_length", "GET", "/stats", resp.status_code, "handled")
+            self.ok(
+                suite,
+                "long_content_length",
+                "GET",
+                "/stats",
+                resp.status_code,
+                "handled",
+            )
 
         # 3) Very large number of query params
         qs = "&".join(f"param{i}=value{i}" for i in range(1000))
@@ -853,9 +1294,23 @@ class Fuzzer:
         if resp is None:
             self.error(suite, "many_query_params", "GET", "/fs/list", 0, "no response")
         elif resp.status_code == 500:
-            self.bug(suite, "many_query_params", "GET", "/fs/list", 500, "500 on 1000 query params")
+            self.bug(
+                suite,
+                "many_query_params",
+                "GET",
+                "/fs/list",
+                500,
+                "500 on 1000 query params",
+            )
         else:
-            self.ok(suite, "many_query_params", "GET", "/fs/list", resp.status_code, "handled")
+            self.ok(
+                suite,
+                "many_query_params",
+                "GET",
+                "/fs/list",
+                resp.status_code,
+                "handled",
+            )
 
         # 4) Missing required fields
         missing_field_cases = [
@@ -875,7 +1330,9 @@ class Fuzzer:
             if resp is None:
                 self.error(suite, label, method, ep, 0, "no response")
             elif resp.status_code == 500:
-                self.bug(suite, label, method, ep, 500, f"500 on missing field: {label}")
+                self.bug(
+                    suite, label, method, ep, 500, f"500 on missing field: {label}"
+                )
             else:
                 self.ok(suite, label, method, ep, resp.status_code, f"missing={label}")
 
@@ -896,9 +1353,23 @@ class Fuzzer:
             if resp is None:
                 self.error(suite, label, "POST", "/container/start", 0, "no response")
             elif resp.status_code == 500:
-                self.bug(suite, label, "POST", "/container/start", 500, f"500 on id len={len(cid)}")
+                self.bug(
+                    suite,
+                    label,
+                    "POST",
+                    "/container/start",
+                    500,
+                    f"500 on id len={len(cid)}",
+                )
             else:
-                self.ok(suite, label, "POST", "/container/start", resp.status_code, f"id_len={len(cid)}")
+                self.ok(
+                    suite,
+                    label,
+                    "POST",
+                    "/container/start",
+                    resp.status_code,
+                    f"id_len={len(cid)}",
+                )
 
         # 6) Negative numbers for port-like fields
         body = {"id": self.container_id, "sftpPort": -1}
@@ -906,12 +1377,30 @@ class Fuzzer:
         if resp is None:
             self.error(suite, "neg_port", "POST", "/container/start", 0, "no response")
         elif resp.status_code == 500:
-            self.bug(suite, "neg_port", "POST", "/container/start", 500, "500 on negative port")
+            self.bug(
+                suite,
+                "neg_port",
+                "POST",
+                "/container/start",
+                500,
+                "500 on negative port",
+            )
         else:
-            self.ok(suite, "neg_port", "POST", "/container/start", resp.status_code, "negative port handled")
+            self.ok(
+                suite,
+                "neg_port",
+                "POST",
+                "/container/start",
+                resp.status_code,
+                "negative port handled",
+            )
 
         # 7) Concurrent rapid-fire requests (basic rate limit test)
-        print("  \033[90m[...] rate limit test (50 rapid requests)\033[0m", end="", flush=True)
+        print(
+            "  \033[90m[...] rate limit test (50 rapid requests)\033[0m",
+            end="",
+            flush=True,
+        )
         codes = []
         for _ in range(50):
             resp = self._signed_send("GET", "/stats")
@@ -922,7 +1411,14 @@ class Fuzzer:
             print(f" -> \033[92m429 seen (rate limit active)\033[0m")
         elif codes and all(c == 200 for c in codes):
             print(f" -> \033[93mno 429 after 50 rapid requests\033[0m")
-            self.interesting(suite, "rate_limit", "GET", "/stats", 200, "no rate limiting after 50 rapid requests")
+            self.interesting(
+                suite,
+                "rate_limit",
+                "GET",
+                "/stats",
+                200,
+                "no rate limiting after 50 rapid requests",
+            )
         else:
             print(f" -> codes: {set(codes)}")
 
@@ -949,11 +1445,15 @@ class Fuzzer:
             h.update(hdrs)
             resp = self._send("GET", "/stats", headers=h)
             if resp is None:
-                self.error(suite, label, "GET", "/stats", 0, "no response (possible crash)")
+                self.error(
+                    suite, label, "GET", "/stats", 0, "no response (possible crash)"
+                )
             elif resp.status_code == 500:
                 self.bug(suite, label, "GET", "/stats", 500, f"500 on: {label}")
             else:
-                self.ok(suite, label, "GET", "/stats", resp.status_code, f"header={label}")
+                self.ok(
+                    suite, label, "GET", "/stats", resp.status_code, f"header={label}"
+                )
 
         # Header injection via CRLF
         cfrl_cases = [
@@ -968,7 +1468,14 @@ class Fuzzer:
             elif resp.status_code == 500:
                 self.bug(suite, label, "GET", "/stats", 500, f"500 on CRLF in header")
             else:
-                self.ok(suite, label, "GET", "/stats", resp.status_code, f"CRLF header={label}")
+                self.ok(
+                    suite,
+                    label,
+                    "GET",
+                    "/stats",
+                    resp.status_code,
+                    f"CRLF header={label}",
+                )
 
         # X-Forwarded-For spoofing
         spoof_ips = [
@@ -978,7 +1485,9 @@ class Fuzzer:
             ("xff_fake_trusted", "192.168.1.1, 127.0.0.1"),
         ]
         for label, ip in spoof_ips:
-            resp = self._signed_send("GET", "/host", extra_headers={"X-Forwarded-For": ip})
+            resp = self._signed_send(
+                "GET", "/host", extra_headers={"X-Forwarded-For": ip}
+            )
             if resp is None:
                 self.error(suite, label, "GET", "/host", 0, "no response")
             elif resp.status_code == 500:
@@ -1015,13 +1524,41 @@ class Fuzzer:
                 if resp:
                     data = json.loads(resp) if isinstance(resp, str) else None
                     if data and "error" in data:
-                        self.ok(suite, "no_auth_cmd", "WS", endpoint, 0, "rejected: " + data["error"])
+                        self.ok(
+                            suite,
+                            "no_auth_cmd",
+                            "WS",
+                            endpoint,
+                            0,
+                            "rejected: " + data["error"],
+                        )
                     else:
-                        self.bug(suite, "no_auth_cmd", "WS", endpoint, 0, "accepted cmd without auth")
+                        self.bug(
+                            suite,
+                            "no_auth_cmd",
+                            "WS",
+                            endpoint,
+                            0,
+                            "accepted cmd without auth",
+                        )
                 else:
-                    self.bug(suite, "no_auth_cmd", "WS", endpoint, 0, "accepted cmd without auth")
+                    self.bug(
+                        suite,
+                        "no_auth_cmd",
+                        "WS",
+                        endpoint,
+                        0,
+                        "accepted cmd without auth",
+                    )
             except websocket.WebSocketTimeoutException:
-                self.ok(suite, "no_auth_cmd", "WS", endpoint, 0, "timed out (no auth allowed)")
+                self.ok(
+                    suite,
+                    "no_auth_cmd",
+                    "WS",
+                    endpoint,
+                    0,
+                    "timed out (no auth allowed)",
+                )
             except Exception:
                 self.ok(suite, "no_auth_cmd", "WS", endpoint, 0, "connection closed")
             ws.close()
@@ -1031,27 +1568,54 @@ class Fuzzer:
         # 2) Auth with wrong key
         try:
             ws = websocket.create_connection(ws_url, timeout=3)
-            wrong_hmac = hmac_mod.new(b"wrong_key_wrong_key_1234567890",
-                                       b"0:nonce:GET:" + endpoint.encode(), hashlib.sha256).hexdigest()
+            wrong_hmac = hmac_mod.new(
+                b"wrong_key_wrong_key_1234567890",
+                b"0:nonce:GET:" + endpoint.encode(),
+                hashlib.sha256,
+            ).hexdigest()
             ts = str(int(time.time()))
             payload = f"{ts}:wrongnonce:GET:{endpoint}:"
-            sig = hmac_mod.new(b"wrong_key_wrong_key_1234567890", payload.encode(), hashlib.sha256).hexdigest()
-            ws.send(json.dumps({
-                "event": "auth",
-                "args": [sig],
-            }))
+            sig = hmac_mod.new(
+                b"wrong_key_wrong_key_1234567890", payload.encode(), hashlib.sha256
+            ).hexdigest()
+            ws.send(
+                json.dumps(
+                    {
+                        "event": "auth",
+                        "args": [sig],
+                    }
+                )
+            )
             try:
                 resp = ws.recv()
                 data = json.loads(resp) if isinstance(resp, str) else None
                 if data and "error" in data:
-                    self.ok(suite, "wrong_key_auth", "WS", endpoint, 0, "rejected: " + data["error"])
+                    self.ok(
+                        suite,
+                        "wrong_key_auth",
+                        "WS",
+                        endpoint,
+                        0,
+                        "rejected: " + data["error"],
+                    )
                 else:
-                    self.bug(suite, "wrong_key_auth", "WS", endpoint, 0, "accepted wrong key")
+                    self.bug(
+                        suite, "wrong_key_auth", "WS", endpoint, 0, "accepted wrong key"
+                    )
             except Exception:
-                self.ok(suite, "wrong_key_auth", "WS", endpoint, 0, "connection closed after wrong key")
+                self.ok(
+                    suite,
+                    "wrong_key_auth",
+                    "WS",
+                    endpoint,
+                    0,
+                    "connection closed after wrong key",
+                )
             ws.close()
         except Exception as e:
-            self.ok(suite, "wrong_key_auth", "WS", endpoint, 0, f"connect rejected: {e}")
+            self.ok(
+                suite, "wrong_key_auth", "WS", endpoint, 0, f"connect rejected: {e}"
+            )
 
         # 3) Auth with valid key, then send commands
         try:
@@ -1060,7 +1624,9 @@ class Fuzzer:
             nonce = secrets.token_hex(16)
             path = f"/ws/containerstatus/{self.container_id}"
             payload = f"{ts}:{nonce}:GET:{path}:"
-            sig = hmac_mod.new(self.key.encode(), payload.encode(), hashlib.sha256).hexdigest()
+            sig = hmac_mod.new(
+                self.key.encode(), payload.encode(), hashlib.sha256
+            ).hexdigest()
             ws.send(json.dumps({"event": "auth", "args": [sig]}))
             time.sleep(0.3)
             ws.settimeout(2)
@@ -1071,11 +1637,32 @@ class Fuzzer:
                 resp = ws.recv()
                 data = json.loads(resp) if isinstance(resp, str) else None
                 if data and "error" in data:
-                    self.ok(suite, "cmd_on_status", "WS", endpoint, 0, "correctly rejected: " + data.get("error", ""))
+                    self.ok(
+                        suite,
+                        "cmd_on_status",
+                        "WS",
+                        endpoint,
+                        0,
+                        "correctly rejected: " + data.get("error", ""),
+                    )
                 else:
-                    self.bug(suite, "cmd_on_status", "WS", endpoint, 0, "accepted CMD on status route")
+                    self.bug(
+                        suite,
+                        "cmd_on_status",
+                        "WS",
+                        endpoint,
+                        0,
+                        "accepted CMD on status route",
+                    )
             except Exception:
-                self.ok(suite, "cmd_on_status", "WS", endpoint, 0, "connection closed after invalid CMD")
+                self.ok(
+                    suite,
+                    "cmd_on_status",
+                    "WS",
+                    endpoint,
+                    0,
+                    "connection closed after invalid CMD",
+                )
             ws.close()
         except Exception as e:
             self.error(suite, "valid_auth_cmd_status", "WS", endpoint, 0, f"error: {e}")
@@ -1088,14 +1675,30 @@ class Fuzzer:
                 resp = ws.recv()
                 data = json.loads(resp) if isinstance(resp, str) else None
                 if data and "error" in data:
-                    self.ok(suite, "malformed_json", "WS", endpoint, 0, "rejected: " + data.get("error", ""))
+                    self.ok(
+                        suite,
+                        "malformed_json",
+                        "WS",
+                        endpoint,
+                        0,
+                        "rejected: " + data.get("error", ""),
+                    )
                 else:
-                    self.bug(suite, "malformed_json", "WS", endpoint, 0, "accepted malformed JSON")
+                    self.bug(
+                        suite,
+                        "malformed_json",
+                        "WS",
+                        endpoint,
+                        0,
+                        "accepted malformed JSON",
+                    )
             except Exception:
                 self.ok(suite, "malformed_json", "WS", endpoint, 0, "connection closed")
             ws.close()
         except Exception as e:
-            self.ok(suite, "malformed_json", "WS", endpoint, 0, f"connect rejected: {e}")
+            self.ok(
+                suite, "malformed_json", "WS", endpoint, 0, f"connect rejected: {e}"
+            )
 
         # 5) Empty event field
         try:
@@ -1105,9 +1708,18 @@ class Fuzzer:
                 resp = ws.recv()
                 data = json.loads(resp) if isinstance(resp, str) else None
                 if data and "error" in data:
-                    self.ok(suite, "empty_event", "WS", endpoint, 0, "rejected: " + data.get("error", ""))
+                    self.ok(
+                        suite,
+                        "empty_event",
+                        "WS",
+                        endpoint,
+                        0,
+                        "rejected: " + data.get("error", ""),
+                    )
                 else:
-                    self.bug(suite, "empty_event", "WS", endpoint, 0, "accepted empty event")
+                    self.bug(
+                        suite, "empty_event", "WS", endpoint, 0, "accepted empty event"
+                    )
             except Exception:
                 self.ok(suite, "empty_event", "WS", endpoint, 0, "connection closed")
             ws.close()
@@ -1123,9 +1735,23 @@ class Fuzzer:
                 resp = ws.recv()
                 data = json.loads(resp) if isinstance(resp, str) else None
                 if data and "error" in data:
-                    self.ok(suite, "huge_ws_msg", "WS", endpoint, 0, "rejected: " + data.get("error", ""))
+                    self.ok(
+                        suite,
+                        "huge_ws_msg",
+                        "WS",
+                        endpoint,
+                        0,
+                        "rejected: " + data.get("error", ""),
+                    )
                 else:
-                    self.bug(suite, "huge_ws_msg", "WS", endpoint, 0, "accepted 1MiB auth arg")
+                    self.bug(
+                        suite,
+                        "huge_ws_msg",
+                        "WS",
+                        endpoint,
+                        0,
+                        "accepted 1MiB auth arg",
+                    )
             except Exception:
                 self.ok(suite, "huge_ws_msg", "WS", endpoint, 0, "connection closed")
             ws.close()
@@ -1140,11 +1766,32 @@ class Fuzzer:
                 resp = ws.recv()
                 data = json.loads(resp) if isinstance(resp, str) else None
                 if data and "error" in data:
-                    self.ok(suite, "binary_frame", "WS", endpoint, 0, "rejected binary frame")
+                    self.ok(
+                        suite,
+                        "binary_frame",
+                        "WS",
+                        endpoint,
+                        0,
+                        "rejected binary frame",
+                    )
                 else:
-                    self.bug(suite, "binary_frame", "WS", endpoint, 0, "accepted binary frame")
+                    self.bug(
+                        suite,
+                        "binary_frame",
+                        "WS",
+                        endpoint,
+                        0,
+                        "accepted binary frame",
+                    )
             except Exception:
-                self.ok(suite, "binary_frame", "WS", endpoint, 0, "connection closed on binary frame")
+                self.ok(
+                    suite,
+                    "binary_frame",
+                    "WS",
+                    endpoint,
+                    0,
+                    "connection closed on binary frame",
+                )
             ws.close()
         except Exception as e:
             self.ok(suite, "binary_frame", "WS", endpoint, 0, f"connect rejected: {e}")
@@ -1160,11 +1807,23 @@ class Fuzzer:
                 except Exception:
                     break
             if closed > 25:
-                self.interesting(suite, "reconnect_storm", "WS", endpoint, 0,
-                                f"accepted {closed}/30 rapid reconnects")
+                self.interesting(
+                    suite,
+                    "reconnect_storm",
+                    "WS",
+                    endpoint,
+                    0,
+                    f"accepted {closed}/30 rapid reconnects",
+                )
             else:
-                self.ok(suite, "reconnect_storm", "WS", endpoint, 0,
-                        f"rate limited after {closed} reconnects")
+                self.ok(
+                    suite,
+                    "reconnect_storm",
+                    "WS",
+                    endpoint,
+                    0,
+                    f"rate limited after {closed} reconnects",
+                )
         except Exception as e:
             self.error(suite, "reconnect_storm", "WS", endpoint, 0, f"error: {e}")
 
@@ -1191,26 +1850,67 @@ class Fuzzer:
             if resp is None:
                 self.error(suite, f"unknown_{route}", method, route, 0, "no response")
             elif resp.status_code == 500:
-                self.bug(suite, f"unknown_{route}", method, route, 500, "500 on unknown route")
+                self.bug(
+                    suite,
+                    f"unknown_{route}",
+                    method,
+                    route,
+                    500,
+                    "500 on unknown route",
+                )
             elif resp.status_code == 404:
-                self.ok(suite, f"unknown_{route}", method, route, 404, "404 on unknown route")
+                self.ok(
+                    suite,
+                    f"unknown_{route}",
+                    method,
+                    route,
+                    404,
+                    "404 on unknown route",
+                )
             else:
-                self.ok(suite, f"unknown_{route}", method, route, resp.status_code, "handled unknown route")
+                self.ok(
+                    suite,
+                    f"unknown_{route}",
+                    method,
+                    route,
+                    resp.status_code,
+                    "handled unknown route",
+                )
 
         # Error response format check
-        resp = self._signed_send("POST", "/container/command", body={"id": "nonexistent_container"})
+        resp = self._signed_send(
+            "POST", "/container/command", body={"id": "nonexistent_container"}
+        )
         if resp:
             try:
                 data = resp.json()
                 if "error" in data and "code" in data:
-                    self.ok(suite, "error_format", "POST", "/container/command", resp.status_code,
-                            "error envelope has error+code")
+                    self.ok(
+                        suite,
+                        "error_format",
+                        "POST",
+                        "/container/command",
+                        resp.status_code,
+                        "error envelope has error+code",
+                    )
                 else:
-                    self.interesting(suite, "error_format", "POST", "/container/command", resp.status_code,
-                                     f"error envelope missing fields: {list(data.keys())}")
+                    self.interesting(
+                        suite,
+                        "error_format",
+                        "POST",
+                        "/container/command",
+                        resp.status_code,
+                        f"error envelope missing fields: {list(data.keys())}",
+                    )
             except Exception:
-                self.interesting(suite, "error_format", "POST", "/container/command", resp.status_code,
-                                 "response is not JSON")
+                self.interesting(
+                    suite,
+                    "error_format",
+                    "POST",
+                    "/container/command",
+                    resp.status_code,
+                    "response is not JSON",
+                )
 
         # Double slash paths
         double_slash_routes = [
@@ -1224,9 +1924,23 @@ class Fuzzer:
             if resp is None:
                 self.error(suite, f"dslash_{route}", method, route, 0, "no response")
             elif resp.status_code == 500:
-                self.bug(suite, f"dslash_{route}", method, route, 500, f"500 on double-slash path")
+                self.bug(
+                    suite,
+                    f"dslash_{route}",
+                    method,
+                    route,
+                    500,
+                    f"500 on double-slash path",
+                )
             else:
-                self.ok(suite, f"dslash_{route}", method, route, resp.status_code, f"double-slash handled")
+                self.ok(
+                    suite,
+                    f"dslash_{route}",
+                    method,
+                    route,
+                    resp.status_code,
+                    f"double-slash handled",
+                )
 
         # Unicode paths
         unicode_routes = [
@@ -1239,9 +1953,18 @@ class Fuzzer:
             if resp is None:
                 self.error(suite, f"unicode_{route}", method, route, 0, "no response")
             elif resp.status_code == 500:
-                self.bug(suite, f"unicode_{route}", method, route, 500, "500 on unicode path")
+                self.bug(
+                    suite, f"unicode_{route}", method, route, 500, "500 on unicode path"
+                )
             else:
-                self.ok(suite, f"unicode_{route}", method, route, resp.status_code, "unicode path handled")
+                self.ok(
+                    suite,
+                    f"unicode_{route}",
+                    method,
+                    route,
+                    resp.status_code,
+                    "unicode path handled",
+                )
 
         # Method override headers
         override_headers = [
@@ -1254,19 +1977,48 @@ class Fuzzer:
             if resp is None:
                 self.error(suite, f"override_{name}", "GET", "/stats", 0, "no response")
             elif resp.status_code == 500:
-                self.bug(suite, f"override_{name}", "GET", "/stats", 500, f"500 on method override")
+                self.bug(
+                    suite,
+                    f"override_{name}",
+                    "GET",
+                    "/stats",
+                    500,
+                    f"500 on method override",
+                )
             elif resp.status_code < 400:
-                self.bug(suite, f"override_{name}", "GET", "/stats", resp.status_code,
-                         f"method override accepted: {name}={val}")
+                self.bug(
+                    suite,
+                    f"override_{name}",
+                    "GET",
+                    "/stats",
+                    resp.status_code,
+                    f"method override accepted: {name}={val}",
+                )
             else:
-                self.ok(suite, f"override_{name}", "GET", "/stats", resp.status_code, "override rejected")
+                self.ok(
+                    suite,
+                    f"override_{name}",
+                    "GET",
+                    "/stats",
+                    resp.status_code,
+                    "override rejected",
+                )
 
 
 # ── Runner ───────────────────────────────────────────────────────────────────
 
 ALL_SUITES = [
-    "methods", "auth", "path_traversal", "injection", "body",
-    "content_type", "ssrf", "boundary", "headers", "websocket", "error_handling",
+    "methods",
+    "auth",
+    "path_traversal",
+    "injection",
+    "body",
+    "content_type",
+    "ssrf",
+    "boundary",
+    "headers",
+    "websocket",
+    "error_handling",
 ]
 
 
@@ -1312,20 +2064,34 @@ def summary(f: Fuzzer):
             print(f"  \033[93m[???]\033[0m {i.method:7s} {i.url}  {i.detail}")
 
     # Write report
-    report_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fuzz_report.json")
+    report_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "fuzz_report.json"
+    )
     report = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "target": f.base,
         "total": total,
         "counts": {k.value: v for k, v in f.counts.items()},
         "bugs": [
-            {"suite": b.suite, "case": b.case, "method": b.method, "url": b.url,
-             "status": b.status_code, "detail": b.detail}
+            {
+                "suite": b.suite,
+                "case": b.case,
+                "method": b.method,
+                "url": b.url,
+                "status": b.status_code,
+                "detail": b.detail,
+            }
             for b in bugs
         ],
         "interesting": [
-            {"suite": i.suite, "case": i.case, "method": i.method, "url": i.url,
-             "status": i.status_code, "detail": i.detail}
+            {
+                "suite": i.suite,
+                "case": i.case,
+                "method": i.method,
+                "url": i.url,
+                "status": i.status_code,
+                "detail": i.detail,
+            }
             for i in interesting
         ],
     }
@@ -1336,19 +2102,32 @@ def summary(f: Fuzzer):
 
 def main():
     parser = argparse.ArgumentParser(description="Airlinkd Daemon Fuzzer")
-    parser.add_argument("--host", default="localhost", help="Daemon host (default: localhost)")
-    parser.add_argument("--port", type=int, default=3002, help="Daemon port (default: 3002)")
+    parser.add_argument(
+        "--host", default="localhost", help="Daemon host (default: localhost)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=3002, help="Daemon port (default: 3002)"
+    )
     parser.add_argument("--key", required=True, help="Daemon HMAC key")
-    parser.add_argument("--suite", choices=ALL_SUITES + ["all"], default="all",
-                        help="Fuzz suite to run (default: all)")
-    parser.add_argument("--container-id", default="test-container",
-                        help="Container ID for tests (default: test-container)")
+    parser.add_argument(
+        "--suite",
+        choices=ALL_SUITES + ["all"],
+        default="all",
+        help="Fuzz suite to run (default: all)",
+    )
+    parser.add_argument(
+        "--container-id",
+        default="test-container",
+        help="Container ID for tests (default: test-container)",
+    )
     args = parser.parse_args()
 
     f = Fuzzer(args.host, args.port, args.key)
     f.container_id = args.container_id
 
-    print(f"\033[96mAirlinkd Fuzzer\033[0m  target={f.base}  container={f.container_id}")
+    print(
+        f"\033[96mAirlinkd Fuzzer\033[0m  target={f.base}  container={f.container_id}"
+    )
 
     try:
         if args.suite == "all":

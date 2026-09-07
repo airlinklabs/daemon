@@ -48,6 +48,8 @@
   },
   "packageManager": "bun@1.4.0",
   "trustedDependencies": [
-    "protobufjs"
+    "cpu-features",
+    "protobufjs",
+    "ssh2"
   ]
 }

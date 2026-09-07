@@ -39,7 +39,7 @@ Clone and build:
 cd /etc/
 git clone https://github.com/AirlinkLabs/daemon.git
 cd daemon
-curl -fsSL https://bun.sh/install | bash -s "bun-v3.0.59
+curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.0"
 ```
 
 Set permissions:
@@ -80,11 +80,11 @@ bun run start
 
 The daemon reads its config from command-line arguments or environment variables:
 
-| Argument | Env Variable | Description |
-|----------|-------------|-------------|
-| `args[0]` | `remote` | Panel URL (e.g. `http://192.168.1.10:3000`) |
-| `args[1]` | `key` | Authentication key (must match the panel's node key) |
-| `args[2]` | `port` | Port to listen on (default: 3002) |
+| Argument  | Env Variable | Description                                          |
+| --------- | ------------ | ---------------------------------------------------- |
+| `args[0]` | `remote`     | Panel URL (e.g. `http://192.168.1.10:3000`)          |
+| `args[1]` | `key`        | Authentication key (must match the panel's node key) |
+| `args[2]` | `port`       | Port to listen on (default: 3002)                    |
 
 ## Security
 
@@ -106,16 +106,16 @@ A path traversal vulnerability (symlink + `path.join` bypass) was fixed in the f
 
 The daemon exposes 37 HTTP routes and 3 WebSocket endpoints. See the [API Specsheet](../panel/docs/specsheet.md#daemon-routes) for the complete route catalog.
 
-| Category | Endpoints | Description |
-|----------|-----------|-------------|
-| System | `GET /`, `GET /stats`, `GET /healthz` | Daemon identity, stats, health check |
-| Containers | 9 routes | Install, start, stop, kill, delete, status, stats, command |
-| Backups | 5 routes | Create, restore, delete, download, upload |
-| Filesystem | 13 routes | List, read, write, upload, download, zip, rename, etc. |
-| SFTP | 3 routes | Credentials create/revoke, status |
-| Minecraft | 1 route | Player list query |
-| Radar | 2 routes | Security scan, zip results |
-| WebSocket | 3 endpoints | Console, status, lifecycle events |
+| Category   | Endpoints                             | Description                                                |
+| ---------- | ------------------------------------- | ---------------------------------------------------------- |
+| System     | `GET /`, `GET /stats`, `GET /healthz` | Daemon identity, stats, health check                       |
+| Containers | 9 routes                              | Install, start, stop, kill, delete, status, stats, command |
+| Backups    | 5 routes                              | Create, restore, delete, download, upload                  |
+| Filesystem | 13 routes                             | List, read, write, upload, download, zip, rename, etc.     |
+| SFTP       | 3 routes                              | Credentials create/revoke, status                          |
+| Minecraft  | 1 route                               | Player list query                                          |
+| Radar      | 2 routes                              | Security scan, zip results                                 |
+| WebSocket  | 3 endpoints                           | Console, status, lifecycle events                          |
 
 ## Development
 
