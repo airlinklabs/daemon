@@ -278,5 +278,5 @@ jobs:
             ### Checksums (SHA-256)
             See `SHA256SUMS.txt` in the release assets.
           files: dist/*
-          draft: ${{ inputs.draft || false }}
-          prerelease: ${{ inputs.prerelease || false }}
+          draft: ${{ github.event.inputs.draft == 'true' }}
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
