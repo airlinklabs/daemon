@@ -10,8 +10,6 @@ permissions:
 
 jobs:
   # ── Check if minor version changed ───────────────────────────────────────────
-  # Compare package.json version against latest release tag.
-  # Only build when the minor version (x.Y.z) differs.
 
   check:
     name: Check version
@@ -19,11 +17,10 @@ jobs:
     outputs:
       should_build: ${{ steps.compare.outputs.should_build }}
       version: ${{ steps.current.outputs.version }}
-      latest: ${{ steps.compare.outputs.latest }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # need tags
+          fetch-depth: 0
 
       - name: Get current version from package.json
         id: current
@@ -49,7 +46,7 @@ jobs:
           CURRENT="${{ steps.current.outputs.version }}"
           LATEST="${{ steps.latest.outputs.latest }}"
 
-          CUR_MINOR=$(echo "$CURRENT" | cut -d. -f2)
+          CUR_MINOR=$(echo "${CURRENT#v}" | cut -d. -f2)
           LATEST_MINOR=$(echo "$LATEST" | cut -d. -f2)
 
           echo "Current minor: $CUR_MINOR"

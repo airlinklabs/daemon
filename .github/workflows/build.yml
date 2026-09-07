@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g. v3.1.0)"
-        required: true
+        description: "Release version (e.g. v3.1.0). Leave empty to use package.json version."
+        required: false
         type: string
       prerelease:
         description: "Mark as pre-release"
@@ -20,7 +20,7 @@ on:
   workflow_call:
     inputs:
       version:
-        required: true
+        required: false
         type: string
       prerelease:
         required: false
@@ -33,16 +33,84 @@ on:
     secrets:
       GITHUB_TOKEN:
         required: false
+  push:
+    branches: [main]
+    paths:
+      - "package.json"
 
 permissions:
   contents: read
 
 jobs:
+  # ── Resolve version ──────────────────────────────────────────────────────────
+  # Determine version + whether to build. Works for all trigger types.
+
+  resolve:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should_build: ${{ steps.decide.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        run: |
+          # Priority: input > package.json
+          INPUT_VERSION="${{ inputs.version }}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+            echo "Using input version: $VERSION"
+          else
+            VERSION="v${PKG_VERSION}"
+            echo "Using package.json version: $VERSION"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to build
+        id: decide
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TRIGGER="${{ github.event_name }}"
+
+          # Manual / called workflows always build
+          if [ "$TRIGGER" = "workflow_dispatch" ] || [ "$TRIGGER" = "workflow_call" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "Build: yes (manual/call trigger)"
+            exit 0
+          fi
+
+          # Push trigger: only build if major version changed
+          CURRENT="${VERSION#v}"
+          CUR_MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+
+          LATEST=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | sed 's/^v//')
+          if [ -z "$LATEST" ]; then
+            LATEST="0.0.0"
+          fi
+          LATEST_MAJOR=$(echo "$LATEST" | cut -d. -f1)
+
+          echo "Current major: $CUR_MAJOR | Latest major: $LATEST_MAJOR"
+
+          if [ "$CUR_MAJOR" != "$LATEST_MAJOR" ]; then
+            echo "Major version changed ($LATEST_MAJOR → $CUR_MAJOR) — will build"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Major version unchanged ($CUR_MAJOR) — skipping"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # ── Pre-flight checks ───────────────────────────────────────────────────────
-  # Validate code before burning build minutes.
 
   preflight:
     name: Preflight
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,9 +125,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Verify version format
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${{ needs.resolve.outputs.version }}"
           if [[ ! "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
-            echo "::error::Invalid version format: $VERSION (expected e.g. v3.1.0 or 3.1.0-beta.1)"
+            echo "::error::Invalid version format: $VERSION"
             exit 1
           fi
       - name: Verify embedded assets
@@ -77,7 +145,8 @@ jobs:
 
   build:
     name: build ${{ matrix.platform }}-${{ matrix.arch }}
-    needs: preflight
+    needs: [resolve, preflight]
+    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -122,34 +191,31 @@ jobs:
         if: ${{ !matrix.windows }}
         run: |
           cd dist
-          zip "airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}.zip" airlinkd-*
+          zip "airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ needs.resolve.outputs.version }}.zip" airlinkd-*
 
       - name: Zip binaries (Windows)
         if: ${{ matrix.windows }}
         shell: pwsh
         run: |
           cd dist
-          Compress-Archive -Path airlinkd-* -DestinationPath "airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}.zip"
+          Compress-Archive -Path airlinkd-* -DestinationPath "airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ needs.resolve.outputs.version }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.event.inputs.version }}
+          name: airlinkd-${{ matrix.platform }}-${{ matrix.arch }}-${{ needs.resolve.outputs.version }}
           path: dist/*.zip
           if-no-files-found: error
 
-  # ── Checksums & manifest ────────────────────────────────────────────────────
-  # Generate release manifest and SHA-256 checksums after all binaries build.
+  # ── Checksums ────────────────────────────────────────────────────────────────
 
   manifest:
     name: Release manifest
-    needs: build
+    needs: [resolve, build]
+    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.0
       - uses: actions/download-artifact@v4
         with:
           path: artifacts/
@@ -165,7 +231,7 @@ jobs:
       - name: Upload checksums
         uses: actions/upload-artifact@v4
         with:
-          name: checksums-${{ github.event.inputs.version }}
+          name: checksums-${{ needs.resolve.outputs.version }}
           path: artifacts/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -173,7 +239,8 @@ jobs:
 
   release:
     name: Create release
-    needs: [build, manifest]
+    needs: [resolve, build, manifest]
+    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -189,10 +256,10 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: ${{ github.event.inputs.version }}
+          tag_name: ${{ needs.resolve.outputs.version }}
+          name: ${{ needs.resolve.outputs.version }}
           body: |
-            ## AirlinkD ${{ github.event.inputs.version }}
+            ## AirlinkD ${{ needs.resolve.outputs.version }}
 
             Self-contained binary — the daemon CLI. Run with a command:
 
@@ -203,19 +270,13 @@ jobs:
 
             | Platform | Architecture | Download |
             |----------|-------------|---------|
-            | Linux | x64 | `airlinkd-linux-x64-${{ github.event.inputs.version }}.zip` |
-            | Linux | arm64 | `airlinkd-linux-arm64-${{ github.event.inputs.version }}.zip` |
-            | macOS | arm64 (Apple Silicon) | `airlinkd-macos-arm64-${{ github.event.inputs.version }}.zip` |
-            | Windows | x64 | `airlinkd-windows-x64-${{ github.event.inputs.version }}.zip` |
+            | Linux | x64 | `airlinkd-linux-x64-${{ needs.resolve.outputs.version }}.zip` |
+            | Linux | arm64 | `airlinkd-linux-arm64-${{ needs.resolve.outputs.version }}.zip` |
+            | macOS | arm64 (Apple Silicon) | `airlinkd-macos-arm64-${{ needs.resolve.outputs.version }}.zip` |
+            | Windows | x64 | `airlinkd-windows-x64-${{ needs.resolve.outputs.version }}.zip` |
 
             ### Checksums (SHA-256)
             See `SHA256SUMS.txt` in the release assets.
-
-            ### Changelog
-            <!-- Add changelog notes here before publishing -->
-
-            ### Notes
-            <!-- Add any additional notes, breaking changes, or upgrade instructions here -->
           files: dist/*
-          draft: ${{ github.event.inputs.draft }}
-          prerelease: ${{ github.event.inputs.prerelease }}
+          draft: ${{ inputs.draft || false }}
+          prerelease: ${{ inputs.prerelease || false }}
