@@ -47,7 +47,9 @@ jobs:
             exit 1
           fi
       - name: Verify embedded assets
-        run: bun run generate-embedded:check
+        run: |
+          bun run format
+          bun run generate-embedded:check
       - name: Typecheck
         run: bun run typecheck
       - name: Lint
