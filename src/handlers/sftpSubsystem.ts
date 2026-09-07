@@ -4,7 +4,6 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  openSync,
   readdirSync,
   readSync,
   realpathSync,
@@ -17,6 +16,7 @@ import {
 import { dirname, join, sep } from 'node:path';
 import type { Attributes, FileEntry, SFTPWrapper } from 'ssh2';
 import { jailPath } from '../security/pathJail';
+import { secureOpenAppend, secureOpenRead, secureOpenReadWrite, secureOpenWrite } from '../security/secureOpen';
 import type { NativeSftpSession, SftpActivityEvent } from './sftpAuth';
 import { recordActivity } from './sftpAuth';
 
@@ -63,7 +63,14 @@ export function rooted(base: string, remote: string): string {
 }
 
 function toAttributes(st: unknown): Attributes {
-  const t = st as { mode: number; uid: number; gid: number; size: number; atimeMs: number; mtimeMs: number };
+  const t = st as {
+    mode: number;
+    uid: number;
+    gid: number;
+    size: number;
+    atimeMs: number;
+    mtimeMs: number;
+  };
   return {
     mode: t.mode,
     uid: t.uid,
@@ -83,7 +90,13 @@ function perms(mode: number): string {
 }
 
 function longName(filename: string, st: unknown): string {
-  const t = st as { isDirectory(): boolean; isSymbolicLink(): boolean; mode: number; size: number; mtimeMs: number };
+  const t = st as {
+    isDirectory(): boolean;
+    isSymbolicLink(): boolean;
+    mode: number;
+    size: number;
+    mtimeMs: number;
+  };
   const type = t.isDirectory() ? 'd' : t.isSymbolicLink() ? 'l' : '-';
   const date = new Date(t.mtimeMs)
     .toISOString()
@@ -141,10 +154,19 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
       if (wantsCreate) {
         mkdirSync(dirname(full), { recursive: true });
       }
-      const fd = openSync(full, mode, 0o644);
+      let result: { fd: number; path: string };
+      if (wantsAppend) {
+        result = secureOpenAppend(root, remote);
+      } else if (wantsWrite || wantsTrunc || wantsCreate) {
+        result = secureOpenWrite(root, remote);
+      } else if (mode === 'r+') {
+        result = secureOpenReadWrite(root, remote);
+      } else {
+        result = secureOpenRead(root, remote);
+      }
       const st = statSync(full);
       const key = randomBytes(16).toString('hex');
-      openFiles.set(key, { fd, path: full, size: st.size });
+      openFiles.set(key, { fd: result.fd, path: full, size: st.size });
       sessionOpenFiles.add(key);
       sftp.handle(reqId, Buffer.from(key, 'hex'));
     } catch (err) {
@@ -167,7 +189,12 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     try {
       const got = readSync(state.fd, buf, 0, n, offset);
       sftp.data(reqId, buf.subarray(0, got));
-      emit({ kind: 'read', username: session.username, path: relOf(root, state.path), bytes: got });
+      emit({
+        kind: 'read',
+        username: session.username,
+        path: relOf(root, state.path),
+        bytes: got,
+      });
     } catch (err) {
       sftp.status(reqId, toStatus(err));
     }
@@ -183,7 +210,12 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
       writeSync(state.fd, data, 0, data.length, offset);
       const n = Math.max(state.size, offset + data.length);
       state.size = n;
-      emit({ kind: 'write', username: session.username, path: relOf(root, state.path), bytes: data.length });
+      emit({
+        kind: 'write',
+        username: session.username,
+        path: relOf(root, state.path),
+        bytes: data.length,
+      });
       sftp.status(reqId, OK);
     } catch (err) {
       sftp.status(reqId, toStatus(err));
@@ -261,10 +293,18 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     for (const filename of batch) {
       try {
         const st = statSync(join(state.full, filename));
-        entries.push({ filename, longname: longName(filename, st), attrs: toAttributes(st) });
+        entries.push({
+          filename,
+          longname: longName(filename, st),
+          attrs: toAttributes(st),
+        });
       } catch {}
     }
-    emit({ kind: 'readdir', username: session.username, path: relOf(root, state.full) });
+    emit({
+      kind: 'readdir',
+      username: session.username,
+      path: relOf(root, state.full),
+    });
     if (state.names.length === 0) dirHandles.delete(key);
     sftp.name(reqId, entries);
   });
@@ -315,7 +355,11 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     }
     try {
       unlinkSync(full);
-      emit({ kind: 'remove', username: session.username, path: relOf(root, full) });
+      emit({
+        kind: 'remove',
+        username: session.username,
+        path: relOf(root, full),
+      });
       sftp.status(reqId, OK);
     } catch (err) {
       sftp.status(reqId, toStatus(err));
@@ -348,7 +392,11 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     }
     try {
       mkdirSync(full, { recursive: false });
-      emit({ kind: 'mkdir', username: session.username, path: relOf(root, full) });
+      emit({
+        kind: 'mkdir',
+        username: session.username,
+        path: relOf(root, full),
+      });
       sftp.status(reqId, OK);
     } catch (err) {
       sftp.status(reqId, toStatus(err));
@@ -368,7 +416,12 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     try {
       if (existsSync(to)) unlinkSync(to);
       renameSync(from, to);
-      emit({ kind: 'rename', username: session.username, from: relOf(root, from), to: relOf(root, to) });
+      emit({
+        kind: 'rename',
+        username: session.username,
+        from: relOf(root, from),
+        to: relOf(root, to),
+      });
       sftp.status(reqId, OK);
     } catch (err) {
       sftp.status(reqId, toStatus(err));

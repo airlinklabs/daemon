@@ -168,7 +168,9 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
         ws.send(
           JSON.stringify({
             event: 'error',
-            data: { message: `command not sent: ${err instanceof Error ? err.message : 'unknown error'}` },
+            data: {
+              message: `command not sent: ${err instanceof Error ? err.message : 'unknown error'}`,
+            },
           }),
         );
       }
@@ -178,8 +180,11 @@ export function wsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): vo
 }
 
 export function wsClose(ws: ServerWebSocket<WsData>, _code: number, _reason: string): void {
-  openWsCount = Math.max(0, openWsCount - 1);
-  openConnections.delete(ws);
+  // Only decrement if this connection was actually registered (avoids drift from rejected connections)
+  if (openConnections.has(ws)) {
+    openWsCount = Math.max(0, openWsCount - 1);
+    openConnections.delete(ws);
+  }
   clearAuthTimer(ws);
 
   if (ws.data.timer) {

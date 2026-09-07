@@ -108,7 +108,7 @@ export async function listDir(id: string, relativePath = '/', filter?: string): 
   const filtered = filter ? results.filter((i) => i.name.includes(filter)) : results;
   const limited = filtered.slice(0, 256);
   rateData.cache = limited;
-  return filtered;
+  return limited;
 }
 
 export async function getDirSizeForId(id: string, relativePath = '/'): Promise<number> {
@@ -175,7 +175,10 @@ export async function fetchPublicUrl(rawUrl: string, signal: AbortSignal): Promi
   let current = rawUrl;
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
     const safeUrl = await validatePublicUrl(current);
-    const response = await fetch(safeUrl.toString(), { redirect: 'manual', signal });
+    const response = await fetch(safeUrl.toString(), {
+      redirect: 'manual',
+      signal,
+    });
 
     if (
       response.status === 301 ||
@@ -248,9 +251,11 @@ export async function copyIntoVolume(id: string, sourcePath: string, destRelativ
     await mkdir(destPath, { recursive: true });
     const entries = await readdir(sourcePath, { withFileTypes: true });
     for (const e of entries) {
+      // Skip symlinks to prevent reading files outside the volume
+      if (e.isSymbolicLink()) continue;
       await copyIntoVolume(id, join(sourcePath, e.name), join(destRelative, e.name));
     }
-  } else {
+  } else if (!s.isSymbolicLink()) {
     await mkdir(dirname(destPath), { recursive: true });
     await copyFile(sourcePath, destPath);
   }

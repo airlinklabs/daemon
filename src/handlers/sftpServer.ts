@@ -97,7 +97,11 @@ export async function startNativeSftpServer(): Promise<void> {
           const sftp = sftpAccept();
           const root = volumePathFor(session.serverId);
           client.on('close', () => {
-            const ev = { kind: 'disconnect' as const, serverId: session.serverId, username: session.username };
+            const ev = {
+              kind: 'disconnect' as const,
+              serverId: session.serverId,
+              username: session.username,
+            };
             recordActivity(ev);
             session.hook?.(ev);
           });
@@ -134,7 +138,7 @@ export async function startNativeSftpServer(): Promise<void> {
 }
 
 // periodic cleanup of expired sessions
-setInterval(() => {
+const cleanupInterval = setInterval(() => {
   const now = Date.now();
   for (const [user, session] of sessions) {
     if (session.expiresAt <= now) {
@@ -143,3 +147,4 @@ setInterval(() => {
     }
   }
 }, SESSION_CLEANUP_INTERVAL_MS);
+cleanupInterval.unref?.();

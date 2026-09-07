@@ -11,6 +11,7 @@ import { join } from 'node:path';
 const isLinux = process.platform === 'linux';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// biome-ignore lint/suspicious/noExplicitAny: FFI libc handle is inherently untyped
 let libc: any = null;
 let libcLoaded = false;
 
@@ -44,6 +45,8 @@ const RESOLVE_NO_SYMLINKS = 0x04;
 const O_WRONLY = constants.O_WRONLY ?? 1;
 const O_CREAT = constants.O_CREAT ?? 64;
 const O_TRUNC = constants.O_TRUNC ?? 512;
+const O_APPEND = constants.O_APPEND ?? 1024;
+const O_RDWR = constants.O_RDWR ?? 2;
 
 // Linux errno values
 const ENOSYS = 38; // kernel doesn't support openat2
@@ -135,6 +138,64 @@ export function secureOpenWrite(base: string, relative: string): SecureOpenResul
   // Fallback
   const O_NOFOLLOW = 0x100000;
   const fd = openSync(full, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0o644);
+  return { fd, path: full };
+}
+
+/**
+ * Atomically open a file for appending without following symlinks.
+ * Uses openat2 with RESOLVE_NO_SYMLINKS on Linux.
+ */
+export function secureOpenAppend(base: string, relative: string): SecureOpenResult {
+  const full = join(base, relative);
+
+  if (isLinux) {
+    const flags = O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC;
+    const how = buildOpenHow(flags, 0o644, RESOLVE_NO_SYMLINKS);
+    const fd = openat2Syscall(AT_FDCWD, full, how);
+    if (fd >= 0) return { fd, path: full };
+
+    const errno = -fd;
+    if (errno === ELOOP) {
+      throw new Error(`symlink detected in path: ${relative}`);
+    }
+    if (errno === ENOSYS || errno === 1) {
+      // fall through
+    } else {
+      throw new Error(`openat2 failed for ${relative} (errno ${errno})`);
+    }
+  }
+
+  const O_NOFOLLOW = 0x100000;
+  const fd = openSync(full, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0o644);
+  return { fd, path: full };
+}
+
+/**
+ * Atomically open a file for read-write without following symlinks.
+ * Uses openat2 with RESOLVE_NO_SYMLINKS on Linux.
+ */
+export function secureOpenReadWrite(base: string, relative: string): SecureOpenResult {
+  const full = join(base, relative);
+
+  if (isLinux) {
+    const flags = O_RDWR | O_CLOEXEC;
+    const how = buildOpenHow(flags, 0, RESOLVE_NO_SYMLINKS);
+    const fd = openat2Syscall(AT_FDCWD, full, how);
+    if (fd >= 0) return { fd, path: full };
+
+    const errno = -fd;
+    if (errno === ELOOP) {
+      throw new Error(`symlink detected in path: ${relative}`);
+    }
+    if (errno === ENOSYS || errno === 1) {
+      // fall through
+    } else {
+      throw new Error(`openat2 failed for ${relative} (errno ${errno})`);
+    }
+  }
+
+  const O_NOFOLLOW = 0x100000;
+  const fd = openSync(full, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
   return { fd, path: full };
 }
 

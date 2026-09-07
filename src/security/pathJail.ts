@@ -178,6 +178,9 @@ export function secureUnlink(base: string, relative: string): void {
   } finally {
     closeSync(fd);
   }
+  // Note: small TOCTOU window between fd close and unlinkSync.
+  // unlinkat(2) would be fully atomic but isn't exposed via Bun FFI.
+  // The openat2 RESOLVE_NO_SYMLINKS check above prevents symlink-based races.
   unlinkSync(safePath);
 }
 

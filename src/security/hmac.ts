@@ -84,7 +84,7 @@ export async function verifyHmac(req: Request, key: string, routeKey: string): P
   const versionHeader = req.headers.get('x-airlink-payload-version');
 
   if (!tsHeader || !sigHeader) {
-    if (Bun.env.REQUIRE_HMAC === 'false') {
+    if (!config.requireHmac) {
       // In development mode only: allow unsigned requests from loopback.
       // Production must NEVER set REQUIRE_HMAC=false.
       const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? req.headers.get('x-real-ip') ?? '';

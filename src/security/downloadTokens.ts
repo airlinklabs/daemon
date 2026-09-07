@@ -64,7 +64,7 @@ export function consumeDownloadToken(token: string): DownloadToken | null {
   if (!entry) return null;
   tokens.delete(token);
   if (entry.expiresAt < Date.now()) {
-    logger.warn(`expired download token used: ${token}`);
+    logger.warn(`expired download token used: ${token.slice(0, 8)}...`);
     return null;
   }
   return entry;

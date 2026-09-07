@@ -387,7 +387,14 @@ export async function handleHttpRequest(req: Request, server: ReturnType<typeof 
   const behindProxy = Bun.env.BEHIND_PROXY === 'true';
   effectiveIp = socketIp;
   if (behindProxy) {
-    if (isPrivateIp(socketIp)) {
+    const trustedProxies = (Bun.env.TRUSTED_PROXY_IPS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (trustedProxies.length > 0 && trustedProxies.includes(socketIp)) {
+      effectiveIp = req.headers.get('x-forwarded-for')?.split(',')[0].trim() || socketIp;
+    } else if (trustedProxies.length === 0 && isPrivateIp(socketIp)) {
+      // Legacy fallback: trust any private IP when no explicit list configured
       effectiveIp = req.headers.get('x-forwarded-for')?.split(',')[0].trim() || socketIp;
     } else {
       logger.warn(`BEHIND_PROXY=true but ${socketIp} is not a trusted proxy`);
