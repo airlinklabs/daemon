@@ -218,7 +218,6 @@ function generateEmbeddedCode(files: string[]): string {
 //
 // Generator: build.ts generate-embedded
 // Bun version: ${BUN_VERSION}
-// Git commit: ${getGitCommit()}
 
 export interface EmbeddedAsset {
   path: string;
