@@ -1,18 +1,27 @@
 // Owned operation manager for detached install/reinstall operations.
 
-import config from '../config';
-import logger from '../logger';
-import { emit } from '../ws/events';
-import { setServerState } from './installState';
+import config from "../config";
+import {
+  SHUTDOWN_OPERATIONS_TIMEOUT_MS,
+  SHUTDOWN_POLL_INTERVAL_MS,
+} from "../config/timeouts";
+import { MAX_CONCURRENT_OPERATIONS } from "../config/limits";
+import logger from "../logger";
+import { emit } from "../ws/events";
+import { setServerState } from "./installState";
 
-export type OperationKind = 'install' | 'reinstall';
+export type OperationKind = "install" | "reinstall";
 
-async function reportInstallStatus(id: string, status: 'installed' | 'failed', error?: string): Promise<void> {
+async function reportInstallStatus(
+  id: string,
+  status: "installed" | "failed",
+  error?: string,
+): Promise<void> {
   try {
     const url = `http://${config.remote}/api/daemon/install/status`;
     await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, status, error: error ?? null }),
     });
   } catch (err) {
@@ -23,7 +32,7 @@ async function reportInstallStatus(id: string, status: 'installed' | 'failed', e
 export interface Operation {
   id: string;
   kind: OperationKind;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   startedAt: string;
   completedAt?: string;
   error?: string;
@@ -33,7 +42,7 @@ export interface Operation {
   work: (signal: AbortSignal) => Promise<void>;
 }
 
-const MAX_CONCURRENT = 4;
+const MAX_CONCURRENT = MAX_CONCURRENT_OPERATIONS;
 
 const operations = new Map<string, Operation>();
 const running = new Set<string>(); // operation IDs currently executing
@@ -45,7 +54,8 @@ function opKey(kind: OperationKind, id: string): string {
 
 function containerBusy(id: string): boolean {
   for (const op of operations.values()) {
-    if (op.id === id && (op.status === 'pending' || op.status === 'running')) return true;
+    if (op.id === id && (op.status === "pending" || op.status === "running"))
+      return true;
   }
   return false;
 }
@@ -71,7 +81,7 @@ export function enqueueOperation(
   const op: Operation = {
     id: containerId,
     kind,
-    status: 'pending',
+    status: "pending",
     startedAt: new Date().toISOString(),
     abort,
     work,
@@ -93,9 +103,9 @@ function processQueue(): void {
     const key = waitQueue.shift();
     if (!key) break;
     const op = operations.get(key);
-    if (op?.status !== 'pending') continue;
+    if (op?.status !== "pending") continue;
 
-    op.status = 'running';
+    op.status = "running";
     running.add(key);
     executeOperation(op).finally(() => {
       running.delete(key);
@@ -108,28 +118,34 @@ async function executeOperation(op: Operation): Promise<void> {
   const key = opKey(op.kind, op.id);
   try {
     await op.work(op.abort.signal);
-    op.status = 'completed';
+    op.status = "completed";
     op.completedAt = new Date().toISOString();
-    await setServerState(op.id, 'installed').catch((err) => {
-      logger.error(`operation manager: failed to set installed state for ${op.id}`, err);
+    await setServerState(op.id, "installed").catch((err) => {
+      logger.error(
+        `operation manager: failed to set installed state for ${op.id}`,
+        err,
+      );
     });
-    emit(op.id, { type: 'installed', message: 'installation complete' });
-    await reportInstallStatus(op.id, 'installed');
+    emit(op.id, { type: "installed", message: "installation complete" });
+    await reportInstallStatus(op.id, "installed");
     logger.info(`operation ${op.kind} completed for ${op.id}`);
   } catch (err) {
     if (op.abort.signal.aborted) {
-      op.status = 'cancelled';
-      op.error = 'cancelled';
+      op.status = "cancelled";
+      op.error = "cancelled";
     } else {
-      op.status = 'failed';
+      op.status = "failed";
       op.error = err instanceof Error ? err.message : String(err);
     }
     op.completedAt = new Date().toISOString();
-    await setServerState(op.id, 'failed', op.error).catch((err) => {
-      logger.error(`operation manager: failed to set failed state for ${op.id}`, err);
+    await setServerState(op.id, "failed", op.error).catch((err) => {
+      logger.error(
+        `operation manager: failed to set failed state for ${op.id}`,
+        err,
+      );
     });
-    emit(op.id, { type: 'error', message: op.error ?? 'install failed' });
-    await reportInstallStatus(op.id, 'failed', op.error);
+    emit(op.id, { type: "error", message: op.error ?? "install failed" });
+    await reportInstallStatus(op.id, "failed", op.error);
     logger.error(`operation ${op.kind} failed for ${op.id}: ${op.error}`);
   } finally {
     operations.delete(key);
@@ -141,20 +157,23 @@ async function executeOperation(op: Operation): Promise<void> {
  * cancellation was requested (the abort signal fires, and the operation will
  * clean up asynchronously).
  */
-export function cancelOperation(kind: OperationKind, containerId: string): boolean {
+export function cancelOperation(
+  kind: OperationKind,
+  containerId: string,
+): boolean {
   const key = opKey(kind, containerId);
   const op = operations.get(key);
   if (!op) return false;
 
-  if (op.status === 'pending') {
-    op.status = 'cancelled';
+  if (op.status === "pending") {
+    op.status = "cancelled";
     operations.delete(key);
     const idx = waitQueue.indexOf(key);
     if (idx !== -1) waitQueue.splice(idx, 1);
     return true;
   }
 
-  if (op.status === 'running') {
+  if (op.status === "running") {
     op.abort.abort();
     return true;
   }
@@ -165,19 +184,24 @@ export function cancelOperation(kind: OperationKind, containerId: string): boole
 /**
  * Get the current status of an operation for a container.
  */
-export function getOperation(kind: OperationKind, containerId: string): Operation | undefined {
+export function getOperation(
+  kind: OperationKind,
+  containerId: string,
+): Operation | undefined {
   return operations.get(opKey(kind, containerId));
 }
 
 /**
  * Cancel all operations and wait for running ones to finish (shutdown path).
  */
-export async function shutdownOperations(timeoutMs = 10_000): Promise<void> {
+export async function shutdownOperations(
+  timeoutMs = SHUTDOWN_OPERATIONS_TIMEOUT_MS,
+): Promise<void> {
   // Cancel all pending operations
   for (const key of waitQueue) {
     const op = operations.get(key);
     if (op) {
-      op.status = 'cancelled';
+      op.status = "cancelled";
       operations.delete(key);
     }
   }
@@ -192,10 +216,12 @@ export async function shutdownOperations(timeoutMs = 10_000): Promise<void> {
   // Wait for in-flight operations to settle
   const deadline = Date.now() + timeoutMs;
   while (running.size > 0 && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, SHUTDOWN_POLL_INTERVAL_MS));
   }
 
   if (running.size > 0) {
-    logger.warn(`${running.size} operations did not finish within ${timeoutMs}ms shutdown timeout`);
+    logger.warn(
+      `${running.size} operations did not finish within ${timeoutMs}ms shutdown timeout`,
+    );
   }
 }

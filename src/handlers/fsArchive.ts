@@ -1,10 +1,10 @@
-import { existsSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
-import { readdir, rename, writeFile } from 'node:fs/promises';
-import { basename, dirname, extname, join, sep } from 'node:path';
-import { extract as tarExtract, list as tarList } from 'tar';
-import config from '../config';
-import { getPaths } from '../paths';
-import { jailPath, secureWriteFile } from '../security/pathJail';
+import { existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { readdir, rename, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, sep } from "node:path";
+import { extract as tarExtract, list as tarList } from "tar";
+import config from "../config";
+import { getPaths } from "../paths";
+import { jailPath, secureWriteFile } from "../security/pathJail";
 
 function volumeRoot(id: string): string {
   return join(getPaths(config.paths).volumesRoot, id);
@@ -14,40 +14,56 @@ function assertSafeArchiveEntry(entry: string, archiveName: string): void {
   if (entry.length === 0) {
     throw new Error(`archive ${archiveName} contains an empty entry name`);
   }
-  if (entry.includes('\\')) {
-    throw new Error(`archive ${archiveName} contains a backslash entry name: ${entry}`);
+  if (entry.includes("\\")) {
+    throw new Error(
+      `archive ${archiveName} contains a backslash entry name: ${entry}`,
+    );
   }
-  if (entry.startsWith('/')) {
-    throw new Error(`archive ${archiveName} contains an absolute path entry: ${entry}`);
+  if (entry.startsWith("/")) {
+    throw new Error(
+      `archive ${archiveName} contains an absolute path entry: ${entry}`,
+    );
   }
-  for (const segment of entry.split('/')) {
-    if (segment === '..') {
-      throw new Error(`archive ${archiveName} contains a path traversal entry: ${entry}`);
+  for (const segment of entry.split("/")) {
+    if (segment === "..") {
+      throw new Error(
+        `archive ${archiveName} contains a path traversal entry: ${entry}`,
+      );
     }
   }
 }
 
-async function listArchiveMembers(kind: 'zip' | 'rar' | '7z', archivePath: string): Promise<string[]> {
-  if (kind === '7z') {
+async function listArchiveMembers(
+  kind: "zip" | "rar" | "7z",
+  archivePath: string,
+): Promise<string[]> {
+  if (kind === "7z") {
     // -slt gives machine-readable output with "Path = <name>" lines
-    const proc = Bun.spawn(['7z', 'l', '-ba', '-slt', archivePath], { stdout: 'pipe', stderr: 'pipe' });
+    const proc = Bun.spawn(["7z", "l", "-ba", "-slt", archivePath], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
     const [code, stdout, stderr] = await Promise.all([
       proc.exited,
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
     ]);
-    if (code !== 0) throw new Error(`7z listing failed (exit ${code}): ${stderr.trim()}`);
+    if (code !== 0)
+      throw new Error(`7z listing failed (exit ${code}): ${stderr.trim()}`);
     const paths: string[] = [];
-    for (const line of stdout.split('\n')) {
+    for (const line of stdout.split("\n")) {
       const m = line.match(/^Path = (.+)$/);
-      if (m) paths.push(m[1].trim());
+      if (m) paths.push(m[1]!.trim());
     }
     return paths;
   }
 
-  const argv = kind === 'zip' ? ['unzip', '-Z1', archivePath] : ['unrar', 'lb', archivePath];
+  const argv =
+    kind === "zip"
+      ? ["unzip", "-Z1", archivePath]
+      : ["unrar", "lb", archivePath];
 
-  const proc = Bun.spawn(argv, { stdout: 'pipe', stderr: 'pipe' });
+  const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
   const [code, stdout, stderr] = await Promise.all([
     proc.exited,
     new Response(proc.stdout).text(),
@@ -57,10 +73,13 @@ async function listArchiveMembers(kind: 'zip' | 'rar' | '7z', archivePath: strin
     throw new Error(`${kind} listing failed (exit ${code}): ${stderr.trim()}`);
   }
 
-  return stdout.split('\n').filter((line) => line.length > 0);
+  return stdout.split("\n").filter((line) => line.length > 0);
 }
 
-async function extractTar(archivePath: string, extractPath: string): Promise<void> {
+async function extractTar(
+  archivePath: string,
+  extractPath: string,
+): Promise<void> {
   const members: string[] = [];
   await tarList({
     file: archivePath,
@@ -72,14 +91,17 @@ async function extractTar(archivePath: string, extractPath: string): Promise<voi
   await tarExtract({ file: archivePath, cwd: extractPath });
 }
 
-async function extractZip(archivePath: string, extractPath: string): Promise<void> {
+async function extractZip(
+  archivePath: string,
+  extractPath: string,
+): Promise<void> {
   const archiveName = basename(archivePath);
-  const members = await listArchiveMembers('zip', archivePath);
+  const members = await listArchiveMembers("zip", archivePath);
   for (const member of members) assertSafeArchiveEntry(member, archiveName);
 
-  const proc = Bun.spawn(['unzip', '-o', archivePath, '-d', extractPath], {
-    stdout: 'pipe',
-    stderr: 'pipe',
+  const proc = Bun.spawn(["unzip", "-o", archivePath, "-d", extractPath], {
+    stdout: "pipe",
+    stderr: "pipe",
   });
   const code = await proc.exited;
   if (code !== 0) {
@@ -88,14 +110,17 @@ async function extractZip(archivePath: string, extractPath: string): Promise<voi
   }
 }
 
-async function extractRar(archivePath: string, extractPath: string): Promise<void> {
+async function extractRar(
+  archivePath: string,
+  extractPath: string,
+): Promise<void> {
   const archiveName = basename(archivePath);
-  const members = await listArchiveMembers('rar', archivePath);
+  const members = await listArchiveMembers("rar", archivePath);
   for (const member of members) assertSafeArchiveEntry(member, archiveName);
 
-  const proc = Bun.spawn(['unrar', 'x', archivePath, extractPath], {
-    stdout: 'pipe',
-    stderr: 'pipe',
+  const proc = Bun.spawn(["unrar", "x", archivePath, extractPath], {
+    stdout: "pipe",
+    stderr: "pipe",
   });
   const code = await proc.exited;
   if (code !== 0) {
@@ -104,14 +129,17 @@ async function extractRar(archivePath: string, extractPath: string): Promise<voi
   }
 }
 
-async function extract7z(archivePath: string, extractPath: string): Promise<void> {
+async function extract7z(
+  archivePath: string,
+  extractPath: string,
+): Promise<void> {
   const archiveName = basename(archivePath);
-  const members = await listArchiveMembers('7z', archivePath);
+  const members = await listArchiveMembers("7z", archivePath);
   for (const member of members) assertSafeArchiveEntry(member, archiveName);
 
-  const proc = Bun.spawn(['7z', 'x', archivePath, `-o${extractPath}`], {
-    stdout: 'pipe',
-    stderr: 'pipe',
+  const proc = Bun.spawn(["7z", "x", archivePath, `-o${extractPath}`], {
+    stdout: "pipe",
+    stderr: "pipe",
   });
   const code = await proc.exited;
   if (code !== 0) {
@@ -120,7 +148,9 @@ async function extract7z(archivePath: string, extractPath: string): Promise<void
   }
 }
 
-async function assertExtractionStayedInside(extractPath: string): Promise<void> {
+async function assertExtractionStayedInside(
+  extractPath: string,
+): Promise<void> {
   const base = realpathSync(extractPath);
   const stack = [base];
   const visited = new Set<string>();
@@ -131,7 +161,9 @@ async function assertExtractionStayedInside(extractPath: string): Promise<void> 
     depth += 1;
     const realDir = realpathSync(dir);
     if (realDir !== base && !realDir.startsWith(base + sep)) {
-      throw new Error(`archive extracted outside the extraction directory: ${dir}`);
+      throw new Error(
+        `archive extracted outside the extraction directory: ${dir}`,
+      );
     }
     if (visited.has(realDir)) continue;
     visited.add(realDir);
@@ -141,7 +173,9 @@ async function assertExtractionStayedInside(extractPath: string): Promise<void> 
       const full = join(dir, entry.name);
       const real = realpathSync(full);
       if (real !== base && !real.startsWith(base + sep)) {
-        throw new Error(`archive entry escapes the extraction directory: ${entry.name}`);
+        throw new Error(
+          `archive entry escapes the extraction directory: ${entry.name}`,
+        );
       }
       const st = lstatSync(full);
       if (st.isDirectory()) stack.push(full);
@@ -149,7 +183,11 @@ async function assertExtractionStayedInside(extractPath: string): Promise<void> 
   }
 }
 
-export async function unzipPath(id: string, relativePath: string, zipname: string): Promise<void> {
+export async function unzipPath(
+  id: string,
+  relativePath: string,
+  zipname: string,
+): Promise<void> {
   const baseDirectory = volumeRoot(id);
   const archivePath = jailPath(baseDirectory, join(relativePath, zipname));
   const extractPath = dirname(archivePath);
@@ -158,13 +196,13 @@ export async function unzipPath(id: string, relativePath: string, zipname: strin
 
   const ext = extname(archivePath).toLowerCase();
 
-  if (ext === '.tar' || ext === '.gz' || ext === '.tgz') {
+  if (ext === ".tar" || ext === ".gz" || ext === ".tgz") {
     await extractTar(archivePath, extractPath);
-  } else if (ext === '.zip') {
+  } else if (ext === ".zip") {
     await extractZip(archivePath, extractPath);
-  } else if (ext === '.rar') {
+  } else if (ext === ".rar") {
     await extractRar(archivePath, extractPath);
-  } else if (ext === '.7z') {
+  } else if (ext === ".7z") {
     await extract7z(archivePath, extractPath);
   } else {
     throw new Error(`unsupported archive type: ${ext}`);
@@ -235,13 +273,15 @@ export async function appendChunk(
   await undefined; // yield to event loop
 
   if (chunkIndex < 0 || chunkIndex >= session.total) {
-    throw new Error('chunk index out of range');
+    throw new Error("chunk index out of range");
   }
 
   session.chunks[chunkIndex] = chunk;
   session.received.add(chunkIndex);
 
-  const done = session.received.size >= session.total && session.chunks.every((c) => c instanceof Buffer);
+  const done =
+    session.received.size >= session.total &&
+    session.chunks.every((c) => c instanceof Buffer);
   if (!done || session.finalizing) return;
   session.finalizing = true;
 

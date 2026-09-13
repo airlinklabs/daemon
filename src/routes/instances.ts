@@ -1,8 +1,18 @@
-import { existsSync, mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
-import config from '../config';
-import { apiError } from '../errors';
-import { applyConfigFiles, type ConfigFileEntry } from '../handlers/configFiles';
+import { existsSync, mkdirSync } from "node:fs";
+import { resolve } from "node:path";
+import config from "../config";
+import { CRASH_RESTART_DELAY_MS } from "../config/timeouts";
+import {
+  DEFAULT_MEMORY_MB,
+  DEFAULT_CPU_PERCENT,
+  DEFAULT_STORAGE_MB,
+  DEFAULT_SWAP_MB,
+} from "../config/limits";
+import { apiError } from "../errors";
+import {
+  applyConfigFiles,
+  type ConfigFileEntry,
+} from "../handlers/configFiles";
 import {
   deleteContainerAndVolume,
   docker,
@@ -13,10 +23,10 @@ import {
   sendCommandToContainer,
   startContainer,
   stopContainer,
-} from '../handlers/docker';
-import { clearLogBuffer } from '../handlers/logHistory';
-import logger from '../logger';
-import { getPaths } from '../paths';
+} from "../handlers/docker";
+import { clearLogBuffer } from "../handlers/logHistory";
+import logger from "../logger";
+import { getPaths } from "../paths";
 import {
   commandBodyCodes,
   commandBodySchema,
@@ -27,10 +37,9 @@ import {
   parseJsonBody,
   startBodyCodes,
   startBodySchema,
-} from '../schemas';
-import { validateContainerId } from '../validation';
+} from "../schemas";
+import { validateContainerId } from "../validation";
 
-const CRASH_RESTART_DELAY_MS = 5_000;
 const crashUnsubscribers = new Map<string, () => void>();
 
 function registerCrashHandler(id: string): void {
@@ -38,27 +47,31 @@ function registerCrashHandler(id: string): void {
   const prev = crashUnsubscribers.get(id);
   if (prev) prev();
   const unsub = onContainerCrash(id, async (crashedId, exitCode) => {
-    logger.warn(`crash detected for ${crashedId} (exit ${exitCode}), scheduling restart`);
+    logger.warn(
+      `crash detected for ${crashedId} (exit ${exitCode}), scheduling restart`,
+    );
     await new Promise((r) => setTimeout(r, CRASH_RESTART_DELAY_MS));
     const cached = await loadStartConfig(crashedId);
     if (!cached) {
-      logger.warn(`no cached start config for ${crashedId}, cannot auto-restart`);
+      logger.warn(
+        `no cached start config for ${crashedId}, cannot auto-restart`,
+      );
       return;
     }
     try {
       clearLogBuffer(crashedId);
-      if (cached.configFiles && typeof cached.configFiles === 'object') {
+      if (cached.configFiles && typeof cached.configFiles === "object") {
         await applyConfigFiles(crashedId, cached.configFiles, cached.env ?? {});
       }
       await startContainer(
         crashedId,
         cached.image,
         cached.env ?? {},
-        cached.ports ?? '',
-        cached.Memory ?? 512,
-        cached.Cpu ?? 100,
-        cached.Storage ?? 0,
-        cached.Swap ?? 0,
+        cached.ports ?? "",
+        cached.Memory ?? DEFAULT_MEMORY_MB,
+        cached.Cpu ?? DEFAULT_CPU_PERCENT,
+        cached.Storage ?? DEFAULT_STORAGE_MB,
+        cached.Swap ?? DEFAULT_SWAP_MB,
         cached.mounts ?? [],
       );
       registerCrashHandler(crashedId);
@@ -86,12 +99,16 @@ export type CachedStartConfig = {
 };
 
 function configCachePath(id: string): string {
-  return resolve(getPaths(config.paths).storageRoot, 'containerConfigs', `${id}.json`);
+  return resolve(
+    getPaths(config.paths).storageRoot,
+    "containerConfigs",
+    `${id}.json`,
+  );
 }
 
 export async function saveStartConfig(sc: CachedStartConfig): Promise<void> {
   try {
-    const dir = resolve(getPaths(config.paths).storageRoot, 'containerConfigs');
+    const dir = resolve(getPaths(config.paths).storageRoot, "containerConfigs");
     mkdirSync(dir, { recursive: true });
     await Bun.write(configCachePath(sc.id), JSON.stringify(sc, null, 2));
   } catch (err) {
@@ -99,7 +116,9 @@ export async function saveStartConfig(sc: CachedStartConfig): Promise<void> {
   }
 }
 
-export async function loadStartConfig(id: string): Promise<CachedStartConfig | null> {
+export async function loadStartConfig(
+  id: string,
+): Promise<CachedStartConfig | null> {
   try {
     const path = configCachePath(id);
     if (!existsSync(path)) return null;
@@ -117,30 +136,49 @@ export async function loadStartConfig(id: string): Promise<CachedStartConfig | n
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
   });
 }
 
 export async function handleContainerStart(req: Request): Promise<Response> {
   const parsed = await parseJsonBody(req, startBodySchema, startBodyCodes);
-  if ('response' in parsed) return parsed.response;
-  const { id, image, ports, env, Memory, Cpu, Storage, Swap, StartCommand, mounts, configFiles } = parsed.data;
+  if ("response" in parsed) return parsed.response;
+  const {
+    id,
+    image,
+    ports,
+    env,
+    Memory,
+    Cpu,
+    Storage,
+    Swap,
+    StartCommand,
+    mounts,
+    configFiles,
+  } = parsed.data;
 
-  const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
+  const envVars: Record<string, string> =
+    typeof env === "object" && env !== null ? { ...env } : {};
 
-  if (configFiles && typeof configFiles === 'object') {
+  if (configFiles && typeof configFiles === "object") {
     await applyConfigFiles(id, configFiles, envVars);
   }
 
-  let updatedCmd = StartCommand ?? '';
-  updatedCmd = updatedCmd.replace(/\{\{(\w+)\}\}/g, (_match: string, v: string) => {
-    if (envVars[v] !== undefined) return envVars[v];
-    return '';
-  });
-  updatedCmd = updatedCmd.replace(/\$ALVKT\((\w+)\)/g, (_match: string, v: string) => {
-    if (envVars[v] !== undefined) return envVars[v];
-    return '';
-  });
+  let updatedCmd = StartCommand ?? "";
+  updatedCmd = updatedCmd.replace(
+    /\{\{(\w+)\}\}/g,
+    (_match: string, v: string) => {
+      if (envVars[v] !== undefined) return envVars[v];
+      return "";
+    },
+  );
+  updatedCmd = updatedCmd.replace(
+    /\$ALVKT\((\w+)\)/g,
+    (_match: string, v: string) => {
+      if (envVars[v] !== undefined) return envVars[v];
+      return "";
+    },
+  );
 
   if (updatedCmd) {
     envVars.START = updatedCmd;
@@ -153,11 +191,11 @@ export async function handleContainerStart(req: Request): Promise<Response> {
       id,
       image,
       envVars,
-      ports ?? '',
-      Memory ?? 512,
-      Cpu ?? 100,
-      Storage ?? 0,
-      Swap ?? 0,
+      ports ?? "",
+      Memory ?? DEFAULT_MEMORY_MB,
+      Cpu ?? DEFAULT_CPU_PERCENT,
+      Storage ?? DEFAULT_STORAGE_MB,
+      Swap ?? DEFAULT_SWAP_MB,
       mounts ?? [],
     );
     await saveStartConfig({
@@ -178,28 +216,36 @@ export async function handleContainerStart(req: Request): Promise<Response> {
     registerCrashHandler(id);
     return json({ message: `container ${id} started successfully` });
   } catch (error) {
-    logger.error('error starting container', error);
+    logger.error("error starting container", error);
     const detail = String((error as Error).message ?? error);
     if (/port is already allocated|already in use|EADDRINUSE/i.test(detail)) {
-      return apiError('port_conflict', 'port conflict', 409, detail);
+      return apiError("port_conflict", "port conflict", 409, detail);
     }
-    return apiError('internal_error', 'failed to start container', 500, detail);
+    return apiError("internal_error", "failed to start container", 500, detail);
   }
 }
 
 export async function handleContainerRestart(req: Request): Promise<Response> {
-  const parsed = await parseJsonBody(req, containerIdBodySchema, containerIdBodyCodes);
-  if ('response' in parsed) return parsed.response;
+  const parsed = await parseJsonBody(
+    req,
+    containerIdBodySchema,
+    containerIdBodyCodes,
+  );
+  if ("response" in parsed) return parsed.response;
   const body = parsed.data;
 
   const cached = await loadStartConfig(body.id);
   if (!cached) {
-    return apiError('container_not_found', `no cached start config for container ${body.id}, start it first`, 404);
+    return apiError(
+      "container_not_found",
+      `no cached start config for container ${body.id}, start it first`,
+      404,
+    );
   }
 
   try {
     clearLogBuffer(body.id);
-    if (cached.configFiles && typeof cached.configFiles === 'object') {
+    if (cached.configFiles && typeof cached.configFiles === "object") {
       await applyConfigFiles(body.id, cached.configFiles, cached.env ?? {});
     }
     await stopContainer(body.id, body.stopCmd);
@@ -207,28 +253,37 @@ export async function handleContainerRestart(req: Request): Promise<Response> {
       body.id,
       cached.image,
       cached.env ?? {},
-      cached.ports ?? '',
-      cached.Memory ?? 512,
-      cached.Cpu ?? 100,
-      cached.Storage ?? 0,
-      cached.Swap ?? 0,
+      cached.ports ?? "",
+      cached.Memory ?? DEFAULT_MEMORY_MB,
+      cached.Cpu ?? DEFAULT_CPU_PERCENT,
+      cached.Storage ?? DEFAULT_STORAGE_MB,
+      cached.Swap ?? DEFAULT_SWAP_MB,
       cached.mounts ?? [],
     );
     registerCrashHandler(body.id);
     return json({ message: `container ${body.id} restarted successfully` });
   } catch (error) {
-    logger.error('error restarting container', error);
+    logger.error("error restarting container", error);
     const message = error instanceof Error ? error.message : String(error);
     if (/port is already allocated|already in use|EADDRINUSE/i.test(message)) {
-      return apiError('port_conflict', 'port conflict', 409, message);
+      return apiError("port_conflict", "port conflict", 409, message);
     }
-    return apiError('internal_error', `failed to restart container ${body.id}`, 500, message);
+    return apiError(
+      "internal_error",
+      `failed to restart container ${body.id}`,
+      500,
+      message,
+    );
   }
 }
 
 export async function handleContainerStop(req: Request): Promise<Response> {
-  const parsed = await parseJsonBody(req, containerIdBodySchema, containerIdBodyCodes);
-  if ('response' in parsed) return parsed.response;
+  const parsed = await parseJsonBody(
+    req,
+    containerIdBodySchema,
+    containerIdBodyCodes,
+  );
+  if ("response" in parsed) return parsed.response;
   const body = parsed.data;
 
   try {
@@ -240,14 +295,22 @@ export async function handleContainerStop(req: Request): Promise<Response> {
     }
     return json({ message: `container ${body.id} stopped successfully` });
   } catch (err) {
-    logger.error('error stopping container', err);
-    return apiError('internal_error', `failed to stop container ${body.id}`, 500);
+    logger.error("error stopping container", err);
+    return apiError(
+      "internal_error",
+      `failed to stop container ${body.id}`,
+      500,
+    );
   }
 }
 
 export async function handleContainerKill(req: Request): Promise<Response> {
-  const parsed = await parseJsonBody(req, killDeleteBodySchema, killDeleteBodyCodes);
-  if ('response' in parsed) return parsed.response;
+  const parsed = await parseJsonBody(
+    req,
+    killDeleteBodySchema,
+    killDeleteBodyCodes,
+  );
+  if ("response" in parsed) return parsed.response;
   const { id } = parsed.data;
 
   try {
@@ -259,51 +322,62 @@ export async function handleContainerKill(req: Request): Promise<Response> {
     }
     return json({ message: `container ${id} killed` });
   } catch (err) {
-    logger.error('error killing container', err);
-    return apiError('internal_error', `failed to kill container ${id}`, 500);
+    logger.error("error killing container", err);
+    return apiError("internal_error", `failed to kill container ${id}`, 500);
   }
 }
 
 export async function handleContainerCommand(req: Request): Promise<Response> {
   const parsed = await parseJsonBody(req, commandBodySchema, commandBodyCodes);
-  if ('response' in parsed) return parsed.response;
+  if ("response" in parsed) return parsed.response;
   const { id, command } = parsed.data;
 
-  const normalized = (command ?? '').replace(/\r\n?/g, '\n').trim();
-  if (!normalized) return apiError('invalid_request', 'container command is required', 400);
+  const normalized = (command ?? "").replace(/\r\n?/g, "\n").trim();
+  if (!normalized)
+    return apiError("invalid_request", "container command is required", 400);
 
   try {
     await sendCommandToContainer(id, normalized);
     return json({ message: `command sent to container ${id}` });
   } catch (err) {
-    logger.error('error sending command', err);
-    return apiError('internal_error', `failed to send command to container ${id}`, 500);
+    logger.error("error sending command", err);
+    return apiError(
+      "internal_error",
+      `failed to send command to container ${id}`,
+      500,
+    );
   }
 }
 
 export async function handleContainerDelete(req: Request): Promise<Response> {
-  const parsed = await parseJsonBody(req, killDeleteBodySchema, killDeleteBodyCodes);
-  if ('response' in parsed) return parsed.response;
+  const parsed = await parseJsonBody(
+    req,
+    killDeleteBodySchema,
+    killDeleteBodyCodes,
+  );
+  if ("response" in parsed) return parsed.response;
   const { id } = parsed.data;
 
   try {
     await deleteContainerAndVolume(id);
     return json({ message: `container ${id} deleted` });
   } catch (err) {
-    logger.error('error deleting container', err);
-    return apiError('internal_error', `failed to delete container ${id}`, 500);
+    logger.error("error deleting container", err);
+    return apiError("internal_error", `failed to delete container ${id}`, 500);
   }
 }
 
 export async function handleContainerStatus(req: Request): Promise<Response> {
-  const id = new URL(req.url).searchParams.get('id');
-  if (!id) return apiError('container_not_found', 'container ID is required', 400);
-  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
+  const id = new URL(req.url).searchParams.get("id");
+  if (!id)
+    return apiError("container_not_found", "container ID is required", 400);
+  if (!validateContainerId(id))
+    return apiError("container_not_found", "invalid container ID", 400);
 
   try {
     const knownRunning = isContainerRunning(id);
     if (knownRunning !== null) {
-      return json({ running: knownRunning, exists: true, source: 'cache' });
+      return json({ running: knownRunning, exists: true, source: "cache" });
     }
 
     const info = await docker
@@ -316,30 +390,41 @@ export async function handleContainerStatus(req: Request): Promise<Response> {
       running: info.State.Running,
       exists: true,
       status: info.State.Status,
-      exitCode: typeof info.State.ExitCode === 'number' ? info.State.ExitCode : null,
+      exitCode:
+        typeof info.State.ExitCode === "number" ? info.State.ExitCode : null,
       startedAt: info.State.StartedAt,
       finishedAt: info.State.FinishedAt,
-      source: 'inspect',
+      source: "inspect",
     });
   } catch (err) {
-    logger.error('error getting container status', err);
-    return apiError('internal_error', `failed to get status for container ${id}`, 500);
+    logger.error("error getting container status", err);
+    return apiError(
+      "internal_error",
+      `failed to get status for container ${id}`,
+      500,
+    );
   }
 }
 
 export async function handleContainerStats(req: Request): Promise<Response> {
-  const id = new URL(req.url).searchParams.get('id');
-  if (!id) return apiError('container_not_found', 'container ID is required', 400);
-  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
+  const id = new URL(req.url).searchParams.get("id");
+  if (!id)
+    return apiError("container_not_found", "container ID is required", 400);
+  if (!validateContainerId(id))
+    return apiError("container_not_found", "invalid container ID", 400);
 
   try {
     const stats = await getContainerStats(id);
     if (!stats) return json({ running: false, exists: false });
     return json(stats);
   } catch (err) {
-    logger.error('error getting container stats', err);
-    return apiError('internal_error', `failed to get stats for container ${id}`, 500);
+    logger.error("error getting container stats", err);
+    return apiError(
+      "internal_error",
+      `failed to get stats for container ${id}`,
+      500,
+    );
   }
 }
 
-export { clearLogHistory } from '../handlers/logHistory';
+export { clearLogHistory } from "../handlers/logHistory";

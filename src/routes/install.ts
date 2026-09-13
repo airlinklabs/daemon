@@ -1,6 +1,7 @@
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { DEFAULT_MEMORY_MB, DEFAULT_CPU_PERCENT } from "../config/limits";
 import {
   createInstaller,
   deleteContainer,
@@ -8,11 +9,11 @@ import {
   docker,
   initContainer,
   pullImageWithProgress,
-} from '../handlers/docker';
-import { copyIntoVolume, downloadToVolume } from '../handlers/fs';
-import { getInstallStatus, setServerState } from '../handlers/installState';
-import { enqueueOperation } from '../handlers/operationManager';
-import { emit } from '../ws/events';
+} from "../handlers/docker";
+import { copyIntoVolume, downloadToVolume } from "../handlers/fs";
+import { getInstallStatus, setServerState } from "../handlers/installState";
+import { enqueueOperation } from "../handlers/operationManager";
+import { emit } from "../ws/events";
 import {
   config as _config,
   apiError,
@@ -29,63 +30,86 @@ import {
   reinstallBodySchema,
   saveJson,
   validateContainerId,
-} from './instancesShared';
+} from "./instancesShared";
 
-export async function handleContainerInstaller(req: Request): Promise<Response> {
-  const parsed = await parseJsonBody(req, installerBodySchema, installerBodyCodes);
-  if ('response' in parsed) return parsed.response;
+export async function handleContainerInstaller(
+  req: Request,
+): Promise<Response> {
+  const parsed = await parseJsonBody(
+    req,
+    installerBodySchema,
+    installerBodyCodes,
+  );
+  if ("response" in parsed) return parsed.response;
   const { id, script, container, entrypoint, env } = parsed.data;
 
-  const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
+  const envVars: Record<string, string> =
+    typeof env === "object" && env !== null ? { ...env } : {};
 
   try {
     await initContainer(id);
-    await setServerState(id, 'installing');
-    await createInstaller(id, container, script, envVars, entrypoint || 'bash', {
-      Memory: Number(envVars.SERVER_MEMORY ?? '512'),
-      Cpu: Number(envVars.SERVER_CPU ?? '100'),
-    });
-    await setServerState(id, 'installed');
-    await reportInstallStatus(id, 'installed');
+    await setServerState(id, "installing");
+    await createInstaller(
+      id,
+      container,
+      script,
+      envVars,
+      entrypoint || "bash",
+      {
+        Memory: Number(envVars.SERVER_MEMORY ?? String(DEFAULT_MEMORY_MB)),
+        Cpu: Number(envVars.SERVER_CPU ?? String(DEFAULT_CPU_PERCENT)),
+      },
+    );
+    await setServerState(id, "installed");
+    await reportInstallStatus(id, "installed");
     return json({ message: `container ${id} installed successfully` });
   } catch (error) {
-    logger.error('error installing container', error);
+    logger.error("error installing container", error);
     const errorMsg = error instanceof Error ? error.message : String(error);
-    await setServerState(id, 'failed', errorMsg);
-    await reportInstallStatus(id, 'failed', errorMsg);
-    return apiError('internal_error', `failed to install container ${id}`, 500);
+    await setServerState(id, "failed", errorMsg);
+    await reportInstallStatus(id, "failed", errorMsg);
+    return apiError("internal_error", `failed to install container ${id}`, 500);
   }
 }
 
 export async function handleContainerInstall(req: Request): Promise<Response> {
   const parsed = await parseJsonBody(req, installBodySchema, installBodyCodes);
-  if ('response' in parsed) return parsed.response;
+  if ("response" in parsed) return parsed.response;
   const { id, image, scripts, env } = parsed.data;
 
-  const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
+  const envVars: Record<string, string> =
+    typeof env === "object" && env !== null ? { ...env } : {};
 
-  await setServerState(id, 'installing');
+  await setServerState(id, "installing");
 
-  const { accepted, message } = enqueueOperation('install', id, async (signal) => {
-    if (signal.aborted) return;
-    await performInstall(id, image, scripts, envVars);
-  });
+  const { accepted, message } = enqueueOperation(
+    "install",
+    id,
+    async (signal) => {
+      if (signal.aborted) return;
+      await performInstall(id, image, scripts, envVars);
+    },
+  );
 
   if (!accepted) {
-    await setServerState(id, 'failed', message);
-    return apiError('internal_error', message, 409);
+    await setServerState(id, "failed", message);
+    return apiError("internal_error", message, 409);
   }
 
-  return json({ message: 'install started' });
+  return json({ message: "install started" });
 }
 
 // Report install status back to Panel via WebSocket or HTTP callback.
-async function reportInstallStatus(id: string, status: 'installed' | 'failed', error?: string): Promise<void> {
+async function reportInstallStatus(
+  id: string,
+  status: "installed" | "failed",
+  error?: string,
+): Promise<void> {
   try {
     const url = `http://${_config.remote}/api/daemon/install/status`;
     await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, status, error: error ?? null }),
     });
   } catch (err) {
@@ -93,32 +117,43 @@ async function reportInstallStatus(id: string, status: 'installed' | 'failed', e
   }
 }
 
-export async function handleContainerReinstall(req: Request): Promise<Response> {
-  const parsed = await parseJsonBody(req, reinstallBodySchema, reinstallBodyCodes);
-  if ('response' in parsed) return parsed.response;
+export async function handleContainerReinstall(
+  req: Request,
+): Promise<Response> {
+  const parsed = await parseJsonBody(
+    req,
+    reinstallBodySchema,
+    reinstallBodyCodes,
+  );
+  if ("response" in parsed) return parsed.response;
   const { id, image, scripts, env, preserveData } = parsed.data;
 
-  const envVars: Record<string, string> = typeof env === 'object' && env !== null ? { ...env } : {};
+  const envVars: Record<string, string> =
+    typeof env === "object" && env !== null ? { ...env } : {};
 
-  await setServerState(id, 'reinstalling');
+  await setServerState(id, "reinstalling");
 
-  const { accepted, message } = enqueueOperation('reinstall', id, async (signal) => {
-    if (signal.aborted) return;
-    if (preserveData === false) {
-      await deleteContainerAndVolume(id);
-    } else {
-      await deleteContainer(id);
-    }
-    await performInstall(id, image, scripts, envVars);
-  });
+  const { accepted, message } = enqueueOperation(
+    "reinstall",
+    id,
+    async (signal) => {
+      if (signal.aborted) return;
+      if (preserveData === false) {
+        await deleteContainerAndVolume(id);
+      } else {
+        await deleteContainer(id);
+      }
+      await performInstall(id, image, scripts, envVars);
+    },
+  );
 
   if (!accepted) {
-    await setServerState(id, 'failed', message);
-    await reportInstallStatus(id, 'failed', message);
-    return apiError('internal_error', message, 409);
+    await setServerState(id, "failed", message);
+    await reportInstallStatus(id, "failed", message);
+    return apiError("internal_error", message, 409);
   }
 
-  return json({ message: 'reinstall started' });
+  return json({ message: "reinstall started" });
 }
 
 async function performInstall(
@@ -129,7 +164,7 @@ async function performInstall(
 ): Promise<void> {
   await initContainer(id);
 
-  if (image && typeof image === 'string') {
+  if (image && typeof image === "string") {
     let imageExists = false;
     try {
       await docker.getImage(image).inspect();
@@ -143,8 +178,12 @@ async function performInstall(
   }
 
   if (scripts && Array.isArray(scripts)) {
-    const alcPath = join(getPaths(_config.paths).storageRoot, 'alc.json');
-    const locationsPath = join(getPaths(_config.paths).storageRoot, 'alc', 'locations.json');
+    const alcPath = join(getPaths(_config.paths).storageRoot, "alc.json");
+    const locationsPath = join(
+      getPaths(_config.paths).storageRoot,
+      "alc",
+      "locations.json",
+    );
     const filesDir = getPaths(_config.paths).alcFilesRoot;
 
     const alc = (await loadJson(alcPath)) as {
@@ -173,35 +212,54 @@ async function performInstall(
       }
 
       emit(id, {
-        type: 'installing',
+        type: "installing",
         message: `[${i + 1}/${total}] downloading ${fileName}`,
       });
 
-      const resolvedUrl = url.replace(/\$ALVKT\((\w+)\)/g, (_, v: string) => envVars[v] ?? '');
+      const resolvedUrl = url.replace(
+        /\$ALVKT\((\w+)\)/g,
+        (_, v: string) => envVars[v] ?? "",
+      );
       if (!resolvedUrl) {
         continue;
       }
 
       const alcEntry = alc.find((e) => e.Name === fileName);
-      const cachedFileId = createHash('sha256').update(`${fileName}:${resolvedUrl}`).digest('hex').slice(0, 32);
-      const existingLoc = locations.find((l) => l.Name === fileName && l.url === resolvedUrl);
-      const cachedFilePath = existingLoc?.id ? join(filesDir, existingLoc.id) : '';
+      const cachedFileId = createHash("sha256")
+        .update(`${fileName}:${resolvedUrl}`)
+        .digest("hex")
+        .slice(0, 32);
+      const existingLoc = locations.find(
+        (l) => l.Name === fileName && l.url === resolvedUrl,
+      );
+      const cachedFilePath = existingLoc?.id
+        ? join(filesDir, existingLoc.id)
+        : "";
 
       try {
         if (alcEntry && existingLoc && existsSync(cachedFilePath)) {
           emit(id, {
-            type: 'installing',
+            type: "installing",
             message: `[${i + 1}/${total}] using cached ${fileName}`,
           });
           await copyIntoVolume(id, cachedFilePath, fileName);
         } else {
-          await downloadToVolume(id, resolvedUrl, fileName, script.ALVKT === true ? envVars : undefined);
+          await downloadToVolume(
+            id,
+            resolvedUrl,
+            fileName,
+            script.ALVKT === true ? envVars : undefined,
+          );
 
           if (alcEntry) {
-            const tempPath = join(getPaths(_config.paths).volumesRoot, id, fileName);
-            await Bun.spawn(['cp', tempPath, join(filesDir, cachedFileId)], {
-              stdout: 'pipe',
-              stderr: 'pipe',
+            const tempPath = join(
+              getPaths(_config.paths).volumesRoot,
+              id,
+              fileName,
+            );
+            await Bun.spawn(["cp", tempPath, join(filesDir, cachedFileId)], {
+              stdout: "pipe",
+              stderr: "pipe",
             }).exited;
             locations.push({
               Name: fileName,
@@ -212,7 +270,7 @@ async function performInstall(
           }
         }
         emit(id, {
-          type: 'installing',
+          type: "installing",
           message: `[${i + 1}/${total}] ${fileName} ready`,
         });
       } catch (err) {
@@ -222,15 +280,21 @@ async function performInstall(
     }
   }
 
-  emit(id, { type: 'installed', message: 'installation complete' });
+  emit(id, { type: "installed", message: "installation complete" });
 }
 
-export async function handleContainerInstallStatus(_req: Request, params: Record<string, string>): Promise<Response> {
+export async function handleContainerInstallStatus(
+  _req: Request,
+  params: Record<string, string>,
+): Promise<Response> {
   const id = params.id;
-  if (!id) return apiError('container_not_found', 'container ID is required', 400);
-  if (!validateContainerId(id)) return apiError('container_not_found', 'invalid container ID', 400);
+  if (!id)
+    return apiError("container_not_found", "container ID is required", 400);
+  if (!validateContainerId(id))
+    return apiError("container_not_found", "invalid container ID", 400);
 
   const status = await getInstallStatus(id);
-  if (!status) return json({ message: `no install state found for container ${id}` }, 404);
+  if (!status)
+    return json({ message: `no install state found for container ${id}` }, 404);
   return json({ containerId: id, state: status.state, error: status.error });
 }

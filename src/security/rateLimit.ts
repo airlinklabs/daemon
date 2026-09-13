@@ -1,8 +1,12 @@
 // nothing fancy, just counts hits per IP per minute and says no when they go over
 
+import {
+  RATE_LIMIT_WINDOW_MS,
+  RATE_LIMIT_CLEANUP_MS,
+} from "../config/timeouts";
+import { DEFAULT_RATE_LIMIT } from "../config/limits";
+
 const hits = new Map<string, { count: number; resetAt: number }>();
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const CLEANUP_INTERVAL_MS = 60_000;
 
 // clean up old entries every minute so the map doesn't grow forever
 setInterval(() => {
@@ -10,9 +14,12 @@ setInterval(() => {
   for (const [ip, data] of hits) {
     if (data.resetAt < now) hits.delete(ip);
   }
-}, CLEANUP_INTERVAL_MS);
+}, RATE_LIMIT_CLEANUP_MS);
 
-export function checkRateLimit(ip: string, limit = 300): Response | null {
+export function checkRateLimit(
+  ip: string,
+  limit = DEFAULT_RATE_LIMIT,
+): Response | null {
   const now = Date.now();
 
   let data = hits.get(ip);
@@ -23,11 +30,11 @@ export function checkRateLimit(ip: string, limit = 300): Response | null {
 
   data.count++;
   if (data.count > limit) {
-    return new Response(JSON.stringify({ error: 'rate limit exceeded' }), {
+    return new Response(JSON.stringify({ error: "rate limit exceeded" }), {
       status: 429,
       headers: {
-        'Content-Type': 'application/json',
-        'Retry-After': String(Math.ceil((data.resetAt - now) / 1000)),
+        "Content-Type": "application/json",
+        "Retry-After": String(Math.ceil((data.resetAt - now) / 1000)),
       },
     });
   }

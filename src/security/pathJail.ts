@@ -1,22 +1,32 @@
 // Path jail — validates resolved paths stay inside the volume directory.
 
-import type { Stats } from 'node:fs';
-import { closeSync, existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync, unlinkSync } from 'node:fs';
-import { rename } from 'node:fs/promises';
-import { basename, dirname, join, resolve, sep } from 'node:path';
-import config from '../config';
-import { getPaths } from '../paths';
-import { secureOpenRead, secureOpenWrite } from './secureOpen';
+import type { Stats } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readlinkSync,
+  realpathSync,
+  unlinkSync,
+} from "node:fs";
+import { rename } from "node:fs/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
+import config from "../config";
+import {
+  MAX_PATH_LENGTH,
+  MAX_SYMLINK_DEPTH,
+  MAX_FILE_CONTENT_BYTES,
+} from "../config/limits";
+import { getPaths } from "../paths";
+import { secureOpenRead, secureOpenWrite } from "./secureOpen";
 
 export class BackupPathError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'BackupPathError';
+    this.name = "BackupPathError";
   }
 }
-
-const MAX_PATH_LENGTH = 4096;
-const MAX_SYMLINK_DEPTH = 10;
 
 // true when `p` is `base` itself or lives strictly beneath it
 function isInside(base: string, p: string): boolean {
@@ -25,12 +35,12 @@ function isInside(base: string, p: string): boolean {
 
 export function jailPath(base: string, relative: string): string {
   // Reject null bytes
-  if (relative.includes('\0')) {
-    throw new Error('invalid path: null byte');
+  if (relative.includes("\0")) {
+    throw new Error("invalid path: null byte");
   }
 
   if (relative.length > MAX_PATH_LENGTH) {
-    throw new Error('path exceeds maximum length');
+    throw new Error("path exceeds maximum length");
   }
 
   const realBase = realpathSync(base);
@@ -103,7 +113,11 @@ export function jailPath(base: string, relative: string): string {
 
 // safe rename: validates both src and dest are inside base before renaming.
 // Uses openat2 on Linux to prevent TOCTOU symlink races during the rename.
-export async function jailRename(base: string, oldRel: string, newRel: string): Promise<void> {
+export async function jailRename(
+  base: string,
+  oldRel: string,
+  newRel: string,
+): Promise<void> {
   const safeSrc = jailPath(base, oldRel);
   const safeDest = jailPath(base, newRel);
 
@@ -124,10 +138,10 @@ export function secureReadFile(base: string, relative: string): Buffer {
   jailPath(base, relative);
   const { fd } = secureOpenRead(base, relative);
   try {
-    const { readSync, fstatSync } = require('node:fs');
+    const { readSync, fstatSync } = require("node:fs");
     const stat = fstatSync(fd);
-    if (!stat.isFile()) throw new Error('path is not a file');
-    if (stat.size > 10 * 1024 * 1024) throw new Error('file too large');
+    if (!stat.isFile()) throw new Error("path is not a file");
+    if (stat.size > MAX_FILE_CONTENT_BYTES) throw new Error("file too large");
 
     const buf = Buffer.alloc(stat.size);
     let totalRead = 0;
@@ -146,12 +160,16 @@ export function secureReadFile(base: string, relative: string): Buffer {
  * Write a file inside a jail, protected against TOCTOU symlink races.
  * On Linux >= 5.6 uses openat2; on older kernels uses O_NOFOLLOW fallback.
  */
-export function secureWriteFile(base: string, relative: string, data: Buffer | string): void {
+export function secureWriteFile(
+  base: string,
+  relative: string,
+  data: Buffer | string,
+): void {
   jailPath(base, relative);
   const { fd } = secureOpenWrite(base, relative);
   try {
-    const { writeSync } = require('node:fs');
-    const buf = typeof data === 'string' ? Buffer.from(data, 'utf-8') : data;
+    const { writeSync } = require("node:fs");
+    const buf = typeof data === "string" ? Buffer.from(data, "utf-8") : data;
     let written = 0;
     while (written < buf.length) {
       const n = writeSync(fd, buf, written, buf.length - written);
@@ -172,9 +190,9 @@ export function secureUnlink(base: string, relative: string): void {
   // Open with O_NOFOLLOW to verify it's not a symlink
   const { fd } = secureOpenRead(base, relative);
   try {
-    const { fstatSync } = require('node:fs');
+    const { fstatSync } = require("node:fs");
     const st = fstatSync(fd);
-    if (st.isDirectory()) throw new Error('cannot unlink a directory');
+    if (st.isDirectory()) throw new Error("cannot unlink a directory");
   } finally {
     closeSync(fd);
   }
@@ -186,20 +204,18 @@ export function secureUnlink(base: string, relative: string): void {
 
 // Backup path jails — pin raw paths to a container's backup directory.
 
-const _BACKUPS_DIR = 'backups';
-
 function backupsRoot(): string {
   return getPaths(config.paths).backupsRoot;
 }
 
 // Normalizes rawPath against backup root and verifies containment via realpath.
 function jailToBackupsRoot(root: string, rawPath: string): string {
-  if (typeof rawPath !== 'string' || rawPath.length === 0) {
-    throw new BackupPathError('backup path is required');
+  if (typeof rawPath !== "string" || rawPath.length === 0) {
+    throw new BackupPathError("backup path is required");
   }
   // null bytes can't appear in a real filesystem path — reject up front
-  if (rawPath.includes('\0')) {
-    throw new BackupPathError('invalid backup path');
+  if (rawPath.includes("\0")) {
+    throw new BackupPathError("invalid backup path");
   }
 
   const resolvedPath = resolve(getPaths(config.paths).base, rawPath);
@@ -207,7 +223,7 @@ function jailToBackupsRoot(root: string, rawPath: string): string {
   // resolve() already collapsed any `..`/trailing slashes; what remains must be
   // the root itself or a path strictly beneath it
   if (!isInside(root, resolvedPath)) {
-    throw new BackupPathError('backup path escapes backup directory');
+    throw new BackupPathError("backup path escapes backup directory");
   }
 
   // walk up to the deepest ancestor that actually exists; for a fresh backup
@@ -228,10 +244,10 @@ function jailToBackupsRoot(root: string, rawPath: string): string {
     try {
       realProbe = realpathSync(probe);
     } catch {
-      throw new BackupPathError('backup path escapes backup directory');
+      throw new BackupPathError("backup path escapes backup directory");
     }
     if (realProbe !== root && !isInside(root, realProbe)) {
-      throw new BackupPathError('backup path escapes backup directory');
+      throw new BackupPathError("backup path escapes backup directory");
     }
   }
 
@@ -239,7 +255,10 @@ function jailToBackupsRoot(root: string, rawPath: string): string {
 }
 
 // Backup path validation — resolves path to container's backup directory.
-export function resolveBackupPath(containerId: string, rawPath: string): string {
+export function resolveBackupPath(
+  containerId: string,
+  rawPath: string,
+): string {
   const containerRoot = resolve(backupsRoot(), containerId);
   return jailToBackupsRoot(containerRoot, rawPath);
 }

@@ -1,8 +1,9 @@
-import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { parseEnvFile } from './utils/parseEnv';
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { DEFAULT_HTTP_PORT } from "./config/ports";
+import { parseEnvFile } from "./utils/parseEnv";
 
-const ESC = '\x1b';
+const ESC = "\x1b";
 const RED = `${ESC}[31m`;
 const GRN = `${ESC}[32m`;
 const BLU = `${ESC}[34m`;
@@ -10,7 +11,7 @@ const CYN = `${ESC}[36m`;
 const RESET = `${ESC}[0m`;
 
 export function printConfigureHelp(): void {
-  const bin = process.argv[1]?.split('/').pop() || 'airlinkd';
+  const bin = process.argv[1]?.split("/").pop() || "airlinkd";
   console.log(`Configure this daemon
 
 Usage:
@@ -38,10 +39,10 @@ async function validatePanelUrl(url: string): Promise<boolean> {
 }
 
 async function updateEnvFile(panelUrl: string, key: string): Promise<void> {
-  const envPath = join(process.cwd(), '.env');
-  let envContent = '';
+  const envPath = join(process.cwd(), ".env");
+  let envContent = "";
   try {
-    envContent = await readFile(envPath, 'utf-8');
+    envContent = await readFile(envPath, "utf-8");
   } catch {
     /* no existing .env */
   }
@@ -49,9 +50,9 @@ async function updateEnvFile(panelUrl: string, key: string): Promise<void> {
   const envConfig = parseEnvFile(envContent);
 
   const remoteIp = panelUrl
-    .replace(/https?:\/\//, '')
-    .split(':')[0]
-    .split('/')[0];
+    .replace(/https?:\/\//, "")
+    .split(":")[0]!
+    .split("/")[0]!;
   // normalize to uppercase keys for consistency
   delete envConfig.remote;
   delete envConfig.key;
@@ -59,36 +60,38 @@ async function updateEnvFile(panelUrl: string, key: string): Promise<void> {
   delete envConfig.port;
   delete envConfig.require_hmac;
   delete envConfig.debug;
-  envConfig.REMOTE = remoteIp;
+  envConfig.REMOTE = remoteIp!;
   envConfig.KEY = key;
 
-  if (!envConfig.VERSION) envConfig.VERSION = '3.0.0';
-  if (!envConfig.PORT) envConfig.PORT = '3002';
-  if (!envConfig.REQUIRE_HMAC) envConfig.REQUIRE_HMAC = 'true';
-  if (!envConfig.DEBUG) envConfig.DEBUG = 'false';
+  if (!envConfig.VERSION) envConfig.VERSION = "3.0.0";
+  if (!envConfig.PORT) envConfig.PORT = String(DEFAULT_HTTP_PORT);
+  if (!envConfig.REQUIRE_HMAC) envConfig.REQUIRE_HMAC = "true";
+  if (!envConfig.DEBUG) envConfig.DEBUG = "false";
 
   const newContent = Object.entries(envConfig)
     .map(([k, v]) => `${k}=${v}`)
-    .join('\n');
-  await writeFile(envPath, `${newContent}\n`, 'utf-8');
+    .join("\n");
+  await writeFile(envPath, `${newContent}\n`, "utf-8");
 }
 
 function parseArguments(args: string[]): { panelUrl: string; key: string } {
-  let panelUrl = '';
-  let key = '';
+  let panelUrl = "";
+  let key = "";
 
   for (let i = 0; i < args.length; i++) {
     const cur = args[i];
     const next = args[i + 1];
-    if ((cur === '--panel' || cur === '-p') && next && !next.startsWith('-')) panelUrl = next;
-    if ((cur === '--key' || cur === '-k') && next && !next.startsWith('-')) key = next;
+    if ((cur === "--panel" || cur === "-p") && next && !next.startsWith("-"))
+      panelUrl = next;
+    if ((cur === "--key" || cur === "-k") && next && !next.startsWith("-"))
+      key = next;
   }
 
   return { panelUrl, key };
 }
 
 export async function runConfigure(args: string[]): Promise<void> {
-  const filteredArgs = args.filter((a) => a !== '--');
+  const filteredArgs = args.filter((a) => a !== "--");
   const { panelUrl: rawPanelUrl, key } = parseArguments(filteredArgs);
 
   if (!rawPanelUrl || !key) {
@@ -97,7 +100,7 @@ export async function runConfigure(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const panelUrl = rawPanelUrl.replace(/\/$/, '');
+  const panelUrl = rawPanelUrl.replace(/\/$/, "");
 
   console.log(`${BLU}checking the panel...${RESET}`);
   const isValid = await validatePanelUrl(panelUrl);
@@ -122,8 +125,8 @@ export async function runConfigure(args: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  const filteredArgs = process.argv.slice(2).filter((a) => a !== '--');
-  if (filteredArgs.includes('--help') || filteredArgs.includes('-h')) {
+  const filteredArgs = process.argv.slice(2).filter((a) => a !== "--");
+  if (filteredArgs.includes("--help") || filteredArgs.includes("-h")) {
     printConfigureHelp();
     process.exit(0);
   }

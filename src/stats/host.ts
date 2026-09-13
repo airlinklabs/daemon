@@ -1,34 +1,47 @@
-import { readdirSync, readFileSync, statfsSync } from 'node:fs';
-import type { HostStats } from './types';
-
-const CLK_TCK = 100;
+import { readdirSync, readFileSync, statfsSync } from "node:fs";
+import {
+  SYSTEM_CLK_TCK,
+  HOST_MAX_DISKS,
+  HOST_MAX_NETWORK_INTERFACES,
+  HOST_MAX_DISK_IO_DEVICES,
+  HOST_MAX_THERMAL_ZONES,
+  DAEMON_STATS_PREV_PROCS_CAP,
+  DAEMON_STATS_TOP_PROCS_LIMIT,
+} from "../config/limits";
+import type { HostStats } from "./types";
 
 let prevCpu: { time: number; perCore: number[] } | null = null;
-let prevNet: { time: number; byIface: Map<string, { rx: number; tx: number }> } | null = null;
-let prevDiskIo: { time: number; byDev: Map<string, { rx: number; tx: number }> } | null = null;
+let prevNet: {
+  time: number;
+  byIface: Map<string, { rx: number; tx: number }>;
+} | null = null;
+let prevDiskIo: {
+  time: number;
+  byDev: Map<string, { rx: number; tx: number }>;
+} | null = null;
 let prevProcs: Map<number, { ticks: number; at: number }> = new Map();
 
 function readProc(path: string): string {
   try {
-    return readFileSync(path, 'utf8');
+    return readFileSync(path, "utf8");
   } catch {
-    return '';
+    return "";
   }
 }
 
 function readCpu(): { time: number; perCore: number[] } {
-  const data = readProc('/proc/stat');
+  const data = readProc("/proc/stat");
   const perCore: number[] = [];
   let total = 0;
-  for (const line of data.split('\n')) {
+  for (const line of data.split("\n")) {
     const parts = line.split(/\s+/);
     const name = parts[0];
-    if (!name?.startsWith('cpu')) continue;
+    if (!name?.startsWith("cpu")) continue;
     const nums = parts.slice(1).map(Number);
     if (nums.length < 5) continue;
-    const idle = nums[3] + (nums[4] ?? 0);
+    const idle = nums[3]! + (nums[4] ?? 0);
     const sum = nums.reduce((a, b) => a + b, 0);
-    if (name === 'cpu') total = sum - idle;
+    if (name === "cpu") total = sum - idle;
     else perCore.push(sum - idle);
   }
   return { time: total, perCore };
@@ -47,51 +60,79 @@ export function cpuPct(_now: number): { total: number; perCore: number[] } {
     const d = v - p;
     return dTotal <= 0 ? 0 : Math.max(0, Math.min(100, (d / dTotal) * 100));
   });
-  const total = dTotal <= 0 ? 0 : Math.max(0, Math.min(100, (dTotal / (dTotal + 1)) * 100));
+  const total =
+    dTotal <= 0 ? 0 : Math.max(0, Math.min(100, (dTotal / (dTotal + 1)) * 100));
   prevCpu = { time: cur.time, perCore: cur.perCore.slice() };
   return { total, perCore };
 }
 
-function readMem(): { total: number; available: number; cached: number; swapTotal: number; swapFree: number } {
-  const data = readProc('/proc/meminfo');
+function readMem(): {
+  total: number;
+  available: number;
+  cached: number;
+  swapTotal: number;
+  swapFree: number;
+} {
+  const data = readProc("/proc/meminfo");
   const get = (k: string): number => {
-    const m = data.match(new RegExp(`^${k}:\\s+(\\d+) kB`, 'm'));
+    const m = data.match(new RegExp(`^${k}:\\s+(\\d+) kB`, "m"));
     return m ? Number(m[1]) * 1024 : 0;
   };
   return {
-    total: get('MemTotal'),
-    available: get('MemAvailable'),
-    cached: get('Cached'),
-    swapTotal: get('SwapTotal'),
-    swapFree: get('SwapFree'),
+    total: get("MemTotal"),
+    available: get("MemAvailable"),
+    cached: get("Cached"),
+    swapTotal: get("SwapTotal"),
+    swapFree: get("SwapFree"),
   };
 }
 
-function readLoad(): { load: [number, number, number]; procs: number; uptime: number } {
-  const load = readProc('/proc/loadavg');
+function readLoad(): {
+  load: [number, number, number];
+  procs: number;
+  uptime: number;
+} {
+  const load = readProc("/proc/loadavg");
   const parts = load.split(/\s+/);
-  const uptime = Number(readProc('/proc/uptime').split(/\s+/)[0] ?? 0);
+  const uptime = Number(readProc("/proc/uptime").split(/\s+/)[0] ?? 0);
   return {
     load: [Number(parts[0] ?? 0), Number(parts[1] ?? 0), Number(parts[2] ?? 0)],
-    procs: Number(parts[3]?.split('/')[1] ?? 0),
+    procs: Number(parts[3]?.split("/")[1] ?? 0),
     uptime,
   };
 }
 
-function readDisks(): { mount: string; usedGb: number; totalGb: number; pct: number }[] {
-  const out: { mount: string; usedGb: number; totalGb: number; pct: number }[] = [];
+function readDisks(): {
+  mount: string;
+  usedGb: number;
+  totalGb: number;
+  pct: number;
+}[] {
+  const out: { mount: string; usedGb: number; totalGb: number; pct: number }[] =
+    [];
   try {
-    const mounts = readProc('/proc/mounts')
-      .split('\n')
+    const mounts = readProc("/proc/mounts")
+      .split("\n")
       .map((l) => l.split(/\s+/))
       .filter((p) => {
-        const fstype = p[2] ?? '';
-        return ['ext2', 'ext3', 'ext4', 'xfs', 'btrfs', 'zfs', 'f2fs', 'vfat', 'exfat', 'ntfs'].includes(fstype);
+        const fstype = p[2] ?? "";
+        return [
+          "ext2",
+          "ext3",
+          "ext4",
+          "xfs",
+          "btrfs",
+          "zfs",
+          "f2fs",
+          "vfat",
+          "exfat",
+          "ntfs",
+        ].includes(fstype);
       });
     const seen = new Set<string>();
     for (const [dev, mount] of mounts) {
-      if (seen.has(dev) || !mount) continue;
-      seen.add(dev);
+      if (seen.has(dev!) || !mount) continue;
+      seen.add(dev!);
       try {
         const s = statfsSync(mount);
         const total = s.blocks * s.bsize;
@@ -99,7 +140,7 @@ function readDisks(): { mount: string; usedGb: number; totalGb: number; pct: num
         const used = total - avail;
         if (total === 0) continue;
         out.push({
-          mount: mount === '/' ? '/' : mount,
+          mount: mount === "/" ? "/" : mount,
           usedGb: used / 1e9,
           totalGb: total / 1e9,
           pct: (used / total) * 100,
@@ -108,16 +149,18 @@ function readDisks(): { mount: string; usedGb: number; totalGb: number; pct: num
     }
   } catch {}
   out.sort((a, b) => b.totalGb - a.totalGb);
-  return out.slice(0, 4);
+  return out.slice(0, HOST_MAX_DISKS);
 }
 
-function readNets(now: number): { iface: string; rxBps: number; txBps: number }[] {
-  const data = readProc('/proc/net/dev');
+function readNets(
+  now: number,
+): { iface: string; rxBps: number; txBps: number }[] {
+  const data = readProc("/proc/net/dev");
   const cur = new Map<string, { rx: number; tx: number }>();
-  for (const line of data.split('\n').slice(2)) {
-    const [head, rest] = line.split(':');
+  for (const line of data.split("\n").slice(2)) {
+    const [head, rest] = line.split(":");
     const iface = head?.trim();
-    if (!iface || iface === 'lo') continue;
+    if (!iface || iface === "lo") continue;
     const nums = rest?.trim().split(/\s+/).map(Number) ?? [];
     cur.set(iface, { rx: nums[0] ?? 0, tx: nums[8] ?? 0 });
   }
@@ -134,17 +177,22 @@ function readNets(now: number): { iface: string; rxBps: number; txBps: number }[
   }
   prevNet = { time: now, byIface: cur };
   out.sort((a, b) => b.rxBps + b.txBps - (a.rxBps + a.txBps));
-  return out.slice(0, 2);
+  return out.slice(0, HOST_MAX_NETWORK_INTERFACES);
 }
 
-function readDiskIo(now: number): { dev: string; rxBps: number; txBps: number }[] {
-  const data = readProc('/proc/diskstats');
+function readDiskIo(
+  now: number,
+): { dev: string; rxBps: number; txBps: number }[] {
+  const data = readProc("/proc/diskstats");
   const cur = new Map<string, { rx: number; tx: number }>();
-  for (const line of data.split('\n')) {
+  for (const line of data.split("\n")) {
     const parts = line.trim().split(/\s+/);
     const name = parts[2];
     if (!name) continue;
-    const physical = /^(sd|vd|hd|xvd)[a-z]+$/.test(name) || /^nvme\d+n\d+$/.test(name) || /^mmcblk\d+$/.test(name);
+    const physical =
+      /^(sd|vd|hd|xvd)[a-z]+$/.test(name) ||
+      /^nvme\d+n\d+$/.test(name) ||
+      /^mmcblk\d+$/.test(name);
     if (!physical) continue;
     const sectorsRead = Number(parts[5] ?? 0);
     const sectorsWrite = Number(parts[9] ?? 0);
@@ -166,32 +214,35 @@ function readDiskIo(now: number): { dev: string; rxBps: number; txBps: number }[
   }
   prevDiskIo = { time: now, byDev: cur };
   out.sort((a, b) => b.rxBps + b.txBps - (a.rxBps + a.txBps));
-  return out.slice(0, 3);
+  return out.slice(0, HOST_MAX_DISK_IO_DEVICES);
 }
 
 function readTemps(): number[] {
-  const base = '/sys/class/thermal';
-  const zones = readdirSync(base).filter((d) => d.startsWith('thermal_zone'));
+  const base = "/sys/class/thermal";
+  const zones = readdirSync(base).filter((d) => d.startsWith("thermal_zone"));
   const out: number[] = [];
-  for (const zone of zones.slice(0, 4)) {
+  for (const zone of zones.slice(0, HOST_MAX_THERMAL_ZONES)) {
     try {
-      const t = Number(readFileSync(`${base}/${zone}/temp`, 'utf8').trim());
+      const t = Number(readFileSync(`${base}/${zone}/temp`, "utf8").trim());
       if (t > 1000 && t < 130000) out.push(t / 1000);
     } catch {}
   }
   return out;
 }
 
-function readTopProcs(now: number): { pid: number; name: string; cpuPct: number; rssMb: number }[] {
-  const out: { pid: number; name: string; cpuPct: number; rssMb: number }[] = [];
-  for (const entry of readdirSync('/proc')) {
+function readTopProcs(
+  now: number,
+): { pid: number; name: string; cpuPct: number; rssMb: number }[] {
+  const out: { pid: number; name: string; cpuPct: number; rssMb: number }[] =
+    [];
+  for (const entry of readdirSync("/proc")) {
     if (!/^\d+$/.test(entry)) continue;
     try {
-      const stat = readFileSync(`/proc/${entry}/stat`, 'utf8');
-      const close = stat.lastIndexOf(')');
-      const name = stat.slice(stat.indexOf('(') + 1, close);
-      if (name.startsWith('[')) continue;
-      const rest = stat.slice(close + 2).split(' ');
+      const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+      const close = stat.lastIndexOf(")");
+      const name = stat.slice(stat.indexOf("(") + 1, close);
+      if (name.startsWith("[")) continue;
+      const rest = stat.slice(close + 2).split(" ");
       const utime = Number(rest[11] ?? 0);
       const stime = Number(rest[12] ?? 0);
       const rssPages = Number(rest[21] ?? 0);
@@ -199,13 +250,23 @@ function readTopProcs(now: number): { pid: number; name: string; cpuPct: number;
       const prev = prevProcs.get(Number(entry));
       prevProcs.set(Number(entry), { ticks, at: now });
       if (!prev || now <= prev.at) continue;
-      const cpuPct = ((ticks - prev.ticks) / CLK_TCK / ((now - prev.at) / 1000)) * 100;
+      const cpuPct =
+        ((ticks - prev.ticks) / SYSTEM_CLK_TCK / ((now - prev.at) / 1000)) *
+        100;
       if (cpuPct < 0.5) continue;
-      out.push({ pid: Number(entry), name, cpuPct, rssMb: (rssPages * 4096) / 1e6 });
+      out.push({
+        pid: Number(entry),
+        name,
+        cpuPct,
+        rssMb: (rssPages * 4096) / 1e6,
+      });
     } catch {}
   }
-  if (prevProcs.size > 500) prevProcs = new Map([...prevProcs].slice(-300));
-  return out.sort((a, b) => b.cpuPct - a.cpuPct).slice(0, 4);
+  if (prevProcs.size > 500)
+    prevProcs = new Map([...prevProcs].slice(-DAEMON_STATS_PREV_PROCS_CAP));
+  return out
+    .sort((a, b) => b.cpuPct - a.cpuPct)
+    .slice(0, DAEMON_STATS_TOP_PROCS_LIMIT);
 }
 
 export function collectHost(now: number): HostStats {

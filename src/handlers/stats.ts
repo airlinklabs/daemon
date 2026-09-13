@@ -1,10 +1,12 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { rename } from 'node:fs/promises';
-import { cpus, freemem, totalmem } from 'node:os';
-import { join } from 'node:path';
-import config from '../config';
-import logger from '../logger';
-import { getPaths } from '../paths';
+import { existsSync, readFileSync } from "node:fs";
+import { rename } from "node:fs/promises";
+import { cpus, freemem, totalmem } from "node:os";
+import { join } from "node:path";
+import config from "../config";
+import { CPU_SAMPLE_INTERVAL_MS } from "../config/timeouts";
+import { STATS_MAX_ENTRIES } from "../config/limits";
+import logger from "../logger";
+import { getPaths } from "../paths";
 
 // Tunable limits — overridable through env.
 
@@ -16,11 +18,10 @@ function positiveIntEnv(name: string, fallback: number): number {
 }
 
 // Entries older than this are dropped from both the in-memory log and the file.
-const STATS_MAX_AGE_MS = positiveIntEnv('AIRLINK_STATS_MAX_AGE_MS', 30 * 60 * 1000);
-// Hard count cap: even with a very fast collection interval the array and the
-// persisted file stay bounded.
-const STATS_MAX_ENTRIES = positiveIntEnv('AIRLINK_STATS_MAX_ENTRIES', 2000);
-const CPU_SAMPLE_INTERVAL_MS = 100;
+const STATS_MAX_AGE_MS = positiveIntEnv(
+  "AIRLINK_STATS_MAX_AGE_MS",
+  30 * 60 * 1000,
+);
 
 interface SystemStat {
   timestamp: string;
@@ -36,8 +37,8 @@ let statsLog: SystemStat[] = [];
 function storagePaths(): { storage: string; temp: string } {
   const dir = getPaths(config.paths).storageRoot;
   return {
-    storage: join(dir, 'systemStats.json'),
-    temp: join(dir, 'systemStats.tmp.json'),
+    storage: join(dir, "systemStats.json"),
+    temp: join(dir, "systemStats.tmp.json"),
   };
 }
 
@@ -62,7 +63,11 @@ function getCpuPercent(): Promise<number> {
           a.times.sys +
           a.times.idle +
           a.times.irq -
-          (b.times.user + b.times.nice + b.times.sys + b.times.idle + b.times.irq);
+          (b.times.user +
+            b.times.nice +
+            b.times.sys +
+            b.times.idle +
+            b.times.irq);
         totalIdle += dIdle;
         totalTick += dTick;
       }
@@ -97,15 +102,17 @@ export async function getCurrentStats(): Promise<SystemStat> {
 // Validates persisted entries without a cast. Only the timestamp is checked
 // structurally; the numeric fields are reported exactly as stored.
 function isSystemStat(value: unknown): value is SystemStat {
-  if (typeof value !== 'object' || value === null) return false;
-  return typeof Reflect.get(value, 'timestamp') === 'string';
+  if (typeof value !== "object" || value === null) return false;
+  return typeof Reflect.get(value, "timestamp") === "string";
 }
 
 function pruneStats(): void {
   const now = Date.now();
   // Entries with an unparseable timestamp yield NaN, which fails the <= test
   // and are therefore dropped here.
-  let kept = statsLog.filter((e) => now - new Date(e.timestamp).getTime() <= STATS_MAX_AGE_MS);
+  let kept = statsLog.filter(
+    (e) => now - new Date(e.timestamp).getTime() <= STATS_MAX_AGE_MS,
+  );
   if (kept.length > STATS_MAX_ENTRIES) kept = kept.slice(-STATS_MAX_ENTRIES);
   statsLog = kept;
 }
@@ -123,13 +130,13 @@ function schedulePersist(): void {
       await rename(temp, storage);
     })
     .catch((err: unknown) => {
-      logger.error('failed to write stats file', err);
+      logger.error("failed to write stats file", err);
     });
 }
 
 export function saveStats(stats: SystemStat): void {
   if (!stats?.timestamp) {
-    logger.warn('invalid stats data passed to saveStats');
+    logger.warn("invalid stats data passed to saveStats");
     return;
   }
 
@@ -149,12 +156,12 @@ export function getTotalStats(): SystemStat[] {
   try {
     const { storage } = storagePaths();
     if (existsSync(storage)) {
-      const data = readFileSync(storage, 'utf8');
+      const data = readFileSync(storage, "utf8");
       const parsed: unknown = JSON.parse(data);
       if (Array.isArray(parsed)) return parsed.filter(isSystemStat);
     }
   } catch (err) {
-    logger.error('error reading total stats', err);
+    logger.error("error reading total stats", err);
   }
   return [];
 }
@@ -163,7 +170,7 @@ export function initStatsCollection(): void {
   const { storage } = storagePaths();
   if (!existsSync(storage)) return;
   try {
-    const data = readFileSync(storage, 'utf8').trim();
+    const data = readFileSync(storage, "utf8").trim();
     if (!data) return;
 
     const parsed: unknown = JSON.parse(data);
@@ -172,7 +179,7 @@ export function initStatsCollection(): void {
       pruneStats();
     }
   } catch (err) {
-    logger.error('error loading stats on startup', err);
+    logger.error("error loading stats on startup", err);
     statsLog = [];
   }
 }

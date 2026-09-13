@@ -1,11 +1,14 @@
 // Single-use, short-lived download tokens. Minted by daemon, consumed at /dl/<token>.
 
-import { randomBytes } from 'node:crypto';
-import logger from '../logger';
+import { randomBytes } from "node:crypto";
+import {
+  DOWNLOAD_TOKEN_TTL_MS,
+  DOWNLOAD_TOKEN_CLEANUP_MS,
+} from "../config/timeouts";
+import { MAX_DOWNLOAD_TOKENS } from "../config/limits";
+import logger from "../logger";
 
-export const DOWNLOAD_TOKEN_TTL_MS = 90_000; // 90s — enough for a redirect + tab open
-const MAX_TOKENS = 10_000;
-const CLEANUP_INTERVAL_MS = 30_000;
+export { DOWNLOAD_TOKEN_TTL_MS };
 
 export interface DownloadToken {
   /** absolute path, already resolved and jailed by the mint handler */
@@ -13,7 +16,7 @@ export interface DownloadToken {
   /** safe filename for Content-Disposition */
   fileName: string;
   contentType: string;
-  disposition: 'attachment' | 'inline';
+  disposition: "attachment" | "inline";
   expiresAt: number;
 }
 
@@ -25,7 +28,7 @@ setInterval(() => {
   for (const [token, entry] of tokens) {
     if (entry.expiresAt < now) tokens.delete(token);
   }
-}, CLEANUP_INTERVAL_MS);
+}, DOWNLOAD_TOKEN_CLEANUP_MS);
 
 function evictExpired(): void {
   const now = Date.now();
@@ -34,9 +37,11 @@ function evictExpired(): void {
   }
 }
 
-export function createDownloadToken(entry: Omit<DownloadToken, 'expiresAt'>): string {
+export function createDownloadToken(
+  entry: Omit<DownloadToken, "expiresAt">,
+): string {
   evictExpired();
-  if (tokens.size >= MAX_TOKENS) {
+  if (tokens.size >= MAX_DOWNLOAD_TOKENS) {
     // still full after eviction — drop the soonest-to-expire token
     let oldest: string | null = null;
     let oldestExp = Infinity;
@@ -49,7 +54,7 @@ export function createDownloadToken(entry: Omit<DownloadToken, 'expiresAt'>): st
     if (oldest) tokens.delete(oldest);
   }
 
-  const token = randomBytes(32).toString('hex');
+  const token = randomBytes(32).toString("hex");
   tokens.set(token, {
     ...entry,
     expiresAt: Date.now() + DOWNLOAD_TOKEN_TTL_MS,

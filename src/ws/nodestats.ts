@@ -1,13 +1,18 @@
-import { statfsSync } from 'node:fs';
-import { cpus, freemem, totalmem, uptime } from 'node:os';
-import type { ServerWebSocket } from 'bun';
-import { getTotalStats } from '../handlers/stats';
-import logger from '../logger';
-import type { WsData } from './server';
+import { statfsSync } from "node:fs";
+import { cpus, freemem, totalmem, uptime } from "node:os";
+import type { ServerWebSocket } from "bun";
+import { NODE_STATS_POLL_MS } from "../config/timeouts";
+import { NODE_STATS_HISTORY_SLICE } from "../config/limits";
+import { getTotalStats } from "../handlers/stats";
+import logger from "../logger";
+import type { WsData } from "./server";
 
-const POLL_MS = 3000;
+const POLL_MS = NODE_STATS_POLL_MS;
 
-export function startNodeStatsPolling(ws: ServerWebSocket<WsData>): ReturnType<typeof setInterval> {
+export function startNodeStatsPolling(
+  ws: ServerWebSocket<WsData>,
+): ReturnType<typeof setInterval> {
+  logger.debug("node stats polling started");
   sendNodeStats(ws);
   return setInterval(() => {
     if (ws.readyState !== 1) return;
@@ -22,21 +27,31 @@ function sendNodeStats(ws: ServerWebSocket<WsData>): void {
     const freeRam = freemem();
     const usedRam = totalRam - freeRam;
     const cpuCount = cpus().length;
-    const cpuModel = cpus()[0]?.model || 'unknown';
+    const cpuModel = cpus()[0]?.model || "unknown";
     const uptimeSec = uptime();
 
     let disk = { total: 0, used: 0, available: 0 };
     try {
-      const fs = statfsSync('/');
-      disk = { total: fs.blocks * fs.bsize, used: (fs.blocks - fs.bfree) * fs.bsize, available: fs.bavail * fs.bsize };
-    } catch {}
+      const fs = statfsSync("/");
+      disk = {
+        total: fs.blocks * fs.bsize,
+        used: (fs.blocks - fs.bfree) * fs.bsize,
+        available: fs.bavail * fs.bsize,
+      };
+    } catch {
+      logger.warn("disk stats unavailable");
+    }
 
     const totalStats = getTotalStats();
     const latest = totalStats.length ? totalStats[totalStats.length - 1] : null;
 
+    logger.debug(
+      `nodestats collected: ram_used=${(usedRam / 1024 / 1024).toFixed(0)}MB cpu_cores=${cpuCount} stats_entries=${totalStats.length}`,
+    );
+
     ws.send(
       JSON.stringify({
-        event: 'nodestats',
+        event: "nodestats",
         data: {
           host: {
             ram: { total: totalRam, used: usedRam, free: freeRam },
@@ -44,13 +59,17 @@ function sendNodeStats(ws: ServerWebSocket<WsData>): void {
             disk,
             uptime: uptimeSec,
           },
-          stats: { totalStats: totalStats.slice(-30), uptime: formatUptime(uptimeSec) },
+          stats: {
+            totalStats: totalStats.slice(-NODE_STATS_HISTORY_SLICE),
+            uptime: formatUptime(uptimeSec),
+          },
           current: latest,
         },
       }),
     );
+    logger.debug("nodestats broadcast sent");
   } catch (err) {
-    logger.warn('nodestats send failed', err);
+    logger.warn("nodestats send failed", err);
   }
 }
 
@@ -62,9 +81,11 @@ function formatUptime(s: number): string {
   if (d) parts.push(`${d}d`);
   if (h) parts.push(`${h}h`);
   if (m || !parts.length) parts.push(`${m}m`);
-  return parts.join(' ');
+  return parts.join(" ");
 }
 
-export function stopNodeStatsPolling(timer: ReturnType<typeof setInterval>): void {
+export function stopNodeStatsPolling(
+  timer: ReturnType<typeof setInterval>,
+): void {
   clearInterval(timer);
 }

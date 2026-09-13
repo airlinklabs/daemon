@@ -1,5 +1,5 @@
-import { z } from 'zod';
-import { apiError } from '../errors';
+import { z } from "zod";
+import { apiError } from "../errors";
 
 export {
   backupBodyCodes,
@@ -8,7 +8,7 @@ export {
   backupDeleteBodySchema,
   restoreBodyCodes,
   restoreBodySchema,
-} from './backup';
+} from "./backup";
 export {
   commandBodyCodes,
   commandBodySchema,
@@ -27,7 +27,7 @@ export {
   sftpBodySchema,
   startBodyCodes,
   startBodySchema,
-} from './container';
+} from "./container";
 export {
   fsAppendBodyCodes,
   fsAppendBodySchema,
@@ -51,8 +51,11 @@ export {
   fsWriteBodySchema,
   fsZipBodyCodes,
   fsZipBodySchema,
-} from './filesystem';
-export { logArchiveDownloadBodyCodes, logArchiveDownloadBodySchema } from './logs';
+} from "./filesystem";
+export {
+  logArchiveDownloadBodyCodes,
+  logArchiveDownloadBodySchema,
+} from "./logs";
 
 export const errorEnvelopeSchema = z.object({
   error: z.string(),
@@ -63,7 +66,12 @@ export const errorEnvelopeSchema = z.object({
 
 export type ParsedBody<T> = { data: T } | { response: Response };
 
-type ApiCode = 'invalid_request' | 'invalid_json' | 'container_not_found' | 'path_traversal' | 'not_found';
+type ApiCode =
+  | "invalid_request"
+  | "invalid_json"
+  | "container_not_found"
+  | "path_traversal"
+  | "not_found";
 
 export async function parseJsonBody<T>(
   req: Request,
@@ -74,11 +82,12 @@ export async function parseJsonBody<T>(
   try {
     raw = await req.json();
   } catch {
-    return { response: apiError('invalid_json', 'invalid json body', 400) };
+    return { response: apiError("invalid_json", "invalid json body", 400) };
   }
   const result = schema.safeParse(raw);
   if (result.success) return { data: result.data };
-  const issue = result.error.issues[0];
-  const code = (codeByField[issue.path.join('.')] ?? 'invalid_request') as ApiCode;
+  const issue = result.error.issues[0]!;
+  const code = (codeByField[issue.path.join(".")] ??
+    "invalid_request") as ApiCode;
   return { response: apiError(code, issue.message, 400) };
 }

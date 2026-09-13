@@ -1,12 +1,18 @@
+import { MAX_CONTAINER_ID_LENGTH } from "./config/limits";
+
 export function validateContainerId(id: string): boolean {
   if (!id) return false;
-  return /^[a-zA-Z0-9_-]+$/.test(id) && id.length >= 1 && id.length <= 64;
+  return (
+    /^[a-zA-Z0-9_-]+$/.test(id) &&
+    id.length >= 1 &&
+    id.length <= MAX_CONTAINER_ID_LENGTH
+  );
 }
 
 export function validatePath(relativePath: string): boolean {
   if (!relativePath) return false;
-  if (relativePath.includes('..') || relativePath.includes('\\')) return false;
-  if (relativePath.includes('\0')) return false;
+  if (relativePath.includes("..") || relativePath.includes("\\")) return false;
+  if (relativePath.includes("\0")) return false;
   return true;
 }
 
@@ -20,7 +26,7 @@ export function validateUrl(url: string): boolean {
   if (!url) return false;
   try {
     const u = new URL(url);
-    return ['http:', 'https:'].includes(u.protocol);
+    return ["http:", "https:"].includes(u.protocol);
   } catch {
     return false;
   }

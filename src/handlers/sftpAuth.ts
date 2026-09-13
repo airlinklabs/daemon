@@ -1,21 +1,39 @@
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
-import config from '../config';
-import logger from '../logger';
-import { getPaths } from '../paths';
-
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import config from "../config";
+import { SFTP_SESSION_TTL_MS } from "../config/timeouts";
+import { SFTP_ACTIVITY_BUFFER_LIMIT } from "../config/limits";
+import logger from "../logger";
+import { getPaths } from "../paths";
 
 export type SftpActivityEvent =
-  | { kind: 'connect'; serverId: string; username: string; ip: string }
-  | { kind: 'disconnect'; serverId: string; username: string }
-  | { kind: 'write'; serverId: string; username: string; path: string; bytes: number }
-  | { kind: 'read'; serverId: string; username: string; path: string; bytes: number }
-  | { kind: 'remove'; serverId: string; username: string; path: string }
-  | { kind: 'rename'; serverId: string; username: string; from: string; to: string }
-  | { kind: 'mkdir'; serverId: string; username: string; path: string }
-  | { kind: 'readdir'; serverId: string; username: string; path: string };
+  | { kind: "connect"; serverId: string; username: string; ip: string }
+  | { kind: "disconnect"; serverId: string; username: string }
+  | {
+      kind: "write";
+      serverId: string;
+      username: string;
+      path: string;
+      bytes: number;
+    }
+  | {
+      kind: "read";
+      serverId: string;
+      username: string;
+      path: string;
+      bytes: number;
+    }
+  | { kind: "remove"; serverId: string; username: string; path: string }
+  | {
+      kind: "rename";
+      serverId: string;
+      username: string;
+      from: string;
+      to: string;
+    }
+  | { kind: "mkdir"; serverId: string; username: string; path: string }
+  | { kind: "readdir"; serverId: string; username: string; path: string };
 
 export type SftpActivityHook = (event: SftpActivityEvent) => void;
 
@@ -36,13 +54,12 @@ export const clientSessions = new WeakMap<object, NativeSftpSession>();
 
 // Buffered SFTP activity per server, consumed by the panel for P3-4 auditing.
 const activityBuffer = new Map<string, SftpActivityEvent[]>();
-const ACTIVITY_BUFFER_LIMIT = 500;
 
 function recordActivity(event: SftpActivityEvent): void {
   const list = activityBuffer.get(event.serverId);
   if (list) {
     list.push(event);
-    if (list.length > ACTIVITY_BUFFER_LIMIT) list.shift();
+    if (list.length > SFTP_ACTIVITY_BUFFER_LIMIT) list.shift();
   } else {
     activityBuffer.set(event.serverId, [event]);
   }
@@ -55,7 +72,7 @@ export function getSftpActivity(serverId: string): SftpActivityEvent[] {
 }
 
 export function hashPassword(password: string): Buffer {
-  return new Bun.CryptoHasher('sha256').update(password).digest() as Buffer;
+  return new Bun.CryptoHasher("sha256").update(password).digest() as Buffer;
 }
 
 export function timingSafeEq(a: Buffer, b: Buffer): boolean {
@@ -68,7 +85,10 @@ export function volumePathFor(serverId: string): string {
 }
 
 function usernameForServer(serverId: string): string {
-  const hash = new Bun.CryptoHasher('sha256').update(`${serverId}${randomUUID()}`).digest('hex').substring(0, 16);
+  const hash = new Bun.CryptoHasher("sha256")
+    .update(`${serverId}${randomUUID()}`)
+    .digest("hex")
+    .substring(0, 16);
   return `alsftp_${hash}`;
 }
 
@@ -78,7 +98,10 @@ export function revokeByServer(serverId: string): void {
   const session = sessions.get(username);
   sessions.delete(username);
   sessionByServer.delete(serverId);
-  if (session) logger.info(`SFTP session ended for server ${session.serverId}: user=${session.username}`);
+  if (session)
+    logger.info(
+      `SFTP session ended for server ${session.serverId}: user=${session.username}`,
+    );
 }
 
 export interface SftpCredential {
@@ -89,16 +112,19 @@ export interface SftpCredential {
   expiresAt: number;
 }
 
-export async function generateCredential(containerId: string): Promise<SftpCredential> {
+export async function generateCredential(
+  containerId: string,
+): Promise<SftpCredential> {
   const volume = volumePathFor(containerId);
-  if (!existsSync(volume)) throw new Error(`volume for container ${containerId} does not exist`);
+  if (!existsSync(volume))
+    throw new Error(`volume for container ${containerId} does not exist`);
 
   const prior = sessionByServer.get(containerId);
   if (prior) revokeByServer(containerId);
 
   const username = usernameForServer(containerId);
-  const password = randomBytes(24).toString('base64url');
-  const expiresAt = Date.now() + SESSION_TTL_MS;
+  const password = randomBytes(24).toString("base64url");
+  const expiresAt = Date.now() + SFTP_SESSION_TTL_MS;
 
   sessions.set(username, {
     serverId: containerId,
@@ -109,20 +135,30 @@ export async function generateCredential(containerId: string): Promise<SftpCrede
   });
   sessionByServer.set(containerId, username);
 
-  logger.info(`SFTP session registered for server ${containerId}: user=${username}`);
-  return { username, password, host: config.remote, port: config.sftpPort, expiresAt };
+  logger.info(
+    `SFTP session registered for server ${containerId}: user=${username}`,
+  );
+  return {
+    username,
+    password,
+    host: config.remote,
+    port: config.sftpPort,
+    expiresAt,
+  };
 }
 
 export async function revokeCredential(sessionKey: string): Promise<void> {
-  if (sessionKey.startsWith('container:')) {
-    revokeByServer(sessionKey.slice('container:'.length));
+  if (sessionKey.startsWith("container:")) {
+    revokeByServer(sessionKey.slice("container:".length));
     return;
   }
   const session = sessions.get(sessionKey);
   if (session) revokeByServer(session.serverId);
 }
 
-export async function revokeCredentialForContainer(containerId: string): Promise<void> {
+export async function revokeCredentialForContainer(
+  containerId: string,
+): Promise<void> {
   revokeByServer(containerId);
 }
 
@@ -132,29 +168,56 @@ export function getActiveSessionCount(): number {
 
 export type SftpAuthOutcome =
   | { ok: true; session: NativeSftpSession }
-  | { ok: false; reason: 'invalid_credential' | 'expired' | 'invalid_password' };
+  | {
+      ok: false;
+      reason: "invalid_credential" | "expired" | "invalid_password";
+    };
 
-export function authenticateSftpSession(username: string, password: string, now: number = Date.now()): SftpAuthOutcome {
+export function authenticateSftpSession(
+  username: string,
+  password: string,
+  now: number = Date.now(),
+): SftpAuthOutcome {
+  logger.debug(`SFTP auth attempt: user=${username}`);
   const session = sessions.get(username);
   if (!session || !password) {
-    return { ok: false, reason: 'invalid_credential' };
+    logger.warn(`SFTP auth failed: user=${username} reason=invalid_credential`);
+    return { ok: false, reason: "invalid_credential" };
   }
   if (now > session.expiresAt) {
     sessions.delete(username);
     sessionByServer.delete(session.serverId);
-    return { ok: false, reason: 'expired' };
+    logger.warn(
+      `SFTP auth failed: user=${session.username} serverId=${session.serverId} reason=expired`,
+    );
+    return { ok: false, reason: "expired" };
   }
   if (!timingSafeEq(session.passwordHash, hashPassword(password))) {
-    return { ok: false, reason: 'invalid_password' };
+    logger.warn(
+      `SFTP auth failed: user=${session.username} serverId=${session.serverId} reason=invalid_password`,
+    );
+    return { ok: false, reason: "invalid_password" };
   }
+  logger.info(
+    `SFTP auth success: user=${session.username} serverId=${session.serverId}`,
+  );
   return { ok: true, session };
 }
 
-export function attachActivityHook(serverId: string, hook: SftpActivityHook): boolean {
+export function attachActivityHook(
+  serverId: string,
+  hook: SftpActivityHook,
+): boolean {
   const username = sessionByServer.get(serverId);
   const session = username ? sessions.get(username) : undefined;
-  if (!session) return false;
+  if (!session) {
+    logger.warn(
+      `SFTP activity hook failed: serverId=${serverId} no active session`,
+    );
+    return false;
+  }
   session.hook = hook;
+  logger.debug(`SFTP activity hook attached: serverId=${serverId}`);
   return true;
 }
 

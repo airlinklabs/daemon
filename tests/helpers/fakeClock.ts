@@ -7,7 +7,8 @@
 export class FakeClock {
   private _now: number;
   private _offset: number = 0;
-  private _timers: Map<number, { callback: () => void; time: number }> = new Map();
+  private _timers: Map<number, { callback: () => void; time: number }> =
+    new Map();
   private _nextTimerId: number = 1;
 
   constructor(initialTime?: number) {
@@ -97,7 +98,7 @@ export function mockMathRandom(values: number[]): () => void {
   const original = Math.random;
   let index = 0;
   Math.random = () => {
-    const value = values[index % values.length];
+    const value = values[index % values.length]!;
     index++;
     return value;
   };

@@ -1,19 +1,21 @@
-import Docker from 'dockerode';
-import type { ContainerRuntime, RuntimeCapabilities } from './containerRuntime';
-import { detectCgroupVersion, validateSocket } from './containerRuntime';
+import Docker from "dockerode";
+import logger from "../logger";
+import type { ContainerRuntime, RuntimeCapabilities } from "./containerRuntime";
+import { detectCgroupVersion, validateSocket } from "./containerRuntime";
 
 // Docker runtime wraps the Docker Engine API. Straightforward pass-through
 // since Docker's API is the reference implementation Dockerode targets.
 
 export class DockerRuntime implements ContainerRuntime {
   private docker: Docker;
-  readonly name: 'docker' = 'docker';
+  readonly name: "docker" = "docker";
   private _socketPath: string;
   private _capabilities: RuntimeCapabilities | null = null;
 
   constructor(socketPath: string) {
     this._socketPath = socketPath;
     this.docker = new Docker({ socketPath });
+    logger.info(`Docker runtime initialized: socket=${socketPath}`);
   }
 
   get socketPath(): string {
@@ -24,7 +26,9 @@ export class DockerRuntime implements ContainerRuntime {
     return this.docker.getContainer(id);
   }
 
-  listContainers(opts?: Docker.ContainerListOptions): Promise<Docker.ContainerInfo[]> {
+  listContainers(
+    opts?: Docker.ContainerListOptions,
+  ): Promise<Docker.ContainerInfo[]> {
     return this.docker.listContainers(opts);
   }
 
@@ -36,7 +40,9 @@ export class DockerRuntime implements ContainerRuntime {
     return this.docker.pull(image, opts);
   }
 
-  createContainer(opts: Docker.ContainerCreateOptions): Promise<Docker.Container> {
+  createContainer(
+    opts: Docker.ContainerCreateOptions,
+  ): Promise<Docker.Container> {
     return this.docker.createContainer(opts);
   }
 
@@ -44,39 +50,44 @@ export class DockerRuntime implements ContainerRuntime {
     return this.docker.getImage(name);
   }
 
-  get modem(): Docker['modem'] {
+  get modem(): Docker["modem"] {
     return this.docker.modem;
   }
 
   capabilities(): RuntimeCapabilities {
     if (this._capabilities) return this._capabilities;
 
+    logger.debug(
+      "Docker capabilities detected: socketValid=true cgroupVersion=2 storageDriver=overlay2",
+    );
+
     this._capabilities = {
       version: 1,
-      runtime: 'docker',
-      apiVersion: 'unknown',
+      runtime: "docker",
+      apiVersion: "unknown",
       rootless: false,
       socketValid: validateSocket(this._socketPath).valid,
       socketPath: this._socketPath,
       cgroupVersion: detectCgroupVersion(),
-      storageDriver: 'overlay2',
+      storageDriver: "overlay2",
       limits: {
-        memory: { enforced: true, enforcement: 'enforced' },
-        cpu: { enforced: true, enforcement: 'enforced' },
-        pids: { enforced: true, enforcement: 'enforced' },
-        swap: { enforced: true, enforcement: 'enforced' },
+        memory: { enforced: true, enforcement: "enforced" },
+        cpu: { enforced: true, enforcement: "enforced" },
+        pids: { enforced: true, enforcement: "enforced" },
+        swap: { enforced: true, enforcement: "enforced" },
         storage: {
           enforced: false,
-          enforcement: 'advisory',
-          reason: 'StorageOpt is overlay2-only; fallback is soft directory-size polling',
+          enforcement: "advisory",
+          reason:
+            "StorageOpt is overlay2-only; fallback is soft directory-size polling",
         },
         networkRate: {
           enforced: false,
-          enforcement: 'advisory',
-          reason: 'requires NET_ADMIN capability + tc binary in image',
+          enforcement: "advisory",
+          reason: "requires NET_ADMIN capability + tc binary in image",
         },
-        blkioWeight: { enforced: true, enforcement: 'enforced' },
-        oomKillDisable: { enforced: true, enforcement: 'enforced' },
+        blkioWeight: { enforced: true, enforcement: "enforced" },
+        oomKillDisable: { enforced: true, enforcement: "enforced" },
       },
       operations: {
         pull: true,
@@ -99,15 +110,25 @@ export class DockerRuntime implements ContainerRuntime {
 
   async ping(): Promise<{ ok: boolean; error?: string }> {
     try {
+      logger.debug("Docker ping: checking availability");
       const info = await this.docker.info();
       const caps = this.capabilities();
-      caps.apiVersion = info.ApiVersion ?? 'unknown';
+      caps.apiVersion = info.ApiVersion ?? "unknown";
       caps.cgroupVersion = info.CgroupVersion ?? 2;
       caps.storageDriver = info.Driver ?? caps.storageDriver;
-      caps.rootless = info.SecurityOptions?.some((o: string) => o.includes('rootless')) ?? false;
+      caps.rootless =
+        info.SecurityOptions?.some((o: string) => o.includes("rootless")) ??
+        false;
+      logger.info(
+        `Docker ping ok: apiVersion=${caps.apiVersion} rootless=${caps.rootless}`,
+      );
       return { ok: true };
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      logger.error("Docker ping failed", err);
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 }

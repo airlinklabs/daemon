@@ -4,10 +4,10 @@
  * Provides mkdtemp-based fixture roots instead of CWD-relative paths.
  * Prevents test pollution and makes tests portable.
  */
-import { mkdtemp, rm, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { afterAll, beforeAll } from 'bun:test';
+import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll } from "bun:test";
 
 export interface TestFixture {
   /** Unique temp directory for this test suite */
@@ -31,13 +31,15 @@ export interface TestFixture {
  * @param prefix - Optional prefix for the temp directory name
  * @returns TestFixture with paths and cleanup function
  */
-export async function createTestFixture(prefix: string = 'airlink-test-'): Promise<TestFixture> {
+export async function createTestFixture(
+  prefix: string = "airlink-test-",
+): Promise<TestFixture> {
   const root = await mkdtemp(join(tmpdir(), prefix));
 
-  const volumes = join(root, 'volumes');
-  const storage = join(root, 'storage');
-  const backups = join(root, 'backups');
-  const logs = join(root, 'logs');
+  const volumes = join(root, "volumes");
+  const storage = join(root, "storage");
+  const backups = join(root, "backups");
+  const logs = join(root, "logs");
 
   await mkdir(volumes, { recursive: true });
   await mkdir(storage, { recursive: true });
@@ -89,12 +91,12 @@ export async function createServerConfig(
   const volumePath = join(fixture.volumes, containerId);
   await mkdir(volumePath, { recursive: true });
 
-  const configPath = join(volumePath, 'server.properties');
+  const configPath = join(volumePath, "server.properties");
   const content = Object.entries(config)
     .map(([key, value]) => `${key}=${value}`)
-    .join('\n');
+    .join("\n");
 
-  await writeFile(configPath, content, 'utf8');
+  await writeFile(configPath, content, "utf8");
   return configPath;
 }
 
@@ -108,7 +110,7 @@ export async function createServerConfig(
 export async function createBackupFile(
   fixture: TestFixture,
   uuid: string,
-  data: Buffer | string = 'mock backup data',
+  data: Buffer | string = "mock backup data",
 ): Promise<string> {
   const backupPath = join(fixture.backups, `${uuid}.tar.gz`);
   await writeFile(backupPath, data);
@@ -126,12 +128,12 @@ export function createRequest(
     headers?: Record<string, string>;
   } = {},
 ): Request {
-  const { method = 'POST', body, headers = {} } = options;
+  const { method = "POST", body, headers = {} } = options;
 
   return new Request(url, {
     method,
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
       ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -156,7 +158,7 @@ export function createMockPaths(fixture: TestFixture) {
     backupsRoot: fixture.backups,
     storageRoot: fixture.storage,
     logsRoot: fixture.logs,
-    runtimeRoot: join(fixture.root, 'runtime'),
-    alcFilesRoot: join(fixture.root, 'alc-files'),
+    runtimeRoot: join(fixture.root, "runtime"),
+    alcFilesRoot: join(fixture.root, "alc-files"),
   };
 }

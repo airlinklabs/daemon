@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -12,13 +12,19 @@ import {
   statSync,
   unlinkSync,
   writeSync,
-} from 'node:fs';
-import { dirname, join, sep } from 'node:path';
-import type { Attributes, FileEntry, SFTPWrapper } from 'ssh2';
-import { jailPath } from '../security/pathJail';
-import { secureOpenAppend, secureOpenRead, secureOpenReadWrite, secureOpenWrite } from '../security/secureOpen';
-import type { NativeSftpSession, SftpActivityEvent } from './sftpAuth';
-import { recordActivity } from './sftpAuth';
+} from "node:fs";
+import { dirname, join, sep } from "node:path";
+import type { Attributes, FileEntry, SFTPWrapper } from "ssh2";
+import { jailPath } from "../security/pathJail";
+import {
+  secureOpenAppend,
+  secureOpenRead,
+  secureOpenReadWrite,
+  secureOpenWrite,
+} from "../security/secureOpen";
+import logger from "../logger";
+import type { NativeSftpSession, SftpActivityEvent } from "./sftpAuth";
+import { recordActivity } from "./sftpAuth";
 
 const OK = 0;
 const EOF = 1;
@@ -33,18 +39,28 @@ const SSH_FXF_TRUNC = 0x00000010;
 
 const READDIR_BATCH_SIZE = 100;
 
-export const openFiles = new Map<string, { fd: number; path: string; size: number }>();
+export const openFiles = new Map<
+  string,
+  { fd: number; path: string; size: number }
+>();
 
 function toStatus(err: unknown): number {
   const code = (err as NodeJS.ErrnoException)?.code;
-  if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'ENOTEMPTY') return NO_SUCH_FILE;
-  if (code === 'EACCES' || code === 'EPERM' || code === 'EEXIST' || code === 'EISDIR') return PERMISSION_DENIED;
+  if (code === "ENOENT" || code === "ENOTDIR" || code === "ENOTEMPTY")
+    return NO_SUCH_FILE;
+  if (
+    code === "EACCES" ||
+    code === "EPERM" ||
+    code === "EEXIST" ||
+    code === "EISDIR"
+  )
+    return PERMISSION_DENIED;
   return FAILURE;
 }
 
 export function rooted(base: string, remote: string): string {
-  const rel = remote.replace(/^\/+/, '');
-  if (rel === '') return base;
+  const rel = remote.replace(/^\/+/, "");
+  if (rel === "") return base;
 
   const jailed = jailPath(base, rel);
 
@@ -81,10 +97,10 @@ function toAttributes(st: unknown): Attributes {
   };
 }
 
-const PERMS = ['---', '--x', '-w-', '-wx', 'r--', 'r-x', 'rw-', 'rwx'];
+const PERMS = ["---", "--x", "-w-", "-wx", "r--", "r-x", "rw-", "rwx"];
 function perms(mode: number): string {
-  const oct = (mode & 0o777).toString(8).padStart(3, '0');
-  let out = '';
+  const oct = (mode & 0o777).toString(8).padStart(3, "0");
+  let out = "";
   for (const c of oct) out += PERMS[parseInt(c, 10)];
   return out;
 }
@@ -97,25 +113,33 @@ function longName(filename: string, st: unknown): string {
     size: number;
     mtimeMs: number;
   };
-  const type = t.isDirectory() ? 'd' : t.isSymbolicLink() ? 'l' : '-';
+  const type = t.isDirectory() ? "d" : t.isSymbolicLink() ? "l" : "-";
   const date = new Date(t.mtimeMs)
     .toISOString()
-    .replace(/\.\d+Z$/, '+0000')
-    .replace(/[-:]/g, '');
+    .replace(/\.\d+Z$/, "+0000")
+    .replace(/[-:]/g, "");
   return `${type}${perms(t.mode)} 1 owner group ${t.size} ${date} ${filename}`;
 }
 
 function relOf(root: string, full: string): string {
-  const rel = full.slice(root.length).replace(/^\/?/, '/');
-  return rel === '' ? '/' : rel;
+  const rel = full.slice(root.length).replace(/^\/?/, "/");
+  return rel === "" ? "/" : rel;
 }
 
-export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSession): void {
+export function serveSftp(
+  sftp: SFTPWrapper,
+  root: string,
+  session: NativeSftpSession,
+): void {
   const emit = (event: Partial<SftpActivityEvent>): void => {
     const full = { serverId: session.serverId, ...event } as SftpActivityEvent;
     recordActivity(full);
     if (session.hook) session.hook(full);
   };
+
+  logger.info(
+    `SFTP session opened: serverId=${session.serverId} user=${session.username} root=${root}`,
+  );
 
   const sessionOpenFiles = new Set<string>();
   const closeSessionFiles = (): void => {
@@ -130,10 +154,12 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     }
     sessionOpenFiles.clear();
   };
-  sftp.on('close', closeSessionFiles);
-  sftp.on('end', closeSessionFiles);
+  sftp.on("close", closeSessionFiles);
+  sftp.on("end", closeSessionFiles);
 
-  sftp.on('OPEN', (reqId, remote, flags, _attrs) => {
+  logger.debug(`SFTP session hooks registered: serverId=${session.serverId}`);
+
+  sftp.on("OPEN", (reqId, remote, flags, _attrs) => {
     let full: string;
     try {
       full = rooted(root, remote);
@@ -147,8 +173,9 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     const wantsTrunc = (flags & SSH_FXF_TRUNC) !== 0;
     const wantsCreate = (flags & SSH_FXF_CREAT) !== 0;
 
-    let mode = 'r';
-    if (wantsWrite) mode = wantsAppend ? 'a' : wantsTrunc || wantsCreate ? 'w' : 'r+';
+    let mode = "r";
+    if (wantsWrite)
+      mode = wantsAppend ? "a" : wantsTrunc || wantsCreate ? "w" : "r+";
 
     try {
       if (wantsCreate) {
@@ -159,23 +186,29 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
         result = secureOpenAppend(root, remote);
       } else if (wantsWrite || wantsTrunc || wantsCreate) {
         result = secureOpenWrite(root, remote);
-      } else if (mode === 'r+') {
+      } else if (mode === "r+") {
         result = secureOpenReadWrite(root, remote);
       } else {
         result = secureOpenRead(root, remote);
       }
       const st = statSync(full);
-      const key = randomBytes(16).toString('hex');
+      const key = randomBytes(16).toString("hex");
       openFiles.set(key, { fd: result.fd, path: full, size: st.size });
       sessionOpenFiles.add(key);
-      sftp.handle(reqId, Buffer.from(key, 'hex'));
+      logger.debug(
+        `SFTP file opened: serverId=${session.serverId} path=${relOf(root, full)} mode=${mode} size=${st.size}`,
+      );
+      sftp.handle(reqId, Buffer.from(key, "hex"));
     } catch (err) {
+      logger.warn(
+        `SFTP file open failed: serverId=${session.serverId} path=${relOf(root, full)} error=${(err as Error).message}`,
+      );
       sftp.status(reqId, toStatus(err));
     }
   });
 
-  sftp.on('READ', (reqId, handle, offset, len) => {
-    const state = openFiles.get(handle.toString('hex'));
+  sftp.on("READ", (reqId, handle, offset, len) => {
+    const state = openFiles.get(handle.toString("hex"));
     if (!state) {
       sftp.status(reqId, FAILURE);
       return;
@@ -190,18 +223,24 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
       const got = readSync(state.fd, buf, 0, n, offset);
       sftp.data(reqId, buf.subarray(0, got));
       emit({
-        kind: 'read',
+        kind: "read",
         username: session.username,
         path: relOf(root, state.path),
         bytes: got,
       });
+      logger.debug(
+        `SFTP read: serverId=${session.serverId} path=${relOf(root, state.path)} bytes=${got} offset=${offset}`,
+      );
     } catch (err) {
+      logger.warn(
+        `SFTP read failed: serverId=${session.serverId} path=${relOf(root, state.path)} error=${(err as Error).message}`,
+      );
       sftp.status(reqId, toStatus(err));
     }
   });
 
-  sftp.on('WRITE', (reqId, handle, offset, data) => {
-    const state = openFiles.get(handle.toString('hex'));
+  sftp.on("WRITE", (reqId, handle, offset, data) => {
+    const state = openFiles.get(handle.toString("hex"));
     if (!state) {
       sftp.status(reqId, FAILURE);
       return;
@@ -211,19 +250,25 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
       const n = Math.max(state.size, offset + data.length);
       state.size = n;
       emit({
-        kind: 'write',
+        kind: "write",
         username: session.username,
         path: relOf(root, state.path),
         bytes: data.length,
       });
+      logger.debug(
+        `SFTP write: serverId=${session.serverId} path=${relOf(root, state.path)} bytes=${data.length} offset=${offset}`,
+      );
       sftp.status(reqId, OK);
     } catch (err) {
+      logger.warn(
+        `SFTP write failed: serverId=${session.serverId} path=${relOf(root, state.path)} error=${(err as Error).message}`,
+      );
       sftp.status(reqId, toStatus(err));
     }
   });
 
-  sftp.on('FSTAT', (reqId, handle) => {
-    const state = openFiles.get(handle.toString('hex'));
+  sftp.on("FSTAT", (reqId, handle) => {
+    const state = openFiles.get(handle.toString("hex"));
     if (!state) {
       sftp.status(reqId, FAILURE);
       return;
@@ -235,25 +280,31 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     }
   });
 
-  sftp.on('CLOSE', (reqId, handle) => {
-    const state = openFiles.get(handle.toString('hex'));
+  sftp.on("CLOSE", (reqId, handle) => {
+    const state = openFiles.get(handle.toString("hex"));
     if (!state) {
       sftp.status(reqId, OK);
       return;
     }
-    openFiles.delete(handle.toString('hex'));
-    sessionOpenFiles.delete(handle.toString('hex'));
+    openFiles.delete(handle.toString("hex"));
+    sessionOpenFiles.delete(handle.toString("hex"));
     try {
       closeSync(state.fd);
+      logger.debug(
+        `SFTP file closed: serverId=${session.serverId} path=${relOf(root, state.path)}`,
+      );
       sftp.status(reqId, OK);
     } catch (err) {
+      logger.warn(
+        `SFTP file close failed: serverId=${session.serverId} path=${relOf(root, state.path)} error=${(err as Error).message}`,
+      );
       sftp.status(reqId, toStatus(err));
     }
   });
 
   const dirHandles = new Map<string, { full: string; names: string[] }>();
 
-  sftp.on('OPENDIR', (reqId, remote) => {
+  sftp.on("OPENDIR", (reqId, remote) => {
     let full: string;
     try {
       full = rooted(root, remote);
@@ -269,7 +320,7 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
       sftp.status(reqId, FAILURE);
       return;
     }
-    const key = randomBytes(16).toString('hex');
+    const key = randomBytes(16).toString("hex");
     let names: string[];
     try {
       names = readdirSync(full).sort();
@@ -278,11 +329,14 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
       return;
     }
     dirHandles.set(key, { full, names });
-    sftp.handle(reqId, Buffer.from(key, 'hex'));
+    sftp.handle(reqId, Buffer.from(key, "hex"));
+    logger.debug(
+      `SFTP opendir: serverId=${session.serverId} path=${relOf(root, full)} entries=${names.length}`,
+    );
   });
 
-  sftp.on('READDIR', (reqId, handle) => {
-    const key = handle.toString('hex');
+  sftp.on("READDIR", (reqId, handle) => {
+    const key = handle.toString("hex");
     const state = dirHandles.get(key);
     if (!state) {
       sftp.status(reqId, EOF);
@@ -301,7 +355,7 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
       } catch {}
     }
     emit({
-      kind: 'readdir',
+      kind: "readdir",
       username: session.username,
       path: relOf(root, state.full),
     });
@@ -309,7 +363,7 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     sftp.name(reqId, entries);
   });
 
-  sftp.on('REALPATH', (reqId, path) => {
+  sftp.on("REALPATH", (reqId, path) => {
     let full: string;
     try {
       full = rooted(root, path);
@@ -326,7 +380,11 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     ]);
   });
 
-  const statHandler = (reqId: number, path: string, useLstat: boolean): void => {
+  const statHandler = (
+    reqId: number,
+    path: string,
+    useLstat: boolean,
+  ): void => {
     let full: string;
     try {
       full = rooted(root, path);
@@ -342,10 +400,10 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     }
   };
 
-  sftp.on('STAT', (reqId, p) => statHandler(reqId, p, false));
-  sftp.on('LSTAT', (reqId, p) => statHandler(reqId, p, true));
+  sftp.on("STAT", (reqId, p) => statHandler(reqId, p, false));
+  sftp.on("LSTAT", (reqId, p) => statHandler(reqId, p, true));
 
-  sftp.on('REMOVE', (reqId, remote) => {
+  sftp.on("REMOVE", (reqId, remote) => {
     let full: string;
     try {
       full = rooted(root, remote);
@@ -356,17 +414,23 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     try {
       unlinkSync(full);
       emit({
-        kind: 'remove',
+        kind: "remove",
         username: session.username,
         path: relOf(root, full),
       });
+      logger.debug(
+        `SFTP remove: serverId=${session.serverId} path=${relOf(root, full)}`,
+      );
       sftp.status(reqId, OK);
     } catch (err) {
+      logger.warn(
+        `SFTP remove failed: serverId=${session.serverId} path=${relOf(root, full)} error=${(err as Error).message}`,
+      );
       sftp.status(reqId, toStatus(err));
     }
   });
 
-  sftp.on('RMDIR', (reqId, remote) => {
+  sftp.on("RMDIR", (reqId, remote) => {
     let full: string;
     try {
       full = rooted(root, remote);
@@ -376,13 +440,19 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     }
     try {
       rmdirSync(full);
+      logger.debug(
+        `SFTP rmdir: serverId=${session.serverId} path=${relOf(root, full)}`,
+      );
       sftp.status(reqId, OK);
     } catch (err) {
+      logger.warn(
+        `SFTP rmdir failed: serverId=${session.serverId} path=${relOf(root, full)} error=${(err as Error).message}`,
+      );
       sftp.status(reqId, toStatus(err));
     }
   });
 
-  sftp.on('MKDIR', (reqId, remote) => {
+  sftp.on("MKDIR", (reqId, remote) => {
     let full: string;
     try {
       full = rooted(root, remote);
@@ -393,17 +463,23 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
     try {
       mkdirSync(full, { recursive: false });
       emit({
-        kind: 'mkdir',
+        kind: "mkdir",
         username: session.username,
         path: relOf(root, full),
       });
+      logger.debug(
+        `SFTP mkdir: serverId=${session.serverId} path=${relOf(root, full)}`,
+      );
       sftp.status(reqId, OK);
     } catch (err) {
+      logger.warn(
+        `SFTP mkdir failed: serverId=${session.serverId} path=${relOf(root, full)} error=${(err as Error).message}`,
+      );
       sftp.status(reqId, toStatus(err));
     }
   });
 
-  sftp.on('RENAME', (reqId, oldRemote, newRemote) => {
+  sftp.on("RENAME", (reqId, oldRemote, newRemote) => {
     let from: string;
     let to: string;
     try {
@@ -417,17 +493,23 @@ export function serveSftp(sftp: SFTPWrapper, root: string, session: NativeSftpSe
       if (existsSync(to)) unlinkSync(to);
       renameSync(from, to);
       emit({
-        kind: 'rename',
+        kind: "rename",
         username: session.username,
         from: relOf(root, from),
         to: relOf(root, to),
       });
+      logger.debug(
+        `SFTP rename: serverId=${session.serverId} from=${relOf(root, from)} to=${relOf(root, to)}`,
+      );
       sftp.status(reqId, OK);
     } catch (err) {
+      logger.warn(
+        `SFTP rename failed: serverId=${session.serverId} from=${relOf(root, from)} to=${relOf(root, to)} error=${(err as Error).message}`,
+      );
       sftp.status(reqId, toStatus(err));
     }
   });
 
-  sftp.on('SETSTAT', (reqId, _path, _attrs) => sftp.status(reqId, OK));
-  sftp.on('FSETSTAT', (reqId, _handle, _attrs) => sftp.status(reqId, OK));
+  sftp.on("SETSTAT", (reqId, _path, _attrs) => sftp.status(reqId, OK));
+  sftp.on("FSETSTAT", (reqId, _handle, _attrs) => sftp.status(reqId, OK));
 }

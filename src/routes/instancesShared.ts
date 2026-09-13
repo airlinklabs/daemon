@@ -1,7 +1,7 @@
-import config from '../config';
-import { apiError } from '../errors';
-import logger from '../logger';
-import { getPaths } from '../paths';
+import config from "../config";
+import { apiError } from "../errors";
+import logger from "../logger";
+import { getPaths } from "../paths";
 import {
   backupBodyCodes,
   backupBodySchema,
@@ -26,13 +26,13 @@ import {
   restoreBodySchema,
   startBodyCodes,
   startBodySchema,
-} from '../schemas';
-import { validateContainerId } from '../validation';
+} from "../schemas";
+import { validateContainerId } from "../validation";
 
 export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
   });
 }
 
@@ -68,35 +68,36 @@ export {
 };
 
 export function globToRegExp(glob: string): RegExp {
-  let pattern = '^';
+  let pattern = "^";
   const norm = glob
-    .replace(/\\/g, '/')
-    .replace(/^\.?\//, '')
-    .replace(/\/$/, '');
-  const segments = norm.split('/');
+    .replace(/\\/g, "/")
+    .replace(/^\.?\//, "")
+    .replace(/\/$/, "");
+  const segments = norm.split("/");
   for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    if (seg === '**') {
-      pattern += i === segments.length - 1 ? '(?:(?:^|/)[^/]*)*/?' : '(?:[^/]*/)*';
+    const seg = segments[i]!;
+    if (seg === "**") {
+      pattern +=
+        i === segments.length - 1 ? "(?:(?:^|/)[^/]*)*/?" : "(?:[^/]*/)*";
       continue;
     }
-    let out = '';
+    let out = "";
     for (let j = 0; j < seg.length; j++) {
-      const c = seg[j];
-      if (c === '*') out += '[^/]*';
-      else if (c === '?') out += '[^/]';
+      const c = seg[j]!;
+      if (c === "*") out += "[^/]*";
+      else if (c === "?") out += "[^/]";
       else if (
-        c === '.' ||
-        c === '+' ||
-        c === '(' ||
-        c === ')' ||
-        c === '[' ||
-        c === ']' ||
-        c === '{' ||
-        c === '}' ||
-        c === '^' ||
-        c === '$' ||
-        c === '|'
+        c === "." ||
+        c === "+" ||
+        c === "(" ||
+        c === ")" ||
+        c === "[" ||
+        c === "]" ||
+        c === "{" ||
+        c === "}" ||
+        c === "^" ||
+        c === "$" ||
+        c === "|"
       )
         out += `\\${c}`;
       else out += c;
@@ -106,18 +107,23 @@ export function globToRegExp(glob: string): RegExp {
   return new RegExp(`^(?:${pattern}|(?:.*/)?${pattern})$`);
 }
 
-export function buildIgnoreMatchers(patterns: string[]): Array<{ isDir: boolean; re: RegExp; raw: string }> {
+export function buildIgnoreMatchers(
+  patterns: string[],
+): Array<{ isDir: boolean; re: RegExp; raw: string }> {
   const matchers: { isDir: boolean; re: RegExp; raw: string }[] = [];
   for (const raw of patterns) {
     const p = raw.trim();
     if (!p) continue;
-    const isDir = p.endsWith('/');
+    const isDir = p.endsWith("/");
     matchers.push({ isDir, re: globToRegExp(p), raw: p });
   }
   return matchers;
 }
 
-export function isPathIgnored(normalized: string, matchers: { isDir: boolean; re: RegExp }[]): boolean {
+export function isPathIgnored(
+  normalized: string,
+  matchers: { isDir: boolean; re: RegExp }[],
+): boolean {
   for (const m of matchers) {
     if (m.re.test(normalized)) return true;
   }
