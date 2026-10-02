@@ -1,6 +1,6 @@
 # Airlink Daemon
 
-**Node agent for Airlink Panel — v2.0.0-rc1**
+**Node agent for Airlink Panel — v2.0.0-rc1-beta**
 
 The daemon runs on each node server and handles container lifecycle, resource monitoring, file management, and SFTP. The panel communicates with it over HTTP using basic auth and optional HMAC request signing.
 
