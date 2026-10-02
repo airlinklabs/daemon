@@ -426,9 +426,9 @@ const afs = {
   ): Promise<void> {
     try {
       const baseDirectory = path.resolve(`volumes/${id}`);
+      await fs.mkdir(baseDirectory, { recursive: true });
       const filePath = sanitizePath(baseDirectory, relativePath).resolvedPath;
       const dir = path.dirname(filePath);
-
 
       await fs.mkdir(dir, { recursive: true });
 

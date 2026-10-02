@@ -27,7 +27,6 @@ router.post("/sftp/credentials", async (req: Request, res: Response) => {
     res.json({
       username: credential.username,
       password: credential.password,
-      host: credential.host,
       port: credential.port,
       expiresAt: credential.expiresAt,
     });
